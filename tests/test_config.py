@@ -36,7 +36,7 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
     monkeypatch.setenv("REFLEXOR_PROFILE", "prod")
     monkeypatch.setenv("REFLEXOR_DRY_RUN", "false")
     monkeypatch.setenv("REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD", "true")
-    monkeypatch.setenv("REFLEXOR_ENABLED_SCOPES", '["filesystem:read"]')
+    monkeypatch.setenv("REFLEXOR_ENABLED_SCOPES", '["fs.read"]')
     monkeypatch.setenv("REFLEXOR_HTTP_ALLOWED_DOMAINS", '["Example.com", "api.Example.com"]')
     monkeypatch.setenv(
         "REFLEXOR_WEBHOOK_ALLOWED_TARGETS", '["https://hooks.example.com/path", "  "]'
@@ -50,7 +50,7 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
     assert settings_1.profile == "prod"
     assert settings_1.dry_run is False
     assert settings_1.allow_side_effects_in_prod is True
-    assert settings_1.enabled_scopes == ["filesystem:read"]
+    assert settings_1.enabled_scopes == ["fs.read"]
     assert settings_1.http_allowed_domains == ["example.com", "api.example.com"]
     assert settings_1.webhook_allowed_targets == ["https://hooks.example.com/path"]
     assert settings_1.workspace_root.resolve(strict=False) == tmp_path.resolve(strict=False)
@@ -85,7 +85,8 @@ def test_load_env_file_is_optional(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     env_path = tmp_path / ".env"
     env_path.write_text(
-        'REFLEXOR_PROFILE=prod\nREFLEXOR_ENABLED_SCOPES=["filesystem:read"]\n', encoding="utf-8"
+        'REFLEXOR_PROFILE=prod\nREFLEXOR_ENABLED_SCOPES=["fs.read"]\n',
+        encoding="utf-8",
     )
 
     monkeypatch.delenv("REFLEXOR_PROFILE", raising=False)
@@ -102,4 +103,14 @@ def test_load_env_file_is_optional(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     clear_settings_cache()
     settings = get_settings()
     assert settings.profile == "prod"
-    assert settings.enabled_scopes == ["filesystem:read"]
+    assert settings.enabled_scopes == ["fs.read"]
+
+
+def test_unknown_scopes_are_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown scope"):
+        ReflexorSettings(enabled_scopes=["unknown.scope"])
+
+
+def test_approval_required_scopes_must_be_enabled() -> None:
+    with pytest.raises(ValueError, match="approval_required_scopes must be a subset"):
+        ReflexorSettings(enabled_scopes=["fs.read"], approval_required_scopes=["fs.write"])

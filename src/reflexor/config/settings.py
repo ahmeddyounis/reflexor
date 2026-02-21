@@ -22,6 +22,7 @@ from reflexor.domain.models_run_packet import (
     DEFAULT_MAX_PACKET_BYTES,
     DEFAULT_MAX_TOOL_RESULT_BYTES,
 )
+from reflexor.security.scopes import validate_scopes
 
 
 def _dedupe_preserving_order(items: list[str]) -> list[str]:
@@ -92,6 +93,7 @@ class ReflexorSettings(BaseSettings):
     allow_wildcards: bool = False
 
     enabled_scopes: list[str] = Field(default_factory=list)
+    approval_required_scopes: list[str] = Field(default_factory=list)
     http_allowed_domains: list[str] = Field(default_factory=list)
     webhook_allowed_targets: list[str] = Field(default_factory=list)
     workspace_root: Path = Field(default_factory=Path.cwd)
@@ -102,6 +104,7 @@ class ReflexorSettings(BaseSettings):
 
     @field_validator(
         "enabled_scopes",
+        "approval_required_scopes",
         "http_allowed_domains",
         "webhook_allowed_targets",
         mode="before",
@@ -111,6 +114,11 @@ class ReflexorSettings(BaseSettings):
         field_name = info.field_name
         assert field_name is not None
         return _parse_str_list(value, field_name=field_name)
+
+    @field_validator("enabled_scopes", "approval_required_scopes", mode="after")
+    @classmethod
+    def _validate_scopes(cls, value: list[str]) -> list[str]:
+        return validate_scopes(value)
 
     @field_validator("http_allowed_domains", mode="after")
     @classmethod
@@ -144,6 +152,14 @@ class ReflexorSettings(BaseSettings):
             raise ValueError(
                 "prod with dry_run=False requires allow_side_effects_in_prod=True "
                 "(set REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true)"
+            )
+        unknown_approval_scopes = sorted(
+            set(self.approval_required_scopes) - set(self.enabled_scopes)
+        )
+        if unknown_approval_scopes:
+            raise ValueError(
+                "approval_required_scopes must be a subset of enabled_scopes "
+                f"(not enabled: {unknown_approval_scopes})"
             )
         return self
 

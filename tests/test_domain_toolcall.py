@@ -13,7 +13,7 @@ def test_tool_call_round_trip_serialization() -> None:
     tool_call = ToolCall(
         tool_name="  filesystem.read  ",
         args={"path": "/tmp/file.txt"},
-        permission_scope="  filesystem:read  ",
+        permission_scope="  fs.read  ",
         idempotency_key="  k1  ",
         status=ToolCallStatus.PENDING,
         created_at_ms=10,
@@ -25,7 +25,7 @@ def test_tool_call_round_trip_serialization() -> None:
     parsed = uuid.UUID(tool_call.tool_call_id)
     assert parsed.version == 4
     assert tool_call.tool_name == "filesystem.read"
-    assert tool_call.permission_scope == "filesystem:read"
+    assert tool_call.permission_scope == "fs.read"
     assert tool_call.idempotency_key == "k1"
     assert tool_call.result_ref == "result:1"
 

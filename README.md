@@ -38,6 +38,20 @@ Reflexor ships with safe-by-default runtime configuration in `reflexor.config.Re
 
 Note: these are configuration guardrails; full runtime enforcement is still under development.
 
+## Permission scopes (vocabulary)
+
+Scopes are stable strings used by policy checks. Current canonical scopes:
+
+| Scope | Meaning |
+| --- | --- |
+| `net.http` | Allow outbound HTTP(S) requests (subject to allowlists). |
+| `fs.read` | Allow reading files under the workspace root. |
+| `fs.write` | Allow writing/modifying files under the workspace root. |
+| `webhook.emit` | Allow emitting configured webhooks. |
+
+By default, all scopes are denied (`REFLEXOR_ENABLED_SCOPES=[]`). `REFLEXOR_APPROVAL_REQUIRED_SCOPES`
+can be used to mark enabled scopes that should require human approval (enforcement pending).
+
 ## Quickstart (local dev)
 
 Using `make`:
