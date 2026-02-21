@@ -24,7 +24,7 @@ class ToolContext:
 
     workspace_root: Path
     dry_run: bool = True
-    timeout_s: int = 60
+    timeout_s: float = 60.0
     correlation_ids: dict[str, str | None] = field(default_factory=get_correlation_ids)
     secrets_provider: SecretsProvider | None = None
 

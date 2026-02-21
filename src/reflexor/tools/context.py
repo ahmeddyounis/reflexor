@@ -9,7 +9,7 @@ from reflexor.tools.sdk import ToolContext
 def tool_context_from_settings(
     settings: ReflexorSettings,
     *,
-    timeout_s: int | None = None,
+    timeout_s: float | None = None,
     correlation_ids: dict[str, str | None] | None = None,
     secrets_provider: SecretsProvider | None = None,
 ) -> ToolContext:
