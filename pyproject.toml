@@ -53,11 +53,14 @@ show_error_codes = true
 
 [tool.ruff]
 target-version = "py311"
-line-length = 88
+line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["reflexor"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/reflexor/__init__.py" = ["F401"]
