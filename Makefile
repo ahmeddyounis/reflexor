@@ -6,7 +6,7 @@ VENV_BIN := $(VENV)/bin
 PY := $(VENV_BIN)/python
 VENV_MARKER := $(VENV)/.installed
 
-.PHONY: help venv lint format typecheck test ci clean
+.PHONY: help venv lint format typecheck test coverage ci clean
 
 help:
 	@echo "Targets:"
@@ -15,6 +15,7 @@ help:
 	@echo "  lint       Lint with ruff"
 	@echo "  typecheck  Run mypy"
 	@echo "  test       Run pytest"
+	@echo "  coverage   Run tests with coverage report"
 	@echo "  ci         Run format-check, lint, typecheck, test"
 	@echo "  clean      Remove venv and caches"
 
@@ -38,6 +39,10 @@ typecheck: $(VENV_MARKER)
 test: $(VENV_MARKER)
 	$(PY) -m pytest
 
+coverage: $(VENV_MARKER)
+	$(PY) -m coverage run -m pytest
+	$(PY) -m coverage report -m
+
 ci: $(VENV_MARKER)
 	$(PY) -m ruff format --check .
 	$(PY) -m ruff check .
@@ -46,4 +51,3 @@ ci: $(VENV_MARKER)
 
 clean:
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info
-
