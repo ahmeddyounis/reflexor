@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from reflexor.domain.models import ToolCall
+from reflexor.tools.sdk.contracts import ToolManifest, ToolResult
 
 ToolOutput = Mapping[str, object]
 
@@ -15,6 +16,7 @@ class Tool(Protocol):
     """
 
     name: str
+    manifest: ToolManifest
 
-    def execute(self, call: ToolCall) -> ToolOutput:
+    def execute(self, call: ToolCall) -> ToolResult:
         """Execute a validated tool call and return a JSON-serializable output."""

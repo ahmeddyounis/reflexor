@@ -6,6 +6,7 @@ of side effects at import time.
 
 from __future__ import annotations
 
+from reflexor.tools.sdk.contracts import ToolManifest, ToolResult
 from reflexor.tools.sdk.tool import Tool, ToolOutput
 
-__all__ = ["Tool", "ToolOutput"]
+__all__ = ["Tool", "ToolManifest", "ToolOutput", "ToolResult"]
