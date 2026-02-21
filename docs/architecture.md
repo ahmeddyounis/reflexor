@@ -10,7 +10,7 @@ Reflexor is organized into four conceptual layers. Dependencies should point **i
 
 | Layer | Package | Purpose | Can depend on |
 | --- | --- | --- | --- |
-| Domain | `reflexor.domain` | Pure business rules and core types | stdlib only (and `typing`) |
+| Domain | `reflexor.domain` | Pure business rules and core types | stdlib (and optionally `pydantic`) |
 | Application | `reflexor.application` | Use-cases/workflows that orchestrate domain behavior | `domain` |
 | Interfaces | `reflexor.interfaces` | Ports/adapters, DTOs, boundary interfaces | `application`, `domain` |
 | Infrastructure | `reflexor.infra` | Concrete implementations (I/O, DB, HTTP, LLM clients, CLIs) | `interfaces`, `application`, `domain` |
@@ -42,4 +42,3 @@ Reflexor is organized into four conceptual layers. Dependencies should point **i
 We keep a lightweight pytest guardrail (`tests/test_architecture_guardrails.py`) that
 checks for obviously-forbidden imports in `reflexor.domain` (e.g. web/DB frameworks or
 internal infra modules). It will be expanded as packages and dependencies are added.
-
