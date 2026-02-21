@@ -29,6 +29,10 @@ Reflexor ships with safe-by-default runtime configuration in `reflexor.config.Re
 
 - **Dry-run by default**: `REFLEXOR_DRY_RUN` defaults to `true`.
 - **Deny-by-default scopes**: `REFLEXOR_ENABLED_SCOPES` defaults to empty (`[]`).
+- **Allowlist normalization**: domains/targets are trimmed and normalized; wildcards and IP literals are
+  rejected by default.
+- **Workspace root**: `REFLEXOR_WORKSPACE_ROOT` is normalized to an absolute path; relative paths are
+  resolved against the current working directory and must be a directory (or a creatable path).
 - **Prod safety latch**: in `REFLEXOR_PROFILE=prod`, setting `REFLEXOR_DRY_RUN=false` requires
   `REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true` or settings validation fails fast.
 

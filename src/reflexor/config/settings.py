@@ -11,11 +11,28 @@ from typing import Literal, cast
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from reflexor.config.validation import (
+    normalize_domains,
+    normalize_webhook_targets,
+    normalize_workspace_root,
+    validate_workspace_root,
+)
 from reflexor.domain.models_event import DEFAULT_MAX_PAYLOAD_BYTES
 from reflexor.domain.models_run_packet import (
     DEFAULT_MAX_PACKET_BYTES,
     DEFAULT_MAX_TOOL_RESULT_BYTES,
 )
+
+
+def _dedupe_preserving_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
 
 
 def _parse_str_list(value: object, *, field_name: str) -> list[str]:
@@ -56,17 +73,6 @@ def _parse_str_list(value: object, *, field_name: str) -> list[str]:
     raise TypeError(f"{field_name} must be a list[str] or str")
 
 
-def _dedupe_preserving_order(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        if item in seen:
-            continue
-        seen.add(item)
-        result.append(item)
-    return result
-
-
 class ReflexorSettings(BaseSettings):
     """Runtime configuration for Reflexor.
 
@@ -74,11 +80,17 @@ class ReflexorSettings(BaseSettings):
     Defaults are intentionally conservative (deny-by-default, dry-run enabled).
     """
 
-    model_config = SettingsConfigDict(env_prefix="REFLEXOR_", extra="ignore", enable_decoding=False)
+    model_config = SettingsConfigDict(
+        env_prefix="REFLEXOR_",
+        extra="ignore",
+        enable_decoding=False,
+    )
 
     profile: Literal["dev", "prod"] = "dev"
     dry_run: bool = True
     allow_side_effects_in_prod: bool = False
+    allow_wildcards: bool = False
+
     enabled_scopes: list[str] = Field(default_factory=list)
     http_allowed_domains: list[str] = Field(default_factory=list)
     webhook_allowed_targets: list[str] = Field(default_factory=list)
@@ -95,19 +107,28 @@ class ReflexorSettings(BaseSettings):
         mode="before",
     )
     @classmethod
-    def _validate_str_lists(cls, value: object, info: ValidationInfo) -> list[str]:
+    def _parse_list_fields(cls, value: object, info: ValidationInfo) -> list[str]:
         field_name = info.field_name
         assert field_name is not None
-        parsed = _parse_str_list(value, field_name=field_name)
+        return _parse_str_list(value, field_name=field_name)
 
-        if field_name == "http_allowed_domains":
-            return [item.lower() for item in parsed]
-        return parsed
-
-    @field_validator("workspace_root")
+    @field_validator("http_allowed_domains", mode="after")
     @classmethod
-    def _normalize_workspace_root(cls, value: Path) -> Path:
-        return value.expanduser()
+    def _validate_http_allowed_domains(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        allow_wildcards = bool(info.data.get("allow_wildcards", False))
+        return normalize_domains(value, allow_wildcards=allow_wildcards)
+
+    @field_validator("webhook_allowed_targets", mode="after")
+    @classmethod
+    def _validate_webhook_allowed_targets(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        allow_wildcards = bool(info.data.get("allow_wildcards", False))
+        return normalize_webhook_targets(value, allow_wildcards=allow_wildcards)
+
+    @field_validator("workspace_root", mode="after")
+    @classmethod
+    def _validate_workspace_root(cls, value: Path) -> Path:
+        normalized = normalize_workspace_root(value)
+        return validate_workspace_root(normalized)
 
     @field_validator("max_event_payload_bytes", "max_tool_output_bytes", "max_run_packet_bytes")
     @classmethod

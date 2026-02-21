@@ -53,7 +53,7 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
     assert settings_1.enabled_scopes == ["filesystem:read"]
     assert settings_1.http_allowed_domains == ["example.com", "api.example.com"]
     assert settings_1.webhook_allowed_targets == ["https://hooks.example.com/path"]
-    assert settings_1.workspace_root == tmp_path
+    assert settings_1.workspace_root.resolve(strict=False) == tmp_path.resolve(strict=False)
     assert settings_1.max_event_payload_bytes == 123
     assert settings_1.max_tool_output_bytes == 456
     assert settings_1.max_run_packet_bytes == 789
