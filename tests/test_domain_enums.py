@@ -40,7 +40,13 @@ def test_enum_values_are_stable() -> None:
 
 def test_pydantic_serialization_uses_string_values() -> None:
     task = Task(title="t1", status=TaskStatus.RUNNING)
-    tool_call = ToolCall(tool_name="example", status="denied")
+    tool_call = ToolCall(
+        tool_name="example",
+        permission_scope="tests",
+        idempotency_key="idempotency-1",
+        status="denied",
+        created_at_ms=0,
+    )
     approval = Approval(status=ApprovalStatus.APPROVED)
 
     task_json = json.loads(task.model_dump_json())
