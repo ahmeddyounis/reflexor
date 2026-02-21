@@ -16,7 +16,7 @@ help:
 	@echo "  typecheck  Run mypy"
 	@echo "  test       Run pytest"
 	@echo "  coverage   Run tests with coverage report"
-	@echo "  ci         Run format-check, lint, typecheck, test"
+	@echo "  ci         Run format-check, lint, typecheck, coverage"
 	@echo "  clean      Remove venv and caches"
 
 $(VENV_MARKER): pyproject.toml
@@ -40,14 +40,13 @@ test: $(VENV_MARKER)
 	$(PY) -m pytest
 
 coverage: $(VENV_MARKER)
-	$(PY) -m coverage run -m pytest
-	$(PY) -m coverage report -m
+	$(PY) -m pytest --cov
 
 ci: $(VENV_MARKER)
 	$(PY) -m ruff format --check .
 	$(PY) -m ruff check .
 	$(PY) -m mypy src
-	$(PY) -m pytest
+	$(PY) -m pytest --cov
 
 clean:
-	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info
+	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info .coverage coverage.xml htmlcov

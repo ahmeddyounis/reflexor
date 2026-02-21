@@ -10,7 +10,8 @@ build/
 .ruff_cache/
 
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 
 .DS_Store
-
