@@ -34,7 +34,7 @@ packages = ["src/reflexor"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov-report=term-missing --cov-report=xml --cov-fail-under=20"
+addopts = "--cov-report=term-missing --cov-report=xml --cov-fail-under=91"
 
 [tool.coverage.run]
 branch = true
@@ -44,7 +44,7 @@ omit = ["tests/*"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 20
+fail_under = 91
 
 [tool.mypy]
 files = ["src"]

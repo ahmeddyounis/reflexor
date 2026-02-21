@@ -38,7 +38,7 @@ jobs:
         run: mypy src
 
       - name: Pytest (with coverage)
-        run: pytest --cov
+        run: pytest --cov=reflexor.domain
 
       - name: Upload coverage.xml
         if: always()

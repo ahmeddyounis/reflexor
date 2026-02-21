@@ -40,13 +40,13 @@ test: $(VENV_MARKER)
 	$(PY) -m pytest
 
 coverage: $(VENV_MARKER)
-	$(PY) -m pytest --cov
+	$(PY) -m pytest --cov=reflexor.domain
 
 ci: $(VENV_MARKER)
 	$(PY) -m ruff format --check .
 	$(PY) -m ruff check .
 	$(PY) -m mypy src
-	$(PY) -m pytest --cov
+	$(PY) -m pytest --cov=reflexor.domain
 
 clean:
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info .coverage coverage.xml htmlcov
