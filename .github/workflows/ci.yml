@@ -47,3 +47,48 @@ jobs:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
 
+  advisory-audit:
+    name: Advisory audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Prepare reports
+        run: mkdir -p advisory
+
+      - name: Install dependencies (including audit tool)
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev]"
+          python -m pip install pip-audit
+
+      - name: Dependency update report (advisory)
+        run: |
+          python -m pip list --outdated > advisory/pip-outdated.txt
+          python -m pip freeze > advisory/pip-freeze.txt
+
+      - name: pip-audit (advisory)
+        continue-on-error: true
+        run: |
+          set +e
+          pip-audit -f json > advisory/pip-audit.json
+          audit_exit=$?
+          pip-audit > advisory/pip-audit.txt
+          echo "$audit_exit" > advisory/pip-audit.exitcode
+          exit "$audit_exit"
+
+      - name: Upload advisory reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: advisory-audit
+          path: advisory
