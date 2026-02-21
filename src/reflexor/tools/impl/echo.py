@@ -1,7 +1,21 @@
 from __future__ import annotations
 
-from reflexor.domain.models import ToolCall
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, ConfigDict
+
 from reflexor.tools.sdk.contracts import ToolManifest, ToolResult
+from reflexor.tools.sdk.tool import ToolContext
+
+
+class EchoArgs(BaseModel):
+    """Arguments for `debug.echo`.
+
+    This tool exists primarily to validate the tool boundary; it accepts arbitrary JSON-ish
+    key/value pairs.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
 
 class EchoTool:
@@ -23,5 +37,20 @@ class EchoTool:
         tags=["debug"],
     )
 
-    def execute(self, call: ToolCall) -> ToolResult:
-        return ToolResult(ok=True, data={"tool_name": call.tool_name, "args": call.args})
+    ArgsModel = EchoArgs
+
+    async def run(self, args: EchoArgs, ctx: ToolContext) -> ToolResult:
+        return ToolResult(
+            ok=True,
+            data={
+                "tool_name": self.manifest.name,
+                "dry_run": ctx.dry_run,
+                "args": args.model_dump(),
+            },
+        )
+
+
+if TYPE_CHECKING:
+    from reflexor.tools.sdk.tool import Tool
+
+    _tool: Tool[EchoArgs] = EchoTool()
