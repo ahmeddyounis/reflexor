@@ -6,6 +6,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
+from reflexor.tools.fs_safety import resolve_path_in_workspace
 from reflexor.tools.net_safety import validate_and_normalize_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -19,18 +20,7 @@ def normalize_path_in_workspace(path: Path, *, workspace_root: Path) -> Path:
     - The final path must stay within `workspace_root`
     """
 
-    if not workspace_root.is_absolute():
-        raise ValueError("workspace_root must be absolute")
-
-    base = workspace_root.resolve(strict=False)
-    expanded = path.expanduser()
-    candidate = expanded if expanded.is_absolute() else (base / expanded)
-    resolved = candidate.resolve(strict=False)
-
-    if not resolved.is_relative_to(base):
-        raise ValueError(f"path escapes workspace root: {path!r}")
-
-    return resolved
+    return resolve_path_in_workspace(path, workspace_root=workspace_root, must_exist=False)
 
 
 def normalize_http_url(value: str) -> str:
