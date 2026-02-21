@@ -13,8 +13,8 @@ def test_redact_nested_dicts_and_lists_by_key() -> None:
     redacted = redactor.redact(payload)
 
     assert payload["user"]["password"] == "p@ssw0rd"
-    assert redacted["user"]["password"] == "[REDACTED]"
-    assert redacted["items"][0]["token"] == "[REDACTED]"
+    assert redacted["user"]["password"] == "<redacted>"
+    assert redacted["items"][0]["token"] == "<redacted>"
 
 
 def test_redact_header_like_structures() -> None:
@@ -26,8 +26,8 @@ def test_redact_header_like_structures() -> None:
         "User-Agent": "pytest",
     }
     redacted_headers = redactor.redact(headers)
-    assert redacted_headers["Authorization"] == "[REDACTED]"
-    assert redacted_headers["Cookie"] == "[REDACTED]"
+    assert redacted_headers["Authorization"] == "<redacted>"
+    assert redacted_headers["Cookie"] == "<redacted>"
     assert redacted_headers["User-Agent"] == "pytest"
 
     header_pairs = [
@@ -35,7 +35,7 @@ def test_redact_header_like_structures() -> None:
         ("Accept", "application/json"),
     ]
     redacted_pairs = redactor.redact(header_pairs)
-    assert redacted_pairs[0][1] == "[REDACTED]"
+    assert redacted_pairs[0][1] == "<redacted>"
     assert redacted_pairs[1][1] == "application/json"
 
 
@@ -45,13 +45,13 @@ def test_redact_regex_matches_in_strings_and_bytes() -> None:
     text = "calling https://example.com?token=ghp_abcdefghijklmnopqrstuvwxyz12345"
     redacted_text = redactor.redact(text)
     assert "ghp_" not in redacted_text
-    assert "[REDACTED]" in redacted_text
+    assert "<redacted>" in redacted_text
 
     data = b"Authorization: Bearer abcdefghijklmnop"
     redacted_bytes = redactor.redact(data)
     assert isinstance(redacted_bytes, bytes)
     assert b"abcdef" not in redacted_bytes
-    assert b"[REDACTED]" in redacted_bytes
+    assert b"<redacted>" in redacted_bytes
 
 
 def test_redact_never_throws_on_unknown_types() -> None:

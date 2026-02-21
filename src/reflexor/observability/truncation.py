@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-TRUNCATION_MARKER = "…<truncated>"
+TRUNCATION_MARKER = "<truncated>"
 TRUNCATION_MARKER_BYTES = TRUNCATION_MARKER.encode("utf-8")
 
 

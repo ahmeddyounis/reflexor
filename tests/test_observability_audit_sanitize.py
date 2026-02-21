@@ -16,7 +16,7 @@ def test_sanitize_tool_output_redacts_and_truncates() -> None:
     }
     sanitized = sanitize_tool_output(obj, settings=settings)
 
-    assert sanitized["token"] == "[REDACTED]"
+    assert sanitized["token"] == "<redacted>"
     assert TRUNCATION_MARKER in sanitized["data"]
 
 

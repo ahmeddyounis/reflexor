@@ -9,7 +9,7 @@ from reflexor.observability.truncation import truncate_collection
 
 _KEY_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
 
-DEFAULT_REPLACEMENT = "[REDACTED]"
+DEFAULT_REPLACEMENT = "<redacted>"
 
 DEFAULT_REDACT_KEYS: frozenset[str] = frozenset(
     {
