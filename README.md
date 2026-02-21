@@ -52,6 +52,11 @@ Scopes are stable strings used by policy checks. Current canonical scopes:
 By default, all scopes are denied (`REFLEXOR_ENABLED_SCOPES=[]`). `REFLEXOR_APPROVAL_REQUIRED_SCOPES`
 can be used to mark enabled scopes that should require human approval (enforcement pending).
 
+## Secrets (refs only)
+
+Reflexor represents secrets by reference (not by value) via `reflexor.security.secrets.SecretRef`.
+Resolved secret values must never be stored in run packets/logs. See [docs/secrets.md](docs/secrets.md).
+
 ## Quickstart (local dev)
 
 Using `make`:
