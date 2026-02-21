@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from reflexor.domain.models_event import DEFAULT_MAX_PAYLOAD_BYTES
@@ -74,10 +74,11 @@ class ReflexorSettings(BaseSettings):
     Defaults are intentionally conservative (deny-by-default, dry-run enabled).
     """
 
-    model_config = SettingsConfigDict(env_prefix="REFLEXOR_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="REFLEXOR_", extra="ignore", enable_decoding=False)
 
     profile: Literal["dev", "prod"] = "dev"
     dry_run: bool = True
+    allow_side_effects_in_prod: bool = False
     enabled_scopes: list[str] = Field(default_factory=list)
     http_allowed_domains: list[str] = Field(default_factory=list)
     webhook_allowed_targets: list[str] = Field(default_factory=list)
@@ -115,6 +116,15 @@ class ReflexorSettings(BaseSettings):
         if value <= 0:
             raise ValueError(f"{field_name} must be > 0")
         return value
+
+    @model_validator(mode="after")
+    def _validate_profile_guardrails(self) -> ReflexorSettings:
+        if self.profile == "prod" and not self.dry_run and not self.allow_side_effects_in_prod:
+            raise ValueError(
+                "prod with dry_run=False requires allow_side_effects_in_prod=True "
+                "(set REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true)"
+            )
+        return self
 
 
 @lru_cache

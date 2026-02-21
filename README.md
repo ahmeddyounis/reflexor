@@ -23,13 +23,16 @@ workflows (reflex → plan → execute). M01 currently provides project scaffold
 - **Tools**: side-effectful capabilities (filesystem, network, shell, etc.) exposed behind interfaces.
 - **Policy**: the rules that gate tool use (allowlists/denylists, dry-run, approvals, audit logs).
 
-## Safety defaults (design goals)
+## Safety defaults (current config guardrails)
 
-These are intended defaults; they are not fully implemented in M01:
+Reflexor ships with safe-by-default runtime configuration in `reflexor.config.ReflexorSettings`:
 
-- **Dry-run first** for anything with side effects.
-- **Deny-by-default** tool access, with explicit allowlisting.
-- **Clear audit trail** of planned vs executed actions.
+- **Dry-run by default**: `REFLEXOR_DRY_RUN` defaults to `true`.
+- **Deny-by-default scopes**: `REFLEXOR_ENABLED_SCOPES` defaults to empty (`[]`).
+- **Prod safety latch**: in `REFLEXOR_PROFILE=prod`, setting `REFLEXOR_DRY_RUN=false` requires
+  `REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true` or settings validation fails fast.
+
+Note: these are configuration guardrails; full runtime enforcement is still under development.
 
 ## Quickstart (local dev)
 

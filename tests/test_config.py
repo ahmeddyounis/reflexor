@@ -18,6 +18,7 @@ def test_config_import_and_defaults_are_safe() -> None:
 
     assert settings.profile == "dev"
     assert settings.dry_run is True
+    assert settings.allow_side_effects_in_prod is False
     assert settings.enabled_scopes == []
     assert settings.http_allowed_domains == []
     assert settings.webhook_allowed_targets == []
@@ -34,6 +35,7 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
 
     monkeypatch.setenv("REFLEXOR_PROFILE", "prod")
     monkeypatch.setenv("REFLEXOR_DRY_RUN", "false")
+    monkeypatch.setenv("REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD", "true")
     monkeypatch.setenv("REFLEXOR_ENABLED_SCOPES", '["filesystem:read"]')
     monkeypatch.setenv("REFLEXOR_HTTP_ALLOWED_DOMAINS", '["Example.com", "api.Example.com"]')
     monkeypatch.setenv(
@@ -47,6 +49,7 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
     settings_1 = get_settings()
     assert settings_1.profile == "prod"
     assert settings_1.dry_run is False
+    assert settings_1.allow_side_effects_in_prod is True
     assert settings_1.enabled_scopes == ["filesystem:read"]
     assert settings_1.http_allowed_domains == ["example.com", "api.example.com"]
     assert settings_1.webhook_allowed_targets == ["https://hooks.example.com/path"]
@@ -64,6 +67,17 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
     settings_3 = get_settings()
     assert settings_3.profile == "dev"
     assert settings_3 is not settings_1
+
+
+def test_prod_rejects_dry_run_disabled_without_ack(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_settings_cache()
+
+    monkeypatch.setenv("REFLEXOR_PROFILE", "prod")
+    monkeypatch.setenv("REFLEXOR_DRY_RUN", "false")
+    monkeypatch.delenv("REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD", raising=False)
+
+    with pytest.raises(ValueError, match="allow_side_effects_in_prod=True"):
+        get_settings()
 
 
 def test_load_env_file_is_optional(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
