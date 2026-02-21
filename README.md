@@ -57,6 +57,11 @@ can be used to mark enabled scopes that should require human approval (enforceme
 Reflexor represents secrets by reference (not by value) via `reflexor.security.secrets.SecretRef`.
 Resolved secret values must never be stored in run packets/logs. See [docs/secrets.md](docs/secrets.md).
 
+## Operator docs
+
+- [Configuration & Profiles](docs/configuration.md)
+- [Security: Redaction & Truncation](docs/security_redaction.md)
+
 ## Quickstart (local dev)
 
 Using `make`:
