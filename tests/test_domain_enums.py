@@ -40,8 +40,9 @@ def test_enum_values_are_stable() -> None:
 
 
 def test_pydantic_serialization_uses_string_values() -> None:
+    run_id = str(uuid.uuid4())
     task = Task(
-        run_id=str(uuid.uuid4()),
+        run_id=run_id,
         name="t1",
         status=TaskStatus.RUNNING,
         created_at_ms=0,
@@ -54,7 +55,14 @@ def test_pydantic_serialization_uses_string_values() -> None:
         status="denied",
         created_at_ms=0,
     )
-    approval = Approval(status=ApprovalStatus.APPROVED)
+    approval = Approval(
+        run_id=run_id,
+        task_id=task.task_id,
+        tool_call_id=tool_call.tool_call_id,
+        status=ApprovalStatus.APPROVED,
+        created_at_ms=0,
+        decided_at_ms=1,
+    )
 
     task_json = json.loads(task.model_dump_json())
     tool_call_json = json.loads(tool_call.model_dump_json())
