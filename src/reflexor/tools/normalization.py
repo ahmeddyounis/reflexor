@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TypeVar
-from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel
+
+from reflexor.tools.net_safety import validate_and_normalize_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -33,32 +34,16 @@ def normalize_path_in_workspace(path: Path, *, workspace_root: Path) -> Path:
 
 
 def normalize_http_url(value: str) -> str:
-    """Normalize an http(s) URL for consistency.
+    """Normalize and validate an HTTPS URL for consistency.
 
     This helper:
     - strips surrounding whitespace
     - lowercases scheme and hostname
     - rejects embedded credentials
+    - enforces https and basic SSRF guardrails (e.g., blocks IP literals)
     """
 
-    text = value.strip()
-    split = urlsplit(text)
-    scheme = split.scheme.lower()
-    if scheme not in {"http", "https"}:
-        raise ValueError("url must use http(s)")
-
-    if split.hostname is None:
-        raise ValueError("url must include a host")
-
-    if split.username is not None or split.password is not None:
-        raise ValueError("url must not include credentials")
-
-    host = split.hostname.lower()
-    netloc = host
-    if split.port is not None:
-        netloc = f"{host}:{split.port}"
-
-    return urlunsplit((scheme, netloc, split.path, split.query, split.fragment))
+    return validate_and_normalize_url(value, require_https=True)
 
 
 def normalize_tool_args(args: ModelT, *, workspace_root: Path) -> ModelT:
