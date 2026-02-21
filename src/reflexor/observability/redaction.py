@@ -5,6 +5,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from reflexor.observability.truncation import truncate_collection
+
 _KEY_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
 
 DEFAULT_REPLACEMENT = "[REDACTED]"
@@ -69,13 +71,26 @@ class Redactor:
         if self.max_items < 0:
             raise ValueError("max_items must be >= 0")
 
-    def redact(self, obj: object) -> object:
+    def redact(self, obj: object, *, max_bytes: int | None = None) -> object:
         """Return a deep-copied, sanitized version of `obj` suitable for logs/audit output.
 
         Unknown types are stringified safely (never raises).
+
+        If `max_bytes` is set, redaction runs first and truncation is applied to the
+        redacted output. This avoids leaking partial secret fragments that might otherwise
+        evade regex matching.
         """
 
-        return self._redact(obj, depth=0, stack=set())
+        redacted = self._redact(obj, depth=0, stack=set())
+        if max_bytes is None:
+            return redacted
+
+        return truncate_collection(
+            redacted,
+            max_bytes=max_bytes,
+            max_depth=self.max_depth,
+            max_items=self.max_items,
+        )
 
     def _redact(self, obj: object, *, depth: int, stack: set[int]) -> object:
         if obj is None or isinstance(obj, (bool, int, float)):
