@@ -1,0 +1,11 @@
+"""Tool SDK (boundary interfaces).
+
+This subpackage defines tool-facing interfaces and types. It must stay framework-agnostic and free
+of side effects at import time.
+"""
+
+from __future__ import annotations
+
+from reflexor.tools.sdk.tool import Tool, ToolOutput
+
+__all__ = ["Tool", "ToolOutput"]

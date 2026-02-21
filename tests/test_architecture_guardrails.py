@@ -72,6 +72,7 @@ def test_domain_imports_are_pure() -> None:
         "reflexor.application",
         "reflexor.infra",
         "reflexor.interfaces",
+        "reflexor.tools",
         "reflexor.cli",
     }
 
