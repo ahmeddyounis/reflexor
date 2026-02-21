@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
 
+from reflexor.observability.context import get_correlation_ids
+from reflexor.security.secrets import SecretsProvider
 from reflexor.tools.sdk.contracts import ToolManifest, ToolResult
 
 ArgsT = TypeVar("ArgsT", bound=BaseModel)
@@ -13,7 +15,7 @@ ArgsT = TypeVar("ArgsT", bound=BaseModel)
 
 @dataclass(frozen=True, slots=True)
 class ToolContext:
-    """Minimal execution context passed to tools.
+    """Execution context passed to tools (DI-friendly).
 
     The context intentionally stays small (Interface Segregation Principle). It is expected to
     grow carefully as tool needs emerge, but it should not couple tools to infrastructure
@@ -22,11 +24,15 @@ class ToolContext:
 
     workspace_root: Path
     dry_run: bool = True
+    timeout_s: int = 60
+    correlation_ids: dict[str, str | None] = field(default_factory=get_correlation_ids)
+    secrets_provider: SecretsProvider | None = None
 
-    event_id: str | None = None
-    run_id: str | None = None
-    task_id: str | None = None
-    tool_call_id: str | None = None
+    def __post_init__(self) -> None:
+        if not self.workspace_root.is_absolute():
+            raise ValueError("workspace_root must be an absolute path")
+        if self.timeout_s <= 0:
+            raise ValueError("timeout_s must be > 0")
 
 
 class Tool(Protocol[ArgsT]):
