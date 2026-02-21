@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Approval, Task, ToolCall
@@ -39,7 +40,13 @@ def test_enum_values_are_stable() -> None:
 
 
 def test_pydantic_serialization_uses_string_values() -> None:
-    task = Task(title="t1", status=TaskStatus.RUNNING)
+    task = Task(
+        run_id=str(uuid.uuid4()),
+        name="t1",
+        status=TaskStatus.RUNNING,
+        created_at_ms=0,
+        timeout_s=1,
+    )
     tool_call = ToolCall(
         tool_name="example",
         permission_scope="tests",
