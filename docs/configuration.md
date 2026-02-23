@@ -60,7 +60,7 @@ Settings:
   - Empty means “deny everything”.
 - `REFLEXOR_APPROVAL_REQUIRED_SCOPES` (default `[]`)
   - Must be a subset of `enabled_scopes`.
-  - Enforcement is planned; for now it is a configuration primitive only.
+  - Enforced by the policy layer for tool execution (see `docs/policy.md`).
 
 ## Allowlists
 
@@ -126,4 +126,3 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
 | `max_event_payload_bytes` | `REFLEXOR_MAX_EVENT_PAYLOAD_BYTES` | int | `64000` |
 | `max_tool_output_bytes` | `REFLEXOR_MAX_TOOL_OUTPUT_BYTES` | int | `64000` |
 | `max_run_packet_bytes` | `REFLEXOR_MAX_RUN_PACKET_BYTES` | int | `512000` |
-

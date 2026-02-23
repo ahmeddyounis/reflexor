@@ -1,14 +1,18 @@
 # Reflexor
 
 Reflexor is an early-stage Python package intended for building *safe*, policy-controlled agent
-workflows (reflex → plan → execute). M01 currently provides project scaffolding and tooling only.
+workflows (reflex → plan → execute). It currently provides core contracts and safety primitives;
+end-to-end orchestration is still evolving.
 
 ## What it is / is not
 
 **Reflexor is:**
 
 - A Python 3.11+ codebase with a clean `src/` layout and reproducible dev tooling.
-- A place to iterate on abstractions for reflexes, planners, executors, tools, and policy.
+- Typed domain contracts (Pydantic v2) for events, tool calls, tasks, approvals, and run packets.
+- Safety primitives: deny-by-default scopes, allowlist validation, redaction/truncation, correlation
+  IDs.
+- Tool boundary contracts + registry/runner and a policy/approval enforcement layer.
 
 **Reflexor is not (yet):**
 
@@ -20,8 +24,8 @@ workflows (reflex → plan → execute). M01 currently provides project scaffold
 - **Reflex**: a small, focused decision unit (given state/context, decide what to do next).
 - **Planner**: turns goals into an ordered set of steps.
 - **Executor**: runs steps and records outcomes.
-- **Tools**: side-effectful capabilities (filesystem, network, shell, etc.) exposed behind interfaces.
-- **Policy**: the rules that gate tool use (allowlists/denylists, dry-run, approvals, audit logs).
+- **Tools**: side-effectful capabilities exposed behind narrow interfaces.
+- **Policy**: the rules that gate tool use (scopes, allowlists, workspace confinement, approvals).
 
 ## Safety defaults (current config guardrails)
 
@@ -36,7 +40,9 @@ Reflexor ships with safe-by-default runtime configuration in `reflexor.config.Re
 - **Prod safety latch**: in `REFLEXOR_PROFILE=prod`, setting `REFLEXOR_DRY_RUN=false` requires
   `REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true` or settings validation fails fast.
 
-Note: these are configuration guardrails; full runtime enforcement is still under development.
+Note: configuration alone does not execute anything. Runtime enforcement happens when tool calls are
+executed through `reflexor.security.policy.PolicyEnforcedToolRunner`; Reflexor does not yet ship a
+full CLI/executor wiring this up end-to-end.
 
 ## Permission scopes (vocabulary)
 
@@ -50,7 +56,8 @@ Scopes are stable strings used by policy checks. Current canonical scopes:
 | `webhook.emit` | Allow emitting configured webhooks. |
 
 By default, all scopes are denied (`REFLEXOR_ENABLED_SCOPES=[]`). `REFLEXOR_APPROVAL_REQUIRED_SCOPES`
-can be used to mark enabled scopes that should require human approval (enforcement pending).
+can be used to mark enabled scopes that should require human approval (enforced by the policy
+layer).
 
 ## Secrets (refs only)
 
@@ -60,6 +67,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 ## Operator docs
 
 - [Configuration & Profiles](docs/configuration.md)
+- [Policy & Approvals](docs/policy.md)
 - [Security: Redaction & Truncation](docs/security_redaction.md)
 
 ## Quickstart (local dev)
