@@ -86,11 +86,21 @@ class Queue(Protocol):
         """Enqueue a task envelope for execution."""
         ...
 
-    async def dequeue(self, timeout_s: float | None = None) -> Lease | None:
+    async def dequeue(
+        self,
+        timeout_s: float | None = None,
+        *,
+        wait_s: float | None = 0.0,
+    ) -> Lease | None:
         """Dequeue (lease) the next available envelope.
 
         `timeout_s` is the visibility timeout for the returned lease. If omitted, the backend's
         configured default visibility timeout is used.
+
+        `wait_s` controls long-polling behavior:
+        - `0` (default): non-blocking; return `None` if nothing is available.
+        - `> 0`: wait up to `wait_s` seconds for an envelope to become available.
+        - `None`: wait indefinitely until an envelope is available (or the queue is closed).
         """
         ...
 

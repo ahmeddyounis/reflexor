@@ -14,7 +14,8 @@ Clean Architecture constraints:
 from __future__ import annotations
 
 from reflexor.orchestrator.queue.contracts import QueueBackend, QueueMessage
+from reflexor.orchestrator.queue.errors import QueueClosed
 from reflexor.orchestrator.queue.interface import Lease, Queue
 from reflexor.orchestrator.queue.task_envelope import TaskEnvelope
 
-__all__ = ["Lease", "Queue", "QueueBackend", "QueueMessage", "TaskEnvelope"]
+__all__ = ["Lease", "Queue", "QueueBackend", "QueueClosed", "QueueMessage", "TaskEnvelope"]

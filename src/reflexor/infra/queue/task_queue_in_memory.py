@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
+from reflexor.orchestrator.queue import Lease, Queue, QueueClosed, TaskEnvelope
 from reflexor.orchestrator.queue.interface import system_now_ms
 
 
@@ -58,7 +58,7 @@ class InMemoryTaskQueue:
 
     async def enqueue(self, envelope: TaskEnvelope) -> None:
         if self._closed:
-            raise RuntimeError("queue is closed")
+            raise QueueClosed("queue is closed")
 
         envelope_id = envelope.envelope_id
         assert envelope.available_at_ms is not None
@@ -82,9 +82,14 @@ class InMemoryTaskQueue:
             self._states[envelope_id] = state
             self._push_available(envelope_id, state)
 
-    async def dequeue(self, timeout_s: float | None = None) -> Lease | None:
+    async def dequeue(
+        self,
+        timeout_s: float | None = None,
+        *,
+        wait_s: float | None = 0.0,
+    ) -> Lease | None:
         if self._closed:
-            raise RuntimeError("queue is closed")
+            raise QueueClosed("queue is closed")
 
         visibility_timeout_s = (
             self._default_visibility_timeout_s if timeout_s is None else float(timeout_s)
@@ -144,6 +149,9 @@ class InMemoryTaskQueue:
             return None
 
     async def ack(self, lease: Lease) -> None:
+        if self._closed:
+            raise QueueClosed("queue is closed")
+
         async with self._lock:
             now = int(self._now_ms())
             self._release_expired_leases(now=now)
@@ -164,6 +172,9 @@ class InMemoryTaskQueue:
         delay_s: float | None = None,
         reason: str | None = None,
     ) -> None:
+        if self._closed:
+            raise QueueClosed("queue is closed")
+
         _ = reason
         delay = 0.0 if delay_s is None else float(delay_s)
         if delay < 0:

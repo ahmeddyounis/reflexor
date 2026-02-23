@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import heapq
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
+from reflexor.orchestrator.queue import Lease, Queue, QueueClosed, TaskEnvelope
 from reflexor.orchestrator.queue.interface import system_now_ms
 from reflexor.orchestrator.queue.observer import (
     NoopQueueObserver,
@@ -46,8 +47,8 @@ class InMemoryQueue:
     Implementation notes:
     - Ready items are stored in an `asyncio.Queue` of envelope_ids.
     - In-flight leases are tracked in a dict keyed by `lease_id`.
-    - Visibility timeouts and delayed scheduling are handled opportunistically on queue operations
-      (no background tasks).
+    - Visibility timeouts and delayed scheduling are handled opportunistically on queue operations.
+      Optional background tasks can also be started (for long-polling consumers).
     - Acks/nacks for expired leases are ignored (best-effort durability semantics).
     """
 
@@ -67,6 +68,10 @@ class InMemoryQueue:
 
         self._lock = asyncio.Lock()
         self._closed = False
+        self._ready_event = asyncio.Event()
+        self._wakeup_event = asyncio.Event()
+        self._delayed_promoter_task: asyncio.Task[None] | None = None
+        self._lease_reaper_task: asyncio.Task[None] | None = None
 
         self._ready: asyncio.Queue[str] = asyncio.Queue()
         self._states: dict[str, _EnvelopeState] = {}
@@ -93,7 +98,7 @@ class InMemoryQueue:
 
     async def enqueue(self, envelope: TaskEnvelope) -> None:
         if self._closed:
-            raise RuntimeError("queue is closed")
+            raise QueueClosed("queue is closed")
 
         envelope_id = envelope.envelope_id
         assert envelope.created_at_ms is not None
@@ -132,9 +137,14 @@ class InMemoryQueue:
             self._observer.on_redeliver(observation)
         self._observer.on_enqueue(enqueue_obs)
 
-    async def dequeue(self, timeout_s: float | None = None) -> Lease | None:
+    async def dequeue(
+        self,
+        timeout_s: float | None = None,
+        *,
+        wait_s: float | None = 0.0,
+    ) -> Lease | None:
         if self._closed:
-            raise RuntimeError("queue is closed")
+            raise QueueClosed("queue is closed")
 
         visibility_timeout_s = (
             self._default_visibility_timeout_s if timeout_s is None else float(timeout_s)
@@ -142,75 +152,73 @@ class InMemoryQueue:
         if visibility_timeout_s <= 0:
             raise ValueError("timeout_s must be > 0")
 
-        redeliver: list[QueueRedeliverObservation]
-        dequeue_obs: QueueDequeueObservation
-        lease: Lease | None
-        async with self._lock:
-            now = int(self._now_ms())
-            redeliver = self._expire_leases(now=now)
-            self._promote_delayed(now=now)
+        if wait_s is not None and float(wait_s) < 0:
+            raise ValueError("wait_s must be >= 0")
 
-            lease = None
-            while True:
-                try:
-                    envelope_id = self._ready.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
+        if wait_s is None or float(wait_s) > 0:
+            self._ensure_background_tasks_started()
 
-                state = self._states.get(envelope_id)
-                if state is None:
-                    continue
+        deadline = None if wait_s is None else (asyncio.get_running_loop().time() + float(wait_s))
+        while True:
+            redeliver: list[QueueRedeliverObservation]
+            lease: Lease | None
+            now: int
+            async with self._lock:
+                if self._closed:
+                    raise QueueClosed("queue is closed")
 
-                state.in_ready = False
-                if state.active_lease_id is not None:
-                    continue
-                if state.available_at_ms > now:
-                    self._push_delayed(envelope_id, state)
-                    continue
+                now = int(self._now_ms())
+                redeliver = self._expire_leases(now=now)
+                self._promote_delayed(now=now)
 
-                attempt = state.next_attempt
-                state.next_attempt += 1
+                lease = self._try_dequeue(now=now, visibility_timeout_s=visibility_timeout_s)
+                if lease is None:
+                    self._ready_event.clear()
 
-                lease_id = str(uuid4())
-                leased_at_ms = now
-                deadline_ms = leased_at_ms + int(visibility_timeout_s * 1000)
+            for observation in redeliver:
+                self._observer.on_redeliver(observation)
 
-                state.active_lease_id = lease_id
-                self._in_flight[lease_id] = _InFlight(
-                    envelope_id=envelope_id,
-                    attempt=attempt,
-                    leased_at_ms=leased_at_ms,
-                    deadline_ms=deadline_ms,
-                    visibility_timeout_s=visibility_timeout_s,
+            if lease is not None:
+                self._observer.on_dequeue(
+                    QueueDequeueObservation(
+                        lease=lease,
+                        correlation_ids=build_queue_correlation_ids(lease.envelope),
+                        now_ms=now,
+                    )
                 )
-                heapq.heappush(self._lease_deadlines, (deadline_ms, lease_id))
+                return lease
 
-                leased_envelope = state.envelope.model_copy(
-                    update={"attempt": attempt, "available_at_ms": state.available_at_ms}
+            if wait_s is not None and float(wait_s) == 0.0:
+                self._observer.on_dequeue(
+                    QueueDequeueObservation(lease=None, correlation_ids=None, now_ms=now)
                 )
-                lease = Lease(
-                    lease_id=lease_id,
-                    envelope=leased_envelope,
-                    leased_at_ms=leased_at_ms,
-                    visibility_timeout_s=visibility_timeout_s,
-                    attempt=attempt,
+                return None
+
+            if deadline is not None:
+                remaining_s = deadline - asyncio.get_running_loop().time()
+                if remaining_s <= 0:
+                    self._observer.on_dequeue(
+                        QueueDequeueObservation(lease=None, correlation_ids=None, now_ms=now)
+                    )
+                    return None
+            else:
+                remaining_s = None
+
+            try:
+                if remaining_s is None:
+                    await self._ready_event.wait()
+                else:
+                    await asyncio.wait_for(self._ready_event.wait(), timeout=remaining_s)
+            except TimeoutError:
+                self._observer.on_dequeue(
+                    QueueDequeueObservation(lease=None, correlation_ids=None, now_ms=now)
                 )
-                break
-
-            dequeue_obs = QueueDequeueObservation(
-                lease=lease,
-                correlation_ids=None
-                if lease is None
-                else build_queue_correlation_ids(lease.envelope),
-                now_ms=now,
-            )
-
-        for observation in redeliver:
-            self._observer.on_redeliver(observation)
-        self._observer.on_dequeue(dequeue_obs)
-        return lease
+                return None
 
     async def ack(self, lease: Lease) -> None:
+        if self._closed:
+            raise QueueClosed("queue is closed")
+
         redeliver: list[QueueRedeliverObservation]
         ack_obs: QueueAckObservation | None = None
         async with self._lock:
@@ -240,6 +248,9 @@ class InMemoryQueue:
     async def nack(
         self, lease: Lease, delay_s: float | None = None, reason: str | None = None
     ) -> None:
+        if self._closed:
+            raise QueueClosed("queue is closed")
+
         delay = 0.0 if delay_s is None else float(delay_s)
         if delay < 0:
             raise ValueError("delay_s must be >= 0")
@@ -285,8 +296,19 @@ class InMemoryQueue:
             self._observer.on_nack(nack_obs)
 
     async def aclose(self) -> None:
+        tasks: list[asyncio.Task[None]] = []
         async with self._lock:
+            if self._closed:
+                return
             self._closed = True
+            self._ready_event.set()
+            self._wakeup_event.set()
+
+            if self._delayed_promoter_task is not None:
+                tasks.append(self._delayed_promoter_task)
+            if self._lease_reaper_task is not None:
+                tasks.append(self._lease_reaper_task)
+
             self._states.clear()
             self._in_flight.clear()
             self._lease_deadlines.clear()
@@ -297,17 +319,26 @@ class InMemoryQueue:
                 except asyncio.QueueEmpty:
                     break
 
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            with suppress(asyncio.CancelledError):
+                await asyncio.gather(*tasks, return_exceptions=True)
+
     def _push_ready(self, envelope_id: str, state: _EnvelopeState) -> None:
         if state.in_ready or state.active_lease_id is not None:
             return
         state.in_ready = True
         self._ready.put_nowait(envelope_id)
+        self._ready_event.set()
+        self._wakeup_event.set()
 
     def _push_delayed(self, envelope_id: str, state: _EnvelopeState) -> None:
         if state.active_lease_id is not None:
             return
         self._seq += 1
         heapq.heappush(self._delayed, (state.available_at_ms, self._seq, envelope_id))
+        self._wakeup_event.set()
 
     def _promote_delayed(self, *, now: int) -> None:
         while self._delayed and self._delayed[0][0] <= now:
@@ -356,6 +387,115 @@ class InMemoryQueue:
             )
 
         return observations
+
+    def _ensure_background_tasks_started(self) -> None:
+        if self._delayed_promoter_task is not None and self._lease_reaper_task is not None:
+            return
+        if self._closed:
+            return
+        loop = asyncio.get_running_loop()
+        if self._delayed_promoter_task is None:
+            self._delayed_promoter_task = loop.create_task(self._delayed_promoter_loop())
+        if self._lease_reaper_task is None:
+            self._lease_reaper_task = loop.create_task(self._lease_reaper_loop())
+
+    async def _delayed_promoter_loop(self) -> None:
+        try:
+            while True:
+                redeliver: list[QueueRedeliverObservation] = []
+                async with self._lock:
+                    if self._closed:
+                        return
+                    now = int(self._now_ms())
+                    self._promote_delayed(now=now)
+                    next_due = self._delayed[0][0] if self._delayed else None
+
+                for observation in redeliver:
+                    self._observer.on_redeliver(observation)
+
+                await self._sleep_until_next(now_ms=now, next_ms=next_due)
+        except asyncio.CancelledError:
+            return
+
+    async def _lease_reaper_loop(self) -> None:
+        try:
+            while True:
+                redeliver: list[QueueRedeliverObservation]
+                async with self._lock:
+                    if self._closed:
+                        return
+                    now = int(self._now_ms())
+                    redeliver = self._expire_leases(now=now)
+                    next_deadline = self._lease_deadlines[0][0] if self._lease_deadlines else None
+
+                for observation in redeliver:
+                    self._observer.on_redeliver(observation)
+
+                await self._sleep_until_next(now_ms=now, next_ms=next_deadline)
+        except asyncio.CancelledError:
+            return
+
+    async def _sleep_until_next(self, *, now_ms: int, next_ms: int | None) -> None:
+        self._wakeup_event.clear()
+        if next_ms is None:
+            timeout_s = 0.25
+        else:
+            timeout_s = max(0.0, (next_ms - now_ms) / 1000)
+            timeout_s = min(timeout_s, 0.25)
+
+        try:
+            await asyncio.wait_for(self._wakeup_event.wait(), timeout=timeout_s)
+        except TimeoutError:
+            return
+
+    def _try_dequeue(self, *, now: int, visibility_timeout_s: float) -> Lease | None:
+        lease: Lease | None = None
+        while True:
+            try:
+                envelope_id = self._ready.get_nowait()
+            except asyncio.QueueEmpty:
+                return None
+
+            state = self._states.get(envelope_id)
+            if state is None:
+                continue
+
+            state.in_ready = False
+            if state.active_lease_id is not None:
+                continue
+            if state.available_at_ms > now:
+                self._push_delayed(envelope_id, state)
+                continue
+
+            attempt = state.next_attempt
+            state.next_attempt += 1
+
+            lease_id = str(uuid4())
+            leased_at_ms = now
+            deadline_ms = leased_at_ms + int(visibility_timeout_s * 1000)
+
+            state.active_lease_id = lease_id
+            self._in_flight[lease_id] = _InFlight(
+                envelope_id=envelope_id,
+                attempt=attempt,
+                leased_at_ms=leased_at_ms,
+                deadline_ms=deadline_ms,
+                visibility_timeout_s=visibility_timeout_s,
+            )
+            heapq.heappush(self._lease_deadlines, (deadline_ms, lease_id))
+
+            leased_envelope = state.envelope.model_copy(
+                update={"attempt": attempt, "available_at_ms": state.available_at_ms}
+            )
+            lease = Lease(
+                lease_id=lease_id,
+                envelope=leased_envelope,
+                leased_at_ms=leased_at_ms,
+                visibility_timeout_s=visibility_timeout_s,
+                attempt=attempt,
+            )
+            self._wakeup_event.set()
+            return lease
 
 
 if TYPE_CHECKING:
