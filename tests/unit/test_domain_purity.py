@@ -37,6 +37,7 @@ def test_domain_does_not_import_forbidden_packages() -> None:
             "reflexor.cli",
             "reflexor.infra",
             "reflexor.interfaces",
+            "reflexor.orchestrator",
             "reflexor.tools",
         }
 
