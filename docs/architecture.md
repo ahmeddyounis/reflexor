@@ -1,8 +1,8 @@
 # Architecture
 
 This document sets early guardrails for keeping the codebase easy to evolve as it grows.
-Reflexor is still in M01 scaffolding; these rules describe the intended direction and may
-be refined as we implement real functionality.
+Reflexor is still early-stage; these rules describe the intended direction and may be refined as we
+implement real functionality.
 
 ## Layering (Clean Architecture)
 
@@ -14,6 +14,15 @@ Reflexor is organized into four conceptual layers. Dependencies should point **i
 | Application | `reflexor.application` | Use-cases/workflows that orchestrate domain behavior | `domain` |
 | Interfaces | `reflexor.interfaces` | Ports/adapters, DTOs, boundary interfaces | `application`, `domain` |
 | Infrastructure | `reflexor.infra` | Concrete implementations (I/O, DB, HTTP, LLM clients, CLIs) | `interfaces`, `application`, `domain` |
+
+### Application boundaries (ports)
+
+Some subsystems define explicit boundary interfaces ("ports") that infrastructure implements:
+
+- **Queue**: `reflexor.orchestrator.queue` defines the `Queue` interface and message contracts.
+  - Infrastructure adapters live in `reflexor.infra.queue.*`.
+  - Wiring is done via `reflexor.infra.queue.factory.build_queue(settings)`.
+  - The domain layer must not import the queue boundary.
 
 ### Rules of thumb
 
