@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+from uuid import uuid4
+
+from reflexor.infra.queue.task_queue_in_memory import InMemoryTaskQueue
+from reflexor.orchestrator.queue import Lease, TaskEnvelope
+
+
+async def test_dequeue_returns_json_serializable_lease_and_envelope() -> None:
+    now_ms = 0
+
+    def clock() -> int:
+        return now_ms
+
+    queue = InMemoryTaskQueue(now_ms=clock)
+    envelope = TaskEnvelope(
+        envelope_id=str(uuid4()),
+        task_id=str(uuid4()),
+        run_id=str(uuid4()),
+        attempt=0,
+        created_at_ms=0,
+        available_at_ms=0,
+    )
+
+    await queue.enqueue(envelope)
+    lease = await queue.dequeue(timeout_s=5)
+    assert lease is not None
+    assert lease.attempt == lease.envelope.attempt == 0
+
+    dumped = lease.model_dump(mode="json")
+    assert Lease.model_validate(dumped) == lease
+
+
+async def test_nack_delays_redelivery_and_increments_attempt() -> None:
+    now_ms = 0
+
+    def clock() -> int:
+        return now_ms
+
+    queue = InMemoryTaskQueue(now_ms=clock)
+    envelope = TaskEnvelope(
+        envelope_id=str(uuid4()),
+        task_id=str(uuid4()),
+        run_id=str(uuid4()),
+        attempt=0,
+        created_at_ms=0,
+        available_at_ms=0,
+    )
+
+    await queue.enqueue(envelope)
+
+    lease1 = await queue.dequeue(timeout_s=5)
+    assert lease1 is not None
+    assert lease1.envelope.attempt == 0
+
+    await queue.nack(lease1, delay_s=10, reason="tests")
+    assert await queue.dequeue(timeout_s=5) is None
+
+    now_ms = 10_000
+    lease2 = await queue.dequeue(timeout_s=5)
+    assert lease2 is not None
+    assert lease2.envelope.attempt == 1
