@@ -9,6 +9,16 @@ from uuid import uuid4
 
 from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
 from reflexor.orchestrator.queue.interface import system_now_ms
+from reflexor.orchestrator.queue.observer import (
+    NoopQueueObserver,
+    QueueAckObservation,
+    QueueDequeueObservation,
+    QueueEnqueueObservation,
+    QueueNackObservation,
+    QueueObserver,
+    QueueRedeliverObservation,
+    build_queue_correlation_ids,
+)
 
 
 @dataclass(slots=True)
@@ -24,7 +34,10 @@ class _EnvelopeState:
 @dataclass(slots=True)
 class _InFlight:
     envelope_id: str
+    attempt: int
+    leased_at_ms: int
     deadline_ms: int
+    visibility_timeout_s: float
 
 
 class InMemoryQueue:
@@ -43,11 +56,14 @@ class InMemoryQueue:
         *,
         now_ms: Callable[[], int] | None = None,
         default_visibility_timeout_s: float = 60.0,
+        observer: QueueObserver | None = None,
     ) -> None:
         self._now_ms = now_ms or system_now_ms
         self._default_visibility_timeout_s = float(default_visibility_timeout_s)
         if self._default_visibility_timeout_s <= 0:
             raise ValueError("default_visibility_timeout_s must be > 0")
+
+        self._observer = NoopQueueObserver() if observer is None else observer
 
         self._lock = asyncio.Lock()
         self._closed = False
@@ -63,11 +79,16 @@ class InMemoryQueue:
 
     @classmethod
     def from_settings(
-        cls, settings: ReflexorSettings, *, now_ms: Callable[[], int] | None = None
+        cls,
+        settings: ReflexorSettings,
+        *,
+        now_ms: Callable[[], int] | None = None,
+        observer: QueueObserver | None = None,
     ) -> InMemoryQueue:
         return cls(
             now_ms=now_ms,
             default_visibility_timeout_s=settings.queue_visibility_timeout_s,
+            observer=observer,
         )
 
     async def enqueue(self, envelope: TaskEnvelope) -> None:
@@ -78,9 +99,11 @@ class InMemoryQueue:
         assert envelope.created_at_ms is not None
         assert envelope.available_at_ms is not None
 
+        redeliver: list[QueueRedeliverObservation]
+        enqueue_obs: QueueEnqueueObservation
         async with self._lock:
             now = int(self._now_ms())
-            self._expire_leases(now=now)
+            redeliver = self._expire_leases(now=now)
             self._promote_delayed(now=now)
 
             if envelope_id in self._states:
@@ -99,6 +122,16 @@ class InMemoryQueue:
             else:
                 self._push_delayed(envelope_id, state)
 
+            enqueue_obs = QueueEnqueueObservation(
+                envelope=envelope,
+                correlation_ids=build_queue_correlation_ids(envelope),
+                now_ms=now,
+            )
+
+        for observation in redeliver:
+            self._observer.on_redeliver(observation)
+        self._observer.on_enqueue(enqueue_obs)
+
     async def dequeue(self, timeout_s: float | None = None) -> Lease | None:
         if self._closed:
             raise RuntimeError("queue is closed")
@@ -109,16 +142,20 @@ class InMemoryQueue:
         if visibility_timeout_s <= 0:
             raise ValueError("timeout_s must be > 0")
 
+        redeliver: list[QueueRedeliverObservation]
+        dequeue_obs: QueueDequeueObservation
+        lease: Lease | None
         async with self._lock:
             now = int(self._now_ms())
-            self._expire_leases(now=now)
+            redeliver = self._expire_leases(now=now)
             self._promote_delayed(now=now)
 
+            lease = None
             while True:
                 try:
                     envelope_id = self._ready.get_nowait()
                 except asyncio.QueueEmpty:
-                    return None
+                    break
 
                 state = self._states.get(envelope_id)
                 if state is None:
@@ -140,68 +177,112 @@ class InMemoryQueue:
 
                 state.active_lease_id = lease_id
                 self._in_flight[lease_id] = _InFlight(
-                    envelope_id=envelope_id, deadline_ms=deadline_ms
+                    envelope_id=envelope_id,
+                    attempt=attempt,
+                    leased_at_ms=leased_at_ms,
+                    deadline_ms=deadline_ms,
+                    visibility_timeout_s=visibility_timeout_s,
                 )
                 heapq.heappush(self._lease_deadlines, (deadline_ms, lease_id))
 
                 leased_envelope = state.envelope.model_copy(
                     update={"attempt": attempt, "available_at_ms": state.available_at_ms}
                 )
-                return Lease(
+                lease = Lease(
                     lease_id=lease_id,
                     envelope=leased_envelope,
                     leased_at_ms=leased_at_ms,
                     visibility_timeout_s=visibility_timeout_s,
                     attempt=attempt,
                 )
+                break
+
+            dequeue_obs = QueueDequeueObservation(
+                lease=lease,
+                correlation_ids=None
+                if lease is None
+                else build_queue_correlation_ids(lease.envelope),
+                now_ms=now,
+            )
+
+        for observation in redeliver:
+            self._observer.on_redeliver(observation)
+        self._observer.on_dequeue(dequeue_obs)
+        return lease
 
     async def ack(self, lease: Lease) -> None:
+        redeliver: list[QueueRedeliverObservation]
+        ack_obs: QueueAckObservation | None = None
         async with self._lock:
             now = int(self._now_ms())
-            self._expire_leases(now=now)
+            redeliver = self._expire_leases(now=now)
 
             inflight = self._in_flight.pop(lease.lease_id, None)
             if inflight is None:
-                return
+                pass
+            else:
+                state = self._states.get(inflight.envelope_id)
+                if state is None or state.active_lease_id != lease.lease_id:
+                    pass
+                else:
+                    self._states.pop(inflight.envelope_id, None)
+                    ack_obs = QueueAckObservation(
+                        lease=lease,
+                        correlation_ids=build_queue_correlation_ids(lease.envelope),
+                        now_ms=now,
+                    )
 
-            state = self._states.get(inflight.envelope_id)
-            if state is None or state.active_lease_id != lease.lease_id:
-                return
-
-            self._states.pop(inflight.envelope_id, None)
+        for observation in redeliver:
+            self._observer.on_redeliver(observation)
+        if ack_obs is not None:
+            self._observer.on_ack(ack_obs)
 
     async def nack(
         self, lease: Lease, delay_s: float | None = None, reason: str | None = None
     ) -> None:
-        _ = reason
         delay = 0.0 if delay_s is None else float(delay_s)
         if delay < 0:
             raise ValueError("delay_s must be >= 0")
 
+        redeliver: list[QueueRedeliverObservation]
+        nack_obs: QueueNackObservation | None = None
         async with self._lock:
             now = int(self._now_ms())
-            self._expire_leases(now=now)
+            redeliver = self._expire_leases(now=now)
             self._promote_delayed(now=now)
 
             inflight = self._in_flight.pop(lease.lease_id, None)
             if inflight is None:
-                return
-
-            envelope_id = inflight.envelope_id
-            state = self._states.get(envelope_id)
-            if state is None or state.active_lease_id != lease.lease_id:
-                return
-
-            state.active_lease_id = None
-            state.available_at_ms = now + int(delay * 1000)
-            state.envelope = state.envelope.model_copy(
-                update={"available_at_ms": state.available_at_ms}
-            )
-
-            if state.available_at_ms <= now:
-                self._push_ready(envelope_id, state)
+                pass
             else:
-                self._push_delayed(envelope_id, state)
+                envelope_id = inflight.envelope_id
+                state = self._states.get(envelope_id)
+                if state is None or state.active_lease_id != lease.lease_id:
+                    pass
+                else:
+                    state.active_lease_id = None
+                    state.available_at_ms = now + int(delay * 1000)
+                    state.envelope = state.envelope.model_copy(
+                        update={"available_at_ms": state.available_at_ms}
+                    )
+
+                    if state.available_at_ms <= now:
+                        self._push_ready(envelope_id, state)
+                    else:
+                        self._push_delayed(envelope_id, state)
+
+                    nack_obs = QueueNackObservation(
+                        lease=lease,
+                        correlation_ids=build_queue_correlation_ids(lease.envelope),
+                        delay_s=delay,
+                        reason=reason,
+                        now_ms=now,
+                    )
+
+        for observation in redeliver:
+            self._observer.on_redeliver(observation)
+        if nack_obs is not None:
+            self._observer.on_nack(nack_obs)
 
     async def aclose(self) -> None:
         async with self._lock:
@@ -242,7 +323,8 @@ class InMemoryQueue:
                 continue
             self._push_ready(envelope_id, state)
 
-    def _expire_leases(self, *, now: int) -> None:
+    def _expire_leases(self, *, now: int) -> list[QueueRedeliverObservation]:
+        observations: list[QueueRedeliverObservation] = []
         while self._lease_deadlines and self._lease_deadlines[0][0] <= now:
             _deadline, lease_id = heapq.heappop(self._lease_deadlines)
             inflight = self._in_flight.pop(lease_id, None)
@@ -259,6 +341,21 @@ class InMemoryQueue:
             state.available_at_ms = now
             state.envelope = state.envelope.model_copy(update={"available_at_ms": now})
             self._push_ready(inflight.envelope_id, state)
+
+            observations.append(
+                QueueRedeliverObservation(
+                    envelope=state.envelope,
+                    correlation_ids=build_queue_correlation_ids(state.envelope),
+                    expired_lease_id=lease_id,
+                    expired_attempt=inflight.attempt,
+                    leased_at_ms=inflight.leased_at_ms,
+                    deadline_ms=inflight.deadline_ms,
+                    visibility_timeout_s=inflight.visibility_timeout_s,
+                    now_ms=now,
+                )
+            )
+
+        return observations
 
 
 if TYPE_CHECKING:
