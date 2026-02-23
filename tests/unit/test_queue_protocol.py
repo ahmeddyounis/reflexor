@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from reflexor.infra.queue.task_queue_in_memory import InMemoryTaskQueue
+from reflexor.infra.queue.in_memory_queue import InMemoryQueue
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
 
 
@@ -12,7 +12,7 @@ async def test_dequeue_returns_json_serializable_lease_and_envelope() -> None:
     def clock() -> int:
         return now_ms
 
-    queue = InMemoryTaskQueue(now_ms=clock)
+    queue = InMemoryQueue(now_ms=clock)
     envelope = TaskEnvelope(
         envelope_id=str(uuid4()),
         task_id=str(uuid4()),
@@ -37,7 +37,7 @@ async def test_nack_delays_redelivery_and_increments_attempt() -> None:
     def clock() -> int:
         return now_ms
 
-    queue = InMemoryTaskQueue(now_ms=clock)
+    queue = InMemoryQueue(now_ms=clock)
     envelope = TaskEnvelope(
         envelope_id=str(uuid4()),
         task_id=str(uuid4()),

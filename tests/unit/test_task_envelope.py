@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from reflexor.infra.queue.in_memory import InMemoryQueue
+from reflexor.infra.queue.in_memory import InMemoryQueueBackend
 from reflexor.orchestrator.queue import TaskEnvelope
 
 
@@ -31,7 +31,7 @@ async def test_available_at_ms_controls_queue_eligibility() -> None:
     def clock() -> int:
         return now_ms
 
-    queue = InMemoryQueue(now_ms=clock)
+    queue = InMemoryQueueBackend(now_ms=clock)
 
     envelope = TaskEnvelope(
         envelope_id=str(uuid4()),

@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import pytest
 
-from reflexor.infra.queue.in_memory import InMemoryQueue
+from reflexor.infra.queue.in_memory import InMemoryQueueBackend
 
 
 def _manual_clock(start_ms: int = 0) -> tuple[Callable[[], int], Callable[[int], None]]:
@@ -22,7 +22,7 @@ def _manual_clock(start_ms: int = 0) -> tuple[Callable[[], int], Callable[[int],
 
 async def test_enqueue_reserve_ack_round_trip() -> None:
     now_ms, _set_ms = _manual_clock()
-    queue = InMemoryQueue(now_ms=now_ms)
+    queue = InMemoryQueueBackend(now_ms=now_ms)
 
     message = await queue.enqueue(queue_name="work", payload={"x": 1})
     assert message.attempts == 0
@@ -38,7 +38,7 @@ async def test_enqueue_reserve_ack_round_trip() -> None:
 
 async def test_nack_requeues_with_delay_and_increments_attempts() -> None:
     now_ms, set_ms = _manual_clock()
-    queue = InMemoryQueue(now_ms=now_ms)
+    queue = InMemoryQueueBackend(now_ms=now_ms)
 
     message = await queue.enqueue(queue_name="work", payload={"x": 1})
 
@@ -59,7 +59,7 @@ async def test_nack_requeues_with_delay_and_increments_attempts() -> None:
 
 async def test_lease_expiry_makes_message_visible_again() -> None:
     now_ms, set_ms = _manual_clock()
-    queue = InMemoryQueue(now_ms=now_ms)
+    queue = InMemoryQueueBackend(now_ms=now_ms)
 
     message = await queue.enqueue(queue_name="work", payload={"x": 1})
     reserved1 = await queue.reserve(queue_name="work", lease_ms=10)
@@ -75,7 +75,7 @@ async def test_lease_expiry_makes_message_visible_again() -> None:
 
 async def test_available_at_ms_delays_delivery_until_ready() -> None:
     now_ms, set_ms = _manual_clock()
-    queue = InMemoryQueue(now_ms=now_ms)
+    queue = InMemoryQueueBackend(now_ms=now_ms)
 
     message = await queue.enqueue(queue_name="work", payload={"x": 1}, available_at_ms=5)
 
@@ -89,7 +89,7 @@ async def test_available_at_ms_delays_delivery_until_ready() -> None:
 
 async def test_dedupe_key_makes_enqueue_idempotent_until_acked() -> None:
     now_ms, _set_ms = _manual_clock()
-    queue = InMemoryQueue(now_ms=now_ms)
+    queue = InMemoryQueueBackend(now_ms=now_ms)
 
     message1 = await queue.enqueue(queue_name="work", payload={"x": 1}, dedupe_key="same")
     message2 = await queue.enqueue(queue_name="work", payload={"x": 2}, dedupe_key="same")
@@ -104,6 +104,6 @@ async def test_dedupe_key_makes_enqueue_idempotent_until_acked() -> None:
 
 
 async def test_reserve_rejects_non_positive_lease() -> None:
-    queue = InMemoryQueue()
+    queue = InMemoryQueueBackend()
     with pytest.raises(ValueError, match="lease_ms must be > 0"):
         await queue.reserve(queue_name="work", lease_ms=0)

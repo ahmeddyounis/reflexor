@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from reflexor.infra.queue.task_queue_in_memory import InMemoryTaskQueue
+from reflexor.infra.queue.in_memory_queue import InMemoryQueue
 from reflexor.orchestrator.queue import TaskEnvelope
 
 
@@ -23,7 +23,7 @@ async def test_ack_removes_message() -> None:
     def clock() -> int:
         return now_ms
 
-    queue = InMemoryTaskQueue(now_ms=clock)
+    queue = InMemoryQueue(now_ms=clock)
     await queue.enqueue(_envelope(created_at_ms=0, available_at_ms=0))
 
     lease = await queue.dequeue(timeout_s=5)
@@ -40,7 +40,7 @@ async def test_visibility_timeout_can_redeliver_when_not_acked() -> None:
     def clock() -> int:
         return now_ms
 
-    queue = InMemoryTaskQueue(now_ms=clock)
+    queue = InMemoryQueue(now_ms=clock)
     envelope = _envelope(created_at_ms=0, available_at_ms=0)
     await queue.enqueue(envelope)
 
@@ -62,7 +62,7 @@ async def test_dequeue_respects_available_at_ms() -> None:
     def clock() -> int:
         return now_ms
 
-    queue = InMemoryTaskQueue(now_ms=clock)
+    queue = InMemoryQueue(now_ms=clock)
     envelope = _envelope(created_at_ms=0, available_at_ms=10_000)
     await queue.enqueue(envelope)
 

@@ -39,7 +39,7 @@ class _QueueState:
     dedupe: dict[str, str]
 
 
-class InMemoryQueue(QueueBackend):
+class InMemoryQueueBackend(QueueBackend):
     """In-memory queue backend (intended for tests/local development).
 
     Semantics:
@@ -185,3 +185,6 @@ class InMemoryQueue(QueueBackend):
                 q.available_heap,
                 (state.available_at_ms, state.enqueued_at_ms, state.message_id),
             )
+
+
+__all__ = ["InMemoryQueueBackend"]
