@@ -86,10 +86,11 @@ class Queue(Protocol):
         """Enqueue a task envelope for execution."""
         ...
 
-    async def dequeue(self, timeout_s: float) -> Lease | None:
+    async def dequeue(self, timeout_s: float | None = None) -> Lease | None:
         """Dequeue (lease) the next available envelope.
 
-        `timeout_s` is the visibility timeout for the returned lease.
+        `timeout_s` is the visibility timeout for the returned lease. If omitted, the backend's
+        configured default visibility timeout is used.
         """
         ...
 

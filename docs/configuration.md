@@ -110,6 +110,12 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
 - `REFLEXOR_MAX_TOOL_OUTPUT_BYTES` (default `64000`)
 - `REFLEXOR_MAX_RUN_PACKET_BYTES` (default `512000`)
 
+## Queue defaults
+
+- `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` (default `60`)
+  - Default visibility timeout (seconds) used by queue backends when `Queue.dequeue()` is called
+    without an explicit `timeout_s`.
+
 ## Settings reference
 
 | Setting | Env var | Type | Default |
@@ -123,6 +129,7 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
 | `http_allowed_domains` | `REFLEXOR_HTTP_ALLOWED_DOMAINS` | list[str] | `[]` |
 | `webhook_allowed_targets` | `REFLEXOR_WEBHOOK_ALLOWED_TARGETS` | list[str] | `[]` |
 | `workspace_root` | `REFLEXOR_WORKSPACE_ROOT` | path | CWD |
+| `queue_visibility_timeout_s` | `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` | float | `60` |
 | `max_event_payload_bytes` | `REFLEXOR_MAX_EVENT_PAYLOAD_BYTES` | int | `64000` |
 | `max_tool_output_bytes` | `REFLEXOR_MAX_TOOL_OUTPUT_BYTES` | int | `64000` |
 | `max_run_packet_bytes` | `REFLEXOR_MAX_RUN_PACKET_BYTES` | int | `512000` |

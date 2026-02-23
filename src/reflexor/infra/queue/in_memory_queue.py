@@ -33,12 +33,22 @@ class InMemoryQueue:
     Implementation notes:
     - Ready items are stored in an `asyncio.Queue` of envelope_ids.
     - In-flight leases are tracked in a dict keyed by `lease_id`.
-    - Visibility timeouts and delayed scheduling are handled opportunistically when calling
-      `dequeue()` (no background tasks).
+    - Visibility timeouts and delayed scheduling are handled opportunistically on queue operations
+      (no background tasks).
+    - Acks/nacks for expired leases are ignored (best-effort durability semantics).
     """
 
-    def __init__(self, *, now_ms: Callable[[], int] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        now_ms: Callable[[], int] | None = None,
+        default_visibility_timeout_s: float = 60.0,
+    ) -> None:
         self._now_ms = now_ms or system_now_ms
+        self._default_visibility_timeout_s = float(default_visibility_timeout_s)
+        if self._default_visibility_timeout_s <= 0:
+            raise ValueError("default_visibility_timeout_s must be > 0")
+
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -50,6 +60,15 @@ class InMemoryQueue:
 
         self._delayed: list[tuple[int, int, str]] = []
         self._seq = 0
+
+    @classmethod
+    def from_settings(
+        cls, settings: ReflexorSettings, *, now_ms: Callable[[], int] | None = None
+    ) -> InMemoryQueue:
+        return cls(
+            now_ms=now_ms,
+            default_visibility_timeout_s=settings.queue_visibility_timeout_s,
+        )
 
     async def enqueue(self, envelope: TaskEnvelope) -> None:
         if self._closed:
@@ -80,10 +99,14 @@ class InMemoryQueue:
             else:
                 self._push_delayed(envelope_id, state)
 
-    async def dequeue(self, timeout_s: float) -> Lease | None:
+    async def dequeue(self, timeout_s: float | None = None) -> Lease | None:
         if self._closed:
             raise RuntimeError("queue is closed")
-        if timeout_s <= 0:
+
+        visibility_timeout_s = (
+            self._default_visibility_timeout_s if timeout_s is None else float(timeout_s)
+        )
+        if visibility_timeout_s <= 0:
             raise ValueError("timeout_s must be > 0")
 
         async with self._lock:
@@ -113,7 +136,7 @@ class InMemoryQueue:
 
                 lease_id = str(uuid4())
                 leased_at_ms = now
-                deadline_ms = leased_at_ms + int(float(timeout_s) * 1000)
+                deadline_ms = leased_at_ms + int(visibility_timeout_s * 1000)
 
                 state.active_lease_id = lease_id
                 self._in_flight[lease_id] = _InFlight(
@@ -128,19 +151,22 @@ class InMemoryQueue:
                     lease_id=lease_id,
                     envelope=leased_envelope,
                     leased_at_ms=leased_at_ms,
-                    visibility_timeout_s=float(timeout_s),
+                    visibility_timeout_s=visibility_timeout_s,
                     attempt=attempt,
                 )
 
     async def ack(self, lease: Lease) -> None:
         async with self._lock:
+            now = int(self._now_ms())
+            self._expire_leases(now=now)
+
             inflight = self._in_flight.pop(lease.lease_id, None)
             if inflight is None:
-                raise KeyError(f"unknown lease_id: {lease.lease_id}")
+                return
 
             state = self._states.get(inflight.envelope_id)
             if state is None or state.active_lease_id != lease.lease_id:
-                raise ValueError("lease is not active")
+                return
 
             self._states.pop(inflight.envelope_id, None)
 
@@ -159,12 +185,12 @@ class InMemoryQueue:
 
             inflight = self._in_flight.pop(lease.lease_id, None)
             if inflight is None:
-                raise KeyError(f"unknown lease_id: {lease.lease_id}")
+                return
 
             envelope_id = inflight.envelope_id
             state = self._states.get(envelope_id)
             if state is None or state.active_lease_id != lease.lease_id:
-                raise ValueError("lease is not active")
+                return
 
             state.active_lease_id = None
             state.available_at_ms = now + int(delay * 1000)
@@ -236,4 +262,6 @@ class InMemoryQueue:
 
 
 if TYPE_CHECKING:
+    from reflexor.config import ReflexorSettings
+
     _queue: Queue = InMemoryQueue()

@@ -72,3 +72,29 @@ async def test_dequeue_respects_available_at_ms() -> None:
     lease = await queue.dequeue(timeout_s=5)
     assert lease is not None
     assert lease.envelope.envelope_id == envelope.envelope_id
+
+
+async def test_ack_after_visibility_timeout_is_ignored_and_redelivers() -> None:
+    now_ms = 0
+
+    def clock() -> int:
+        return now_ms
+
+    queue = InMemoryQueue(now_ms=clock)
+    envelope = _envelope(created_at_ms=0, available_at_ms=0)
+    await queue.enqueue(envelope)
+
+    lease1 = await queue.dequeue(timeout_s=5)
+    assert lease1 is not None
+    assert lease1.envelope.attempt == 0
+
+    now_ms = 5_001
+    await queue.ack(lease1)
+
+    lease2 = await queue.dequeue(timeout_s=5)
+    assert lease2 is not None
+    assert lease2.envelope.envelope_id == envelope.envelope_id
+    assert lease2.envelope.attempt == 1
+
+    await queue.ack(lease2)
+    assert await queue.dequeue(timeout_s=5) is None

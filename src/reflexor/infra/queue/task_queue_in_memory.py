@@ -28,8 +28,17 @@ class _EnvelopeState:
 class InMemoryTaskQueue:
     """In-memory `Queue` implementation (intended for tests/local development)."""
 
-    def __init__(self, *, now_ms: Callable[[], int] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        now_ms: Callable[[], int] | None = None,
+        default_visibility_timeout_s: float = 60.0,
+    ) -> None:
         self._now_ms = now_ms or system_now_ms
+        self._default_visibility_timeout_s = float(default_visibility_timeout_s)
+        if self._default_visibility_timeout_s <= 0:
+            raise ValueError("default_visibility_timeout_s must be > 0")
+
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -37,6 +46,15 @@ class InMemoryTaskQueue:
         self._states: dict[str, _EnvelopeState] = {}
         self._leases: dict[str, str] = {}
         self._available_heap: list[tuple[int, int, int, int, str]] = []
+
+    @classmethod
+    def from_settings(
+        cls, settings: ReflexorSettings, *, now_ms: Callable[[], int] | None = None
+    ) -> InMemoryTaskQueue:
+        return cls(
+            now_ms=now_ms,
+            default_visibility_timeout_s=settings.queue_visibility_timeout_s,
+        )
 
     async def enqueue(self, envelope: TaskEnvelope) -> None:
         if self._closed:
@@ -64,10 +82,14 @@ class InMemoryTaskQueue:
             self._states[envelope_id] = state
             self._push_available(envelope_id, state)
 
-    async def dequeue(self, timeout_s: float) -> Lease | None:
+    async def dequeue(self, timeout_s: float | None = None) -> Lease | None:
         if self._closed:
             raise RuntimeError("queue is closed")
-        if timeout_s <= 0:
+
+        visibility_timeout_s = (
+            self._default_visibility_timeout_s if timeout_s is None else float(timeout_s)
+        )
+        if visibility_timeout_s <= 0:
             raise ValueError("timeout_s must be > 0")
 
         async with self._lock:
@@ -99,7 +121,7 @@ class InMemoryTaskQueue:
                 state.next_attempt += 1
 
                 lease_id = str(uuid4())
-                leased_until_ms = now + int(timeout_s * 1000)
+                leased_until_ms = now + int(visibility_timeout_s * 1000)
 
                 state.active_lease_id = lease_id
                 state.leased_until_ms = leased_until_ms
@@ -115,7 +137,7 @@ class InMemoryTaskQueue:
                     lease_id=lease_id,
                     envelope=leased_envelope,
                     leased_at_ms=now,
-                    visibility_timeout_s=float(timeout_s),
+                    visibility_timeout_s=visibility_timeout_s,
                     attempt=attempt,
                 )
 
@@ -123,12 +145,15 @@ class InMemoryTaskQueue:
 
     async def ack(self, lease: Lease) -> None:
         async with self._lock:
+            now = int(self._now_ms())
+            self._release_expired_leases(now=now)
+
             envelope_id = self._leases.get(lease.lease_id)
             if envelope_id is None:
-                raise KeyError(f"unknown lease_id: {lease.lease_id}")
+                return
             state = self._states.get(envelope_id)
             if state is None or state.active_lease_id != lease.lease_id:
-                raise ValueError("lease is not active")
+                return
 
             self._leases.pop(lease.lease_id, None)
             self._states.pop(envelope_id, None)
@@ -145,14 +170,16 @@ class InMemoryTaskQueue:
             raise ValueError("delay_s must be >= 0")
 
         async with self._lock:
+            now = int(self._now_ms())
+            self._release_expired_leases(now=now)
+
             envelope_id = self._leases.get(lease.lease_id)
             if envelope_id is None:
-                raise KeyError(f"unknown lease_id: {lease.lease_id}")
+                return
             state = self._states.get(envelope_id)
             if state is None or state.active_lease_id != lease.lease_id:
-                raise ValueError("lease is not active")
+                return
 
-            now = int(self._now_ms())
             state.active_lease_id = None
             state.leased_until_ms = None
             state.available_at_ms = now + int(delay * 1000)
@@ -195,4 +222,6 @@ class InMemoryTaskQueue:
 
 
 if TYPE_CHECKING:
+    from reflexor.config import ReflexorSettings
+
     _queue: Queue = InMemoryTaskQueue()

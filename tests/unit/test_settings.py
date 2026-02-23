@@ -35,6 +35,7 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.http_allowed_domains == []
     assert settings.webhook_allowed_targets == []
     assert settings.workspace_root.resolve(strict=False) == tmp_path.resolve(strict=False)
+    assert settings.queue_visibility_timeout_s == 60.0
     assert settings.max_event_payload_bytes == DEFAULT_MAX_PAYLOAD_BYTES
     assert settings.max_tool_output_bytes == DEFAULT_MAX_TOOL_RESULT_BYTES
     assert settings.max_run_packet_bytes == DEFAULT_MAX_PACKET_BYTES

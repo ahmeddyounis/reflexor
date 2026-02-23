@@ -98,6 +98,8 @@ class ReflexorSettings(BaseSettings):
     webhook_allowed_targets: list[str] = Field(default_factory=list)
     workspace_root: Path = Field(default_factory=Path.cwd)
 
+    queue_visibility_timeout_s: float = 60.0
+
     max_event_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
     max_tool_output_bytes: int = DEFAULT_MAX_TOOL_RESULT_BYTES
     max_run_packet_bytes: int = DEFAULT_MAX_PACKET_BYTES
@@ -137,6 +139,14 @@ class ReflexorSettings(BaseSettings):
     def _validate_workspace_root(cls, value: Path) -> Path:
         normalized = normalize_workspace_root(value)
         return validate_workspace_root(normalized)
+
+    @field_validator("queue_visibility_timeout_s")
+    @classmethod
+    def _validate_queue_visibility_timeout_s(cls, value: float) -> float:
+        timeout_s = float(value)
+        if timeout_s <= 0:
+            raise ValueError("queue_visibility_timeout_s must be > 0")
+        return timeout_s
 
     @field_validator("max_event_payload_bytes", "max_tool_output_bytes", "max_run_packet_bytes")
     @classmethod
