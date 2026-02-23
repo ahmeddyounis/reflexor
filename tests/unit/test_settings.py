@@ -35,6 +35,7 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.http_allowed_domains == []
     assert settings.webhook_allowed_targets == []
     assert settings.workspace_root.resolve(strict=False) == tmp_path.resolve(strict=False)
+    assert settings.queue_backend == "inmemory"
     assert settings.queue_visibility_timeout_s == 60.0
     assert settings.max_event_payload_bytes == DEFAULT_MAX_PAYLOAD_BYTES
     assert settings.max_tool_output_bytes == DEFAULT_MAX_TOOL_RESULT_BYTES
@@ -117,3 +118,12 @@ def test_workspace_root_relative_paths_are_resolved_and_files_are_rejected(
 
     with pytest.raises(ValueError, match="must be a directory"):
         get_settings()
+
+
+def test_queue_backend_is_normalized(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    clear_settings_cache()
+
+    monkeypatch.setenv("REFLEXOR_QUEUE_BACKEND", " INMEMORY ")
+    settings = get_settings()
+    assert settings.queue_backend == "inmemory"

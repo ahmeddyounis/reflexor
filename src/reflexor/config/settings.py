@@ -98,6 +98,7 @@ class ReflexorSettings(BaseSettings):
     webhook_allowed_targets: list[str] = Field(default_factory=list)
     workspace_root: Path = Field(default_factory=Path.cwd)
 
+    queue_backend: Literal["inmemory"] = "inmemory"
     queue_visibility_timeout_s: float = 60.0
 
     max_event_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
@@ -139,6 +140,18 @@ class ReflexorSettings(BaseSettings):
     def _validate_workspace_root(cls, value: Path) -> Path:
         normalized = normalize_workspace_root(value)
         return validate_workspace_root(normalized)
+
+    @field_validator("queue_backend", mode="before")
+    @classmethod
+    def _normalize_queue_backend(cls, value: object) -> str:
+        if value is None:
+            return "inmemory"
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if not normalized:
+                raise ValueError("queue_backend must be non-empty")
+            return normalized
+        raise TypeError("queue_backend must be a string")
 
     @field_validator("queue_visibility_timeout_s")
     @classmethod

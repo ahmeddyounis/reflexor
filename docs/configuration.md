@@ -112,6 +112,8 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
 
 ## Queue defaults
 
+- `REFLEXOR_QUEUE_BACKEND` (default `inmemory`)
+  - Selects the queue backend implementation.
 - `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` (default `60`)
   - Default visibility timeout (seconds) used by queue backends when `Queue.dequeue()` is called
     without an explicit `timeout_s`.
@@ -129,6 +131,7 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
 | `http_allowed_domains` | `REFLEXOR_HTTP_ALLOWED_DOMAINS` | list[str] | `[]` |
 | `webhook_allowed_targets` | `REFLEXOR_WEBHOOK_ALLOWED_TARGETS` | list[str] | `[]` |
 | `workspace_root` | `REFLEXOR_WORKSPACE_ROOT` | path | CWD |
+| `queue_backend` | `REFLEXOR_QUEUE_BACKEND` | `inmemory` | `inmemory` |
 | `queue_visibility_timeout_s` | `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` | float | `60` |
 | `max_event_payload_bytes` | `REFLEXOR_MAX_EVENT_PAYLOAD_BYTES` | int | `64000` |
 | `max_tool_output_bytes` | `REFLEXOR_MAX_TOOL_OUTPUT_BYTES` | int | `64000` |
