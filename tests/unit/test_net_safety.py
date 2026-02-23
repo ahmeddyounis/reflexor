@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflexor.tools.net_safety import validate_and_normalize_url
+from reflexor.security.net_safety import validate_and_normalize_url
 
 
 def test_url_allowlist_allows_expected_domain() -> None:

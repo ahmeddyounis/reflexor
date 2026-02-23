@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from reflexor.tools.fs_safety import (
+from reflexor.security.fs_safety import (
     atomic_write_text,
     read_bytes_limited,
     resolve_path_in_workspace,

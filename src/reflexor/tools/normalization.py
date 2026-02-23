@@ -6,8 +6,8 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from reflexor.tools.fs_safety import resolve_path_in_workspace
-from reflexor.tools.net_safety import validate_and_normalize_url
+from reflexor.security.fs_safety import resolve_path_in_workspace
+from reflexor.security.net_safety import validate_and_normalize_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
