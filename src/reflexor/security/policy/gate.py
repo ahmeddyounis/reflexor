@@ -11,14 +11,33 @@ utilities. It must not import infrastructure/framework layers.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal, overload
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.models import ToolCall
 from reflexor.security.policy.context import PolicyContext, ToolSpec
-from reflexor.security.policy.decision import PolicyDecision
-from reflexor.security.policy.rules import PolicyRule, evaluate_rules
+from reflexor.security.policy.decision import REASON_OK, PolicyAction, PolicyDecision
+from reflexor.security.policy.rules import PolicyRule
+
+
+class PolicyTraceEntry(BaseModel):
+    """A single rule evaluation result (for debugging/audit traces)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule_id: str
+    decision: PolicyDecision | None = None
+
+
+class PolicyEvaluation(BaseModel):
+    """Policy evaluation output with an optional trace of rule decisions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision: PolicyDecision
+    trace: list[PolicyTraceEntry] = Field(default_factory=list)
 
 
 class PolicyGate:
@@ -37,6 +56,42 @@ class PolicyGate:
     def settings(self) -> ReflexorSettings:
         return self._settings
 
+    def _evaluate_with_trace(
+        self,
+        *,
+        tool_call: ToolCall,
+        tool_spec: ToolSpec,
+        parsed_args: BaseModel,
+        ctx: PolicyContext,
+    ) -> tuple[PolicyDecision, list[PolicyTraceEntry]]:
+        trace: list[PolicyTraceEntry] = []
+        first_approval: PolicyDecision | None = None
+
+        for rule in self._rules:
+            rule_id = getattr(rule, "rule_id", type(rule).__name__)
+            decision = rule.evaluate(
+                tool_call=tool_call,
+                tool_spec=tool_spec,
+                parsed_args=parsed_args,
+                ctx=ctx,
+            )
+            trace.append(PolicyTraceEntry(rule_id=rule_id, decision=decision))
+
+            if decision is None:
+                continue
+
+            if decision.action == PolicyAction.DENY:
+                return decision, trace
+
+            if decision.action == PolicyAction.REQUIRE_APPROVAL and first_approval is None:
+                first_approval = decision
+
+        if first_approval is not None:
+            return first_approval, trace
+
+        return PolicyDecision.allow(reason_code=REASON_OK), trace
+
+    @overload
     def evaluate(
         self,
         *,
@@ -44,12 +99,36 @@ class PolicyGate:
         tool_spec: ToolSpec,
         parsed_args: BaseModel,
         ctx: PolicyContext | None = None,
-    ) -> PolicyDecision:
+        policy_trace: Literal[False] = False,
+    ) -> PolicyDecision: ...
+
+    @overload
+    def evaluate(
+        self,
+        *,
+        tool_call: ToolCall,
+        tool_spec: ToolSpec,
+        parsed_args: BaseModel,
+        ctx: PolicyContext | None = None,
+        policy_trace: Literal[True],
+    ) -> PolicyEvaluation: ...
+
+    def evaluate(
+        self,
+        *,
+        tool_call: ToolCall,
+        tool_spec: ToolSpec,
+        parsed_args: BaseModel,
+        ctx: PolicyContext | None = None,
+        policy_trace: bool = False,
+    ) -> PolicyDecision | PolicyEvaluation:
         resolved_ctx = ctx or PolicyContext.from_settings(self._settings)
-        return evaluate_rules(
-            self._rules,
+        decision, trace = self._evaluate_with_trace(
             tool_call=tool_call,
             tool_spec=tool_spec,
             parsed_args=parsed_args,
             ctx=resolved_ctx,
         )
+        if not policy_trace:
+            return decision
+        return PolicyEvaluation(decision=decision, trace=trace)

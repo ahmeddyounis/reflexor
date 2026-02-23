@@ -6,6 +6,7 @@ from reflexor.security.policy.decision import (
     REASON_APPROVAL_REQUIRED,
     REASON_ARGS_INVALID,
     REASON_DOMAIN_NOT_ALLOWLISTED,
+    REASON_OK,
     REASON_PROFILE_GUARDRAIL,
     REASON_SCOPE_DISABLED,
     REASON_SSRF_BLOCKED,
@@ -17,6 +18,7 @@ from reflexor.security.policy.decision import (
 
 
 def test_reason_codes_are_stable() -> None:
+    assert REASON_OK == "ok"
     assert REASON_SCOPE_DISABLED == "scope_disabled"
     assert REASON_TOOL_UNKNOWN == "tool_unknown"
     assert REASON_ARGS_INVALID == "args_invalid"

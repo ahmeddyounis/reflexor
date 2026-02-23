@@ -25,7 +25,8 @@ class PolicyAction(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
-REASON_ALLOWED = "allowed"
+REASON_OK = "ok"
+REASON_ALLOWED = REASON_OK
 REASON_SCOPE_DISABLED = "scope_disabled"
 REASON_TOOL_UNKNOWN = "tool_unknown"
 REASON_ARGS_INVALID = "args_invalid"
