@@ -12,14 +12,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pydantic import BaseModel
+
 from reflexor.config import ReflexorSettings, get_settings
+from reflexor.domain.models import ToolCall
+from reflexor.security.policy.context import PolicyContext, ToolSpec
 from reflexor.security.policy.decision import PolicyDecision
-from reflexor.security.policy.rules import PolicyRule, first_non_allow
-from reflexor.tools.sdk import ToolManifest
+from reflexor.security.policy.rules import PolicyRule, evaluate_rules
 
 
 class PolicyGate:
-    """Evaluate tool manifests with a configured set of policy rules."""
+    """Evaluate tool calls with a configured set of policy rules."""
 
     def __init__(
         self,
@@ -34,6 +37,19 @@ class PolicyGate:
     def settings(self) -> ReflexorSettings:
         return self._settings
 
-    def evaluate(self, *, manifest: ToolManifest) -> PolicyDecision:
-        decisions = [rule.evaluate(manifest=manifest) for rule in self._rules]
-        return first_non_allow(decisions)
+    def evaluate(
+        self,
+        *,
+        tool_call: ToolCall,
+        tool_spec: ToolSpec,
+        parsed_args: BaseModel,
+        ctx: PolicyContext | None = None,
+    ) -> PolicyDecision:
+        resolved_ctx = ctx or PolicyContext.from_settings(self._settings)
+        return evaluate_rules(
+            self._rules,
+            tool_call=tool_call,
+            tool_spec=tool_spec,
+            parsed_args=parsed_args,
+            ctx=resolved_ctx,
+        )
