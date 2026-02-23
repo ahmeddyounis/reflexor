@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from reflexor.security.policy.decision import PolicyDecision
+from reflexor.security.policy.decision import PolicyAction, PolicyDecision
 from reflexor.tools.sdk import ToolManifest
 
 
@@ -24,7 +24,7 @@ def first_non_allow(decisions: Sequence[PolicyDecision]) -> PolicyDecision:
     """Return the first decision that is not an unconditional allow."""
 
     for decision in decisions:
-        if decision.allowed:
+        if decision.action == PolicyAction.ALLOW:
             continue
         return decision
     return PolicyDecision.allow()
