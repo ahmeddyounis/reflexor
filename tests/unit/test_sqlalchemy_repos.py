@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from reflexor.config import ReflexorSettings
-from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
+from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
@@ -430,3 +430,242 @@ async def test_run_packet_repo_persists_sanitized_packet() -> None:
             fetched = await run_packet_repo.get(run_id)
             assert fetched is not None
             assert fetched.event.payload["authorization"] == "<redacted>"
+
+
+@pytest.mark.asyncio
+async def test_run_repo_list_summaries_filters_by_status_and_paginates() -> None:
+    settings = ReflexorSettings(max_tool_output_bytes=200)
+
+    async with _in_memory_session_factory() as session_factory:
+        run_created_id = _uuid()
+        run_running_id = _uuid()
+        run_failed_id = _uuid()
+        run_empty_id = _uuid()
+
+        run_created = RunRecord(
+            run_id=run_created_id,
+            parent_run_id=None,
+            created_at_ms=1_000,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        run_running = RunRecord(
+            run_id=run_running_id,
+            parent_run_id=None,
+            created_at_ms=2_000,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        run_failed = RunRecord(
+            run_id=run_failed_id,
+            parent_run_id=None,
+            created_at_ms=3_000,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        run_empty = RunRecord(
+            run_id=run_empty_id,
+            parent_run_id=None,
+            created_at_ms=4_000,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+
+        task_created = Task(
+            task_id=_uuid(),
+            run_id=run_created_id,
+            name="queued",
+            status=TaskStatus.QUEUED,
+            created_at_ms=1,
+        )
+        task_running = Task(
+            task_id=_uuid(),
+            run_id=run_running_id,
+            name="running",
+            status=TaskStatus.RUNNING,
+            created_at_ms=1,
+        )
+        task_failed = Task(
+            task_id=_uuid(),
+            run_id=run_failed_id,
+            name="failed",
+            status=TaskStatus.FAILED,
+            created_at_ms=1,
+        )
+
+        packet_created = RunPacket(
+            run_id=run_created_id,
+            event=Event(
+                event_id=_uuid(),
+                type="evt.created",
+                source="tests",
+                received_at_ms=0,
+                payload={},
+            ),
+            created_at_ms=1_000,
+        )
+        packet_running = RunPacket(
+            run_id=run_running_id,
+            event=Event(
+                event_id=_uuid(),
+                type="evt.running",
+                source="tests",
+                received_at_ms=0,
+                payload={},
+            ),
+            created_at_ms=2_000,
+        )
+        packet_failed = RunPacket(
+            run_id=run_failed_id,
+            event=Event(
+                event_id=_uuid(),
+                type="evt.failed",
+                source="tests",
+                received_at_ms=0,
+                payload={},
+            ),
+            created_at_ms=3_000,
+        )
+        packet_empty = RunPacket(
+            run_id=run_empty_id,
+            event=Event(
+                event_id=_uuid(),
+                type="evt.empty",
+                source="tests",
+                received_at_ms=0,
+                payload={},
+            ),
+            created_at_ms=4_000,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(session, settings=settings)
+
+            assert await run_repo.create(run_created) == run_created
+            assert await run_repo.create(run_running) == run_running
+            assert await run_repo.create(run_failed) == run_failed
+            assert await run_repo.create(run_empty) == run_empty
+
+            await task_repo.create(task_created)
+            await task_repo.create(task_running)
+            await task_repo.create(task_failed)
+
+            await run_packet_repo.create(packet_created)
+            await run_packet_repo.create(packet_running)
+            await run_packet_repo.create(packet_failed)
+            await run_packet_repo.create(packet_empty)
+
+            summaries = await run_repo.list_summaries(limit=10, offset=0)
+            assert [s.run_id for s in summaries] == [
+                run_empty_id,
+                run_failed_id,
+                run_running_id,
+                run_created_id,
+            ]
+            assert [s.status for s in summaries] == [
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.RUNNING,
+                RunStatus.CREATED,
+            ]
+            assert summaries[0].event_type == "evt.empty"
+            assert summaries[0].event_source == "tests"
+
+            failed_only = await run_repo.list_summaries(limit=10, offset=0, status=RunStatus.FAILED)
+            assert [s.run_id for s in failed_only] == [run_failed_id]
+
+            paged = await run_repo.list_summaries(limit=1, offset=1)
+            assert [s.run_id for s in paged] == [run_failed_id]
+
+            summary = await run_repo.get_summary(run_running_id)
+            assert summary is not None
+            assert summary.run_id == run_running_id
+            assert summary.status == RunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_task_and_approval_list_filters_and_orders() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        run = RunRecord(
+            run_id=run_id,
+            parent_run_id=None,
+            created_at_ms=1,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+
+        tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=100,
+        )
+        task_queued = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="queued",
+            status=TaskStatus.QUEUED,
+            tool_call=tool_call,
+            created_at_ms=10,
+        )
+        task_succeeded = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="done",
+            status=TaskStatus.SUCCEEDED,
+            tool_call=tool_call,
+            created_at_ms=20,
+            started_at_ms=20,
+            completed_at_ms=21,
+            attempts=1,
+        )
+
+        approval_approved = Approval(
+            approval_id=_uuid(),
+            run_id=run_id,
+            task_id=task_queued.task_id,
+            tool_call_id=tool_call.tool_call_id,
+            status=ApprovalStatus.APPROVED,
+            created_at_ms=1,
+            decided_at_ms=2,
+        )
+        approval_pending = Approval(
+            approval_id=_uuid(),
+            run_id=run_id,
+            task_id=task_succeeded.task_id,
+            tool_call_id=tool_call.tool_call_id,
+            status=ApprovalStatus.PENDING,
+            created_at_ms=3,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+            approval_repo = SqlAlchemyApprovalRepo(session)
+
+            assert await run_repo.create(run) == run
+            await task_repo.create(task_queued)
+            await task_repo.create(task_succeeded)
+            await approval_repo.create(approval_approved)
+            await approval_repo.create(approval_pending)
+
+            queued_only = await task_repo.list(
+                limit=10, offset=0, run_id=run_id, status=TaskStatus.QUEUED
+            )
+            assert [task.task_id for task in queued_only] == [task_queued.task_id]
+
+            approvals = await approval_repo.list(limit=10, offset=0)
+            assert [approval.approval_id for approval in approvals] == [
+                approval_pending.approval_id,
+                approval_approved.approval_id,
+            ]

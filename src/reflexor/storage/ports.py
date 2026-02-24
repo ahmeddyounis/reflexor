@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
+from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
@@ -18,6 +18,28 @@ class RunRecord:
     created_at_ms: int
     started_at_ms: int | None
     completed_at_ms: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class RunSummary:
+    """Minimal run summary for admin/API read paths."""
+
+    run_id: str
+    created_at_ms: int
+    started_at_ms: int | None
+    completed_at_ms: int | None
+    status: RunStatus
+    event_type: str | None
+    event_source: str | None
+    tasks_total: int
+    tasks_pending: int
+    tasks_queued: int
+    tasks_running: int
+    tasks_succeeded: int
+    tasks_failed: int
+    tasks_canceled: int
+    approvals_total: int
+    approvals_pending: int
 
 
 class EventRepo(Protocol):
@@ -57,6 +79,18 @@ class RunRepo(Protocol):
     ) -> RunRecord: ...
 
     async def list_recent(self, *, limit: int, offset: int) -> list[RunRecord]: ...
+
+    async def list_summaries(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        status: RunStatus | None = None,
+        created_after_ms: int | None = None,
+        created_before_ms: int | None = None,
+    ) -> list[RunSummary]: ...
+
+    async def get_summary(self, run_id: str) -> RunSummary | None: ...
 
 
 class TaskRepo(Protocol):
@@ -159,6 +193,7 @@ __all__ = [
     "RunPacketRepo",
     "RunRecord",
     "RunRepo",
+    "RunSummary",
     "TaskRepo",
     "ToolCallRepo",
 ]
