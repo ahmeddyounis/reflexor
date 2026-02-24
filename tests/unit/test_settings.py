@@ -35,6 +35,10 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.http_allowed_domains == []
     assert settings.webhook_allowed_targets == []
     assert settings.workspace_root.resolve(strict=False) == tmp_path.resolve(strict=False)
+    assert settings.database_url == "sqlite+aiosqlite:///./reflexor.db"
+    assert settings.db_echo is False
+    assert settings.db_pool_size is None
+    assert settings.db_pool_timeout_s is None
     assert settings.queue_backend == "inmemory"
     assert settings.queue_visibility_timeout_s == 60.0
     assert settings.planner_interval_s == 60.0
@@ -134,6 +138,22 @@ def test_queue_backend_is_normalized(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setenv("REFLEXOR_QUEUE_BACKEND", " INMEMORY ")
     settings = get_settings()
     assert settings.queue_backend == "inmemory"
+
+
+def test_database_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    settings = ReflexorSettings(database_url=" sqlite+aiosqlite:///./reflexor.db ")
+    assert settings.database_url == "sqlite+aiosqlite:///./reflexor.db"
+
+    with pytest.raises(ValueError, match="database_url must be non-empty"):
+        ReflexorSettings(database_url=" ")
+
+    with pytest.raises(ValueError, match="db_pool_size must be > 0"):
+        ReflexorSettings(db_pool_size=0)
+
+    with pytest.raises(ValueError, match="db_pool_timeout_s must be > 0"):
+        ReflexorSettings(db_pool_timeout_s=0)
 
 
 def test_orchestrator_settings_reject_non_positive_values(

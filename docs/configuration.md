@@ -102,6 +102,19 @@ Example:
   - if the path exists, it must be a directory
   - if it does not exist, it must be creatable under an existing writable+executable ancestor
 
+## Database defaults
+
+These settings define how Reflexor will connect to its persistence layer (SQLite by default).
+
+- `REFLEXOR_DATABASE_URL` (default `sqlite+aiosqlite:///./reflexor.db`)
+  - Designed to be swappable later (e.g., to `postgresql+asyncpg://...`).
+- `REFLEXOR_DB_ECHO` (default `false`)
+  - Enables SQLAlchemy engine SQL logging when the database layer is wired.
+- `REFLEXOR_DB_POOL_SIZE` (default unset)
+  - Pool tuning for non-SQLite backends. Ignored for SQLite.
+- `REFLEXOR_DB_POOL_TIMEOUT_S` (default unset)
+  - Pool tuning for non-SQLite backends. Ignored for SQLite.
+
 ## Size limits (bytes)
 
 These caps are used by observability utilities to avoid runaway log/audit payload sizes:
@@ -159,6 +172,10 @@ which can cause excessive churn/cost. Validation enforces positivity but does no
 | `http_allowed_domains` | `REFLEXOR_HTTP_ALLOWED_DOMAINS` | list[str] | `[]` |
 | `webhook_allowed_targets` | `REFLEXOR_WEBHOOK_ALLOWED_TARGETS` | list[str] | `[]` |
 | `workspace_root` | `REFLEXOR_WORKSPACE_ROOT` | path | CWD |
+| `database_url` | `REFLEXOR_DATABASE_URL` | str | `sqlite+aiosqlite:///./reflexor.db` |
+| `db_echo` | `REFLEXOR_DB_ECHO` | bool | `false` |
+| `db_pool_size` | `REFLEXOR_DB_POOL_SIZE` | int? | unset |
+| `db_pool_timeout_s` | `REFLEXOR_DB_POOL_TIMEOUT_S` | float? | unset |
 | `queue_backend` | `REFLEXOR_QUEUE_BACKEND` | `inmemory` | `inmemory` |
 | `queue_visibility_timeout_s` | `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` | float | `60` |
 | `planner_interval_s` | `REFLEXOR_PLANNER_INTERVAL_S` | float | `60` |

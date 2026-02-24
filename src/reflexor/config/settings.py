@@ -98,6 +98,11 @@ class ReflexorSettings(BaseSettings):
     webhook_allowed_targets: list[str] = Field(default_factory=list)
     workspace_root: Path = Field(default_factory=Path.cwd)
 
+    database_url: str = "sqlite+aiosqlite:///./reflexor.db"
+    db_echo: bool = False
+    db_pool_size: int | None = None
+    db_pool_timeout_s: float | None = None
+
     queue_backend: Literal["inmemory"] = "inmemory"
     queue_visibility_timeout_s: float = 60.0
 
@@ -149,6 +154,34 @@ class ReflexorSettings(BaseSettings):
     def _validate_workspace_root(cls, value: Path) -> Path:
         normalized = normalize_workspace_root(value)
         return validate_workspace_root(normalized)
+
+    @field_validator("database_url")
+    @classmethod
+    def _validate_database_url(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("database_url must be non-empty")
+        return trimmed
+
+    @field_validator("db_pool_size")
+    @classmethod
+    def _validate_db_pool_size(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        size = int(value)
+        if size <= 0:
+            raise ValueError("db_pool_size must be > 0")
+        return size
+
+    @field_validator("db_pool_timeout_s")
+    @classmethod
+    def _validate_db_pool_timeout_s(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        timeout_s = float(value)
+        if timeout_s <= 0:
+            raise ValueError("db_pool_timeout_s must be > 0")
+        return timeout_s
 
     @field_validator("queue_backend", mode="before")
     @classmethod

@@ -10,7 +10,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "TODO", email = "todo@example.com" }]
-dependencies = ["pydantic>=2.0,<3", "pydantic-settings>=2.0,<3"]
+dependencies = [
+  "pydantic>=2.0,<3",
+  "pydantic-settings>=2.0,<3",
+  "SQLAlchemy[asyncio]>=2.0,<3",
+  "aiosqlite>=0.20,<1",
+  "alembic>=1.13,<2",
+]
 
 [project.scripts]
 reflexor = "reflexor.cli.main:main"
