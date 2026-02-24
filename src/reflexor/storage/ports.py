@@ -25,6 +25,10 @@ class EventRepo(Protocol):
 
     async def create(self, event: Event) -> Event: ...
 
+    async def create_or_get_by_dedupe(
+        self, *, source: str, dedupe_key: str, event: Event
+    ) -> tuple[Event, bool]: ...
+
     async def get(self, event_id: str) -> Event | None: ...
 
     async def list(

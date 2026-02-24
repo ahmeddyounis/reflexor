@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import JSON, ForeignKey, Integer, String
+from sqlalchemy import JSON, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -10,6 +10,7 @@ class Base(DeclarativeBase):
 
 class EventRow(Base):
     __tablename__ = "events"
+    __table_args__ = (Index("ux_events_source_dedupe_key", "source", "dedupe_key", unique=True),)
 
     event_id: Mapped[str] = mapped_column(String, primary_key=True)
     type: Mapped[str] = mapped_column(String, index=True)

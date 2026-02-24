@@ -4,6 +4,7 @@ import time
 from typing import cast
 
 from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
@@ -111,6 +112,57 @@ class SqlAlchemyEventRepo:
         self._session.add(row)
         await self._session.flush()
         return event.model_copy(deep=True)
+
+    async def create_or_get_by_dedupe(
+        self,
+        *,
+        source: str,
+        dedupe_key: str,
+        event: Event,
+    ) -> tuple[Event, bool]:
+        normalized_source = _normalize_optional_str(source)
+        if normalized_source is None:
+            raise ValueError("source must be non-empty")
+
+        normalized_key = _normalize_optional_str(dedupe_key)
+        if normalized_key is None:
+            raise ValueError("dedupe_key must be non-empty")
+
+        stmt: Select[tuple[EventRow]] = (
+            select(EventRow)
+            .where(EventRow.source == normalized_source, EventRow.dedupe_key == normalized_key)
+            .order_by(EventRow.received_at_ms, EventRow.event_id)
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        row = result.scalars().one_or_none()
+        if row is not None:
+            return event_from_orm(row), False
+
+        event_to_store = event.model_copy(
+            update={"source": normalized_source, "dedupe_key": normalized_key},
+            deep=True,
+        )
+
+        integrity_error: IntegrityError | None = None
+        async with self._session.begin_nested() as nested:
+            self._session.add(EventRow(**event_to_row_dict(event_to_store)))
+            try:
+                await self._session.flush()
+            except IntegrityError as exc:
+                integrity_error = exc
+                await nested.rollback()
+            else:
+                return event_to_store.model_copy(deep=True), True
+
+        result = await self._session.execute(stmt)
+        row = result.scalars().one_or_none()
+        if row is not None:
+            return event_from_orm(row), False
+
+        if integrity_error is not None:  # pragma: no cover
+            raise integrity_error
+        raise RuntimeError("failed to create or find event by dedupe key")
 
     async def get(self, event_id: str) -> Event | None:
         normalized = event_id.strip()

@@ -286,3 +286,52 @@ async def test_approval_repo_rejects_unsupported_status_update() -> None:
             approval_repo = SqlAlchemyApprovalRepo(session)
             with pytest.raises(ValueError, match="unsupported approval status"):
                 await approval_repo.update_status(_uuid(), ApprovalStatus.EXPIRED)
+
+
+@pytest.mark.asyncio
+async def test_event_repo_create_or_get_by_dedupe_is_idempotent() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        dedupe_key = "ticket:T-1"
+        source = "tests"
+        event1 = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source=source,
+            received_at_ms=10,
+            payload={"ticket_id": "T-1", "seq": 1},
+            dedupe_key=dedupe_key,
+        )
+        event2 = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source=source,
+            received_at_ms=20,
+            payload={"ticket_id": "T-1", "seq": 2},
+            dedupe_key=dedupe_key,
+        )
+
+        uow1 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow1:
+            session = cast(AsyncSession, uow1.session)
+            event_repo = SqlAlchemyEventRepo(session)
+            stored1, created1 = await event_repo.create_or_get_by_dedupe(
+                source=source,
+                dedupe_key=dedupe_key,
+                event=event1,
+            )
+            assert created1 is True
+
+        uow2 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow2:
+            session = cast(AsyncSession, uow2.session)
+            event_repo = SqlAlchemyEventRepo(session)
+            stored2, created2 = await event_repo.create_or_get_by_dedupe(
+                source=source,
+                dedupe_key=dedupe_key,
+                event=event2,
+            )
+            assert created2 is False
+            assert stored2.event_id == stored1.event_id
+
+            listed_events = await event_repo.list(limit=10, offset=0)
+            assert [event.event_id for event in listed_events] == [stored1.event_id]

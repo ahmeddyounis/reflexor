@@ -64,6 +64,7 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
         assert {"approval_id", "status"}.issubset(_column_names(connection, table="approvals"))
 
         assert "ix_events_type" in _index_names(connection, table="events")
+        assert "ux_events_source_dedupe_key" in _index_names(connection, table="events")
         assert "ix_runs_created_at_ms" in _index_names(connection, table="runs")
         assert "ix_tasks_status" in _index_names(connection, table="tasks")
         assert "ix_tool_calls_idempotency_key" in _index_names(connection, table="tool_calls")
