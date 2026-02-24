@@ -6,7 +6,7 @@ VENV_BIN := $(VENV)/bin
 PY := $(VENV_BIN)/python
 VENV_MARKER := $(VENV)/.installed
 
-.PHONY: help venv lint format typecheck test coverage ci clean
+.PHONY: help venv lint format typecheck test coverage db-upgrade ci clean
 
 help:
 	@echo "Targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "  typecheck  Run mypy"
 	@echo "  test       Run pytest"
 	@echo "  coverage   Run tests with coverage report"
+	@echo "  db-upgrade Run alembic migrations (upgrade head)"
 	@echo "  ci         Run format-check, lint, typecheck, coverage"
 	@echo "  clean      Remove venv and caches"
 
@@ -41,6 +42,9 @@ test: $(VENV_MARKER)
 
 coverage: $(VENV_MARKER)
 	$(PY) -m pytest --cov=reflexor.domain
+
+db-upgrade: $(VENV_MARKER)
+	$(PY) -m reflexor.infra.db.migrate upgrade
 
 ci: $(VENV_MARKER)
 	$(PY) -m ruff format --check .

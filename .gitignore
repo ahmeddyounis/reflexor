@@ -32,6 +32,9 @@ pip-wheel-metadata/
 coverage.xml
 htmlcov/
 
+# Local databases
+reflexor.db*
+
 # IDEs
 .idea/
 .vscode/

@@ -118,6 +118,18 @@ export REFLEXOR_DATABASE_URL="sqlite+aiosqlite:///./reflexor.db"
 From the repo root:
 
 ```sh
+make db-upgrade
+```
+
+Alternatively (same behavior, without `make`):
+
+```sh
+python -m reflexor.infra.db.migrate upgrade
+```
+
+If you prefer using Alembic directly:
+
+```sh
 alembic upgrade head
 ```
 
@@ -134,7 +146,7 @@ alembic revision --autogenerate -m "describe change"
 4. Apply:
 
 ```sh
-alembic upgrade head
+make db-upgrade
 ```
 
 ### Troubleshooting
@@ -145,4 +157,3 @@ alembic upgrade head
   run `alembic upgrade head` against the target DB.
 - Smoke test:
   `pytest tests/integration/test_migrations.py`.
-
