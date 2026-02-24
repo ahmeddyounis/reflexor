@@ -42,7 +42,7 @@ from reflexor.executor.state import (
 )
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.orchestrator.clock import Clock
-from reflexor.orchestrator.queue import Queue
+from reflexor.orchestrator.queue import Lease, Queue
 from reflexor.security.policy.context import tool_spec_from_tool
 from reflexor.security.policy.decision import PolicyAction, PolicyDecision
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner, ToolExecutionOutcome
@@ -202,6 +202,118 @@ class ExecutorService:
                 outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
 
             return await self._persist_outcome(task, tool_call, outcome)
+
+    async def process_lease(self, lease: Lease) -> ExecutionReport:
+        """Execute a leased queue item and apply ack/nack retry scheduling.
+
+        Queue semantics:
+        - Terminal outcomes are acked.
+        - Transient failures are nacked with a backoff delay when attempts remain.
+        - Approval-required outcomes are acked after transitioning to WAITING_APPROVAL (no retries).
+        """
+
+        task_id = lease.envelope.task_id
+        loaded = await self._load_task_and_tool_call(task_id)
+        task = loaded.task
+        tool_call = loaded.tool_call
+
+        with correlation_context(
+            run_id=task.run_id,
+            task_id=task.task_id,
+            tool_call_id=tool_call.tool_call_id,
+        ):
+            if task.status == TaskStatus.SUCCEEDED:
+                await self._queue.ack(lease)
+                return ExecutionReport(
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    tool_name=tool_call.tool_name,
+                    idempotency_key=tool_call.idempotency_key,
+                    disposition=ExecutionDisposition.SUCCEEDED,
+                    decision=None,
+                    result=ToolResult(ok=True, data={"status": "already_succeeded"}),
+                )
+
+            if task.status == TaskStatus.WAITING_APPROVAL:
+                approval_id, approval_status = await self._load_approval_status(
+                    tool_call.tool_call_id
+                )
+                await self._queue.ack(lease)
+                return ExecutionReport(
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    tool_name=tool_call.tool_name,
+                    idempotency_key=tool_call.idempotency_key,
+                    disposition=ExecutionDisposition.WAITING_APPROVAL,
+                    decision=None,
+                    result=ToolResult(
+                        ok=False,
+                        error_code="APPROVAL_REQUIRED",
+                        error_message="task is waiting for approval; skipping execution",
+                        data=None if approval_id is None else {"approval_id": approval_id},
+                    ),
+                    approval_id=approval_id,
+                    approval_status=approval_status,
+                )
+
+            if task.status == TaskStatus.CANCELED:
+                await self._queue.ack(lease)
+                return ExecutionReport(
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    tool_name=tool_call.tool_name,
+                    idempotency_key=tool_call.idempotency_key,
+                    disposition=ExecutionDisposition.CANCELED,
+                    decision=None,
+                    result=ToolResult(
+                        ok=False,
+                        error_code="TASK_CANCELED",
+                        error_message="task is canceled; skipping execution",
+                    ),
+                )
+
+            if task.attempts >= task.max_attempts and task.status in {
+                TaskStatus.PENDING,
+                TaskStatus.QUEUED,
+                TaskStatus.FAILED,
+            }:
+                await self._queue.ack(lease)
+                return ExecutionReport(
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    tool_name=tool_call.tool_name,
+                    idempotency_key=tool_call.idempotency_key,
+                    disposition=ExecutionDisposition.FAILED_PERMANENT,
+                    decision=None,
+                    result=ToolResult(
+                        ok=False,
+                        error_code="MAX_ATTEMPTS_EXHAUSTED",
+                        error_message="task has exhausted max_attempts; skipping execution",
+                        debug={"attempts": task.attempts, "max_attempts": task.max_attempts},
+                    ),
+                )
+
+            report = await self.execute_task(task_id)
+
+            if report.disposition == ExecutionDisposition.FAILED_TRANSIENT:
+                refreshed = await self._load_task_and_tool_call(task_id)
+                if refreshed.task.attempts < refreshed.task.max_attempts:
+                    delay_s = report.retry_after_s or 0.0
+                    await self._queue.nack(
+                        lease,
+                        delay_s=delay_s,
+                        reason=f"transient_failure:{report.result.error_code or ''}",
+                    )
+                else:
+                    await self._queue.ack(lease)
+                return report
+
+            await self._queue.ack(lease)
+            return report
 
     async def _maybe_use_cached_success(
         self, task: Task, tool_call: ToolCall
@@ -499,6 +611,18 @@ class ExecutorService:
                 decided_at_ms=approval.decided_at_ms,
                 decided_by=approval.decided_by,
             )
+
+    async def _load_approval_status(
+        self, tool_call_id: str
+    ) -> tuple[str | None, ApprovalStatus | None]:
+        uow = self._uow_factory()
+        async with uow:
+            session = uow.session
+            approval_repo = self._repos.approval_repo(session)
+            approval = await approval_repo.get_by_tool_call(tool_call_id)
+            if approval is None:
+                return None, None
+            return approval.approval_id, approval.status
 
     async def _append_audit(
         self,
