@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel
+
 from reflexor.domain.models_event import Event
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
@@ -11,8 +13,8 @@ from reflexor.orchestrator.interfaces import NeedsPlanningRouter
 from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
 from reflexor.orchestrator.sinks import RunPacketSink
-from reflexor.tools.impl.echo import EchoTool
 from reflexor.tools.registry import ToolRegistry
+from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
 
 
 @dataclass(slots=True)
@@ -105,6 +107,27 @@ def _event(event_id: str) -> Event:
     )
 
 
+class _MockArgs(BaseModel):
+    msg: str
+    kind: str
+
+
+class _MockTool:
+    manifest = ToolManifest(
+        name="tests.mock",
+        version="0.1.0",
+        description="Mock tool for orchestrator planning tests.",
+        permission_scope="fs.read",
+        idempotent=True,
+        max_output_bytes=10_000,
+    )
+    ArgsModel = _MockArgs
+
+    async def run(self, args: _MockArgs, ctx: ToolContext) -> ToolResult:  # pragma: no cover
+        _ = (args, ctx)
+        return ToolResult(ok=True, data={"ok": True})
+
+
 class _SingleTaskPlanner:
     def __init__(self) -> None:
         self.calls: list[PlanningInput] = []
@@ -113,7 +136,13 @@ class _SingleTaskPlanner:
         self.calls.append(input)
         return Plan(
             summary="planned",
-            tasks=[ProposedTask(name="echo", tool_name="debug.echo", args={"msg": "hi"})],
+            tasks=[
+                ProposedTask(
+                    name="mock",
+                    tool_name="tests.mock",
+                    args={"msg": "hi", "kind": input.trigger},
+                )
+            ],
             metadata={},
         )
 
@@ -134,14 +163,20 @@ class _TickPlanner:
             raise AssertionError(f"expected trigger=tick, got {input.trigger!r}")
         return Plan(
             summary="tick_plan",
-            tasks=[ProposedTask(name="echo", tool_name="debug.echo", args={"kind": "tick"})],
+            tasks=[
+                ProposedTask(
+                    name="mock",
+                    tool_name="tests.mock",
+                    args={"msg": "hi", "kind": "tick"},
+                )
+            ],
             metadata={},
         )
 
 
 async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None:
     registry = ToolRegistry()
-    registry.register(EchoTool())
+    registry.register(_MockTool())
 
     queue = _RecordingQueue()
     sink = _InMemoryRunSink()
@@ -163,7 +198,16 @@ async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None
 
     try:
         await engine.handle_event(_event("11111111-1111-4111-8111-111111111111"))
-        await clock.advance(seconds=1.0)
+        async with engine._backlog_lock:
+            assert len(engine._backlog) == 1
+        assert planner.calls == []
+        assert queue.envelopes == []
+
+        await clock.advance(seconds=0.9)
+        assert planner.calls == []
+        assert queue.envelopes == []
+
+        await clock.advance(seconds=0.1)
         await asyncio.wait_for(queue.enqueued.wait(), timeout=1.0)
         await sink.wait_for_count(count=2)
 
@@ -190,9 +234,65 @@ async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None
         await engine.aclose()
 
 
+async def test_debounce_coalesces_many_event_triggers_into_one_planning_call() -> None:
+    registry = ToolRegistry()
+    registry.register(_MockTool())
+
+    queue = _RecordingQueue()
+    sink = _InMemoryRunSink()
+    clock = _ManualClock()
+    planner = _SingleTaskPlanner()
+
+    engine = OrchestratorEngine(
+        reflex_router=NeedsPlanningRouter(),
+        planner=planner,
+        tool_registry=registry,
+        queue=queue,
+        limits=BudgetLimits(max_events_per_planning_cycle=10),
+        clock=clock,
+        run_sink=sink,
+        planner_debounce_s=2.0,
+        planner_interval_s=10_000.0,
+    )
+    engine.start()
+
+    try:
+        await engine.handle_event(_event("11111111-1111-4111-8111-111111111111"))
+        await clock.advance(seconds=0.5)
+        await engine.handle_event(_event("22222222-2222-4222-8222-222222222222"))
+        await clock.advance(seconds=0.5)
+        await engine.handle_event(_event("33333333-3333-4333-8333-333333333333"))
+
+        async with engine._backlog_lock:
+            assert len(engine._backlog) == 3
+
+        await clock.advance(seconds=1.9)
+        assert planner.calls == []
+        assert queue.envelopes == []
+
+        await clock.advance(seconds=0.1)
+        await asyncio.wait_for(queue.enqueued.wait(), timeout=1.0)
+        await sink.wait_for_count(count=4)
+
+        assert len(planner.calls) == 1
+        assert planner.calls[0].trigger == "event"
+        assert [event.event_id for event in planner.calls[0].events] == [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            "33333333-3333-4333-8333-333333333333",
+        ]
+
+        drained = await engine.drain_backlog(max_items=10)
+        assert drained == []
+
+        assert len(queue.envelopes) == 1
+    finally:
+        await engine.aclose()
+
+
 async def test_invalid_plan_does_not_clear_backlog() -> None:
     registry = ToolRegistry()
-    registry.register(EchoTool())
+    registry.register(_MockTool())
 
     queue = _RecordingQueue()
     sink = _InMemoryRunSink()
@@ -231,7 +331,7 @@ async def test_invalid_plan_does_not_clear_backlog() -> None:
 
 async def test_tick_path_runs_even_without_event_triggers() -> None:
     registry = ToolRegistry()
-    registry.register(EchoTool())
+    registry.register(_MockTool())
 
     queue = _RecordingQueue()
     sink = _InMemoryRunSink()
