@@ -12,29 +12,46 @@ Clean Architecture:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from reflexor.domain.models_event import Event
-from reflexor.orchestrator.plans import Plan
+from reflexor.orchestrator.plans import Plan, PlanningInput, ReflexDecision
 
 
 class Planner(Protocol):
-    """Planner: derive a plan from an event + context."""
+    """Planner: derive a plan from planning input."""
 
-    async def plan(self, event: Event) -> Plan: ...
-
-
-class Reflex(Protocol):
-    """Reflex: decide what to do next given an event."""
-
-    async def decide(self, event: Event) -> dict[str, object]: ...
+    async def plan(self, input: PlanningInput) -> Plan: ...
 
 
-class TriggerRouter(Protocol):
-    """Route events to eligible triggers."""
+class ReflexRouter(Protocol):
+    """Reflex router: decide next action given an event and context."""
 
-    async def route(self, event: Event) -> Sequence[str]: ...
+    async def route(self, event: Event, ctx: PlanningInput) -> ReflexDecision: ...
 
 
-__all__ = ["Planner", "Reflex", "TriggerRouter"]
+class NoOpPlanner:
+    """Planner stub that emits an empty plan."""
+
+    async def plan(self, input: PlanningInput) -> Plan:
+        _ = input
+        return Plan(summary="noop", tasks=[], metadata={})
+
+
+class NeedsPlanningRouter:
+    """Reflex router stub that always requests planning."""
+
+    rule_id: str = "needs_planning_stub"
+
+    async def route(self, event: Event, ctx: PlanningInput) -> ReflexDecision:
+        _ = event
+        _ = ctx
+        return ReflexDecision(action="needs_planning", reason="stub", proposed_tasks=[])
+
+
+if TYPE_CHECKING:
+    _planner: Planner = NoOpPlanner()
+    _router: ReflexRouter = NeedsPlanningRouter()
+
+
+__all__ = ["NeedsPlanningRouter", "NoOpPlanner", "Planner", "ReflexRouter"]

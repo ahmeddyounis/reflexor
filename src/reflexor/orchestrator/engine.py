@@ -16,7 +16,8 @@ from dataclasses import dataclass
 
 from reflexor.domain.models_event import Event
 from reflexor.orchestrator.clock import Clock, SystemClock
-from reflexor.orchestrator.interfaces import Planner, Reflex, TriggerRouter
+from reflexor.orchestrator.interfaces import Planner, ReflexRouter
+from reflexor.orchestrator.plans import PlanningInput
 from reflexor.orchestrator.queue import Queue
 
 
@@ -25,18 +26,17 @@ class OrchestratorEngine:
     """Minimal composition-friendly engine skeleton (no behavior yet)."""
 
     queue: Queue
-    reflex: Reflex
+    reflex_router: ReflexRouter
     planner: Planner
-    trigger_router: TriggerRouter
     clock: Clock = SystemClock()
 
     async def handle_event(self, event: Event) -> dict[str, object]:
         """Handle an event and return a JSON-safe summary (placeholder)."""
 
-        decision = await self.reflex.decide(event)
-        _plan = await self.planner.plan(event)
-        _ = await self.trigger_router.route(event)
-        return {"decision": decision, "planned_tasks": len(_plan.tasks)}
+        planning_input = PlanningInput(trigger="event", events=[event], now_ms=self.clock.now_ms())
+        decision = await self.reflex_router.route(event, planning_input)
+        plan = await self.planner.plan(planning_input)
+        return {"decision": decision.model_dump(mode="json"), "planned_tasks": len(plan.tasks)}
 
 
 __all__ = ["OrchestratorEngine"]
