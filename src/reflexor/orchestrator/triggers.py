@@ -133,7 +133,11 @@ class DebouncedTrigger:
                     return
                 self._trigger_event.clear()
 
-                last_trigger_ms = self._last_trigger_monotonic_ms or self._clock.monotonic_ms()
+                last_trigger_ms = (
+                    self._clock.monotonic_ms()
+                    if self._last_trigger_monotonic_ms is None
+                    else self._last_trigger_monotonic_ms
+                )
                 due_ms = last_trigger_ms + int(self._debounce_s * 1000)
                 while True:
                     if self._closed_event.is_set():
@@ -144,7 +148,9 @@ class DebouncedTrigger:
                         if self._trigger_event.is_set():
                             self._trigger_event.clear()
                             last_trigger_ms = (
-                                self._last_trigger_monotonic_ms or self._clock.monotonic_ms()
+                                self._clock.monotonic_ms()
+                                if self._last_trigger_monotonic_ms is None
+                                else self._last_trigger_monotonic_ms
                             )
                             due_ms = last_trigger_ms + int(self._debounce_s * 1000)
                             continue
@@ -160,7 +166,9 @@ class DebouncedTrigger:
                     if triggered:
                         self._trigger_event.clear()
                         last_trigger_ms = (
-                            self._last_trigger_monotonic_ms or self._clock.monotonic_ms()
+                            self._clock.monotonic_ms()
+                            if self._last_trigger_monotonic_ms is None
+                            else self._last_trigger_monotonic_ms
                         )
                         due_ms = last_trigger_ms + int(self._debounce_s * 1000)
 
