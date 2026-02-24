@@ -27,6 +27,7 @@ from reflexor.observability.context import correlation_context, get_correlation_
 from reflexor.orchestrator.budgets import BudgetLimits, BudgetTracker, budget_exceeded_to_audit_dict
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.interfaces import Planner, ReflexRouter
+from reflexor.orchestrator.persistence import OrchestratorPersistence
 from reflexor.orchestrator.plans import LimitsSnapshot, PlanningInput
 from reflexor.orchestrator.queue import Queue, TaskEnvelope
 from reflexor.orchestrator.sinks import NoopRunPacketSink, RunPacketSink
@@ -49,6 +50,7 @@ class OrchestratorEngine:
     tool_registry: ToolRegistry
     queue: Queue
     run_sink: RunPacketSink = field(default_factory=NoopRunPacketSink)
+    persistence: OrchestratorPersistence | None = None
     limits: BudgetLimits = field(default_factory=BudgetLimits)
     clock: Clock = SystemClock()
     planner_debounce_s: float = 0.25
@@ -103,12 +105,14 @@ class OrchestratorEngine:
         """Handle a single event and return the created `run_id`."""
 
         run_id = str(uuid4())
+        created_at_ms = int(self.clock.now_ms())
         tracker = BudgetTracker(limits=self.limits, clock=self.clock)
         validator = PlanValidator(registry=self.tool_registry)
 
         reflex_decision_dict: dict[str, object] = {}
         tasks: list[Task] = []
         policy_decisions: list[dict[str, object]] = []
+        enqueued_task_ids: list[str] = []
 
         with correlation_context(event_id=event.event_id, run_id=run_id):
             try:
@@ -135,6 +139,7 @@ class OrchestratorEngine:
                         source="reflex",
                         trigger="event",
                     )
+                    enqueued_task_ids = [task.task_id for task in tasks]
                 elif decision.action == "needs_planning":
                     await self._enqueue_backlog_event(event)
                     if self._planning_debouncer is not None:
@@ -159,8 +164,11 @@ class OrchestratorEngine:
                 reflex_decision=reflex_decision_dict,
                 tasks=tasks,
                 policy_decisions=policy_decisions,
+                created_at_ms=created_at_ms,
             )
             await self.run_sink.emit(run_packet)
+            if self.persistence is not None:
+                await self.persistence.persist_run(run_packet, enqueued_task_ids=enqueued_task_ids)
         return run_id
 
     async def run_planning_once(self, *, trigger: PlanningTrigger) -> str:
@@ -178,6 +186,7 @@ class OrchestratorEngine:
         plan_dict: dict[str, object] = {}
         tasks: list[Task] = []
         policy_decisions: list[dict[str, object]] = []
+        enqueued_task_ids: list[str] = []
 
         async with self._planning_lock:
             async with self._backlog_lock:
@@ -243,6 +252,7 @@ class OrchestratorEngine:
                         source="planner",
                         trigger=effective_trigger,
                     )
+                    enqueued_task_ids = [task.task_id for task in tasks]
 
                     if selected_events:
                         async with self._backlog_lock:
@@ -273,8 +283,13 @@ class OrchestratorEngine:
                     plan=plan_dict,
                     tasks=tasks,
                     policy_decisions=policy_decisions,
+                    created_at_ms=now_ms,
                 )
                 await self.run_sink.emit(run_packet)
+                if self.persistence is not None:
+                    await self.persistence.persist_run(
+                        run_packet, enqueued_task_ids=enqueued_task_ids
+                    )
 
         return planning_run_id
 

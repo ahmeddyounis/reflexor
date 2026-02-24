@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.models_event import Event
+from reflexor.domain.models_run_packet import RunPacket
 from reflexor.domain.serialization import canonical_json, stable_sha256
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
 from reflexor.orchestrator.budgets import BudgetLimits
@@ -70,6 +71,14 @@ def _event(tmp_path: Path) -> Event:
     )
 
 
+class _RecordingPersistence:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[str]]] = []
+
+    async def persist_run(self, packet: RunPacket, *, enqueued_task_ids: object = ()) -> None:
+        self.calls.append((packet.run_id, list(enqueued_task_ids)))
+
+
 async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) -> None:
     settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=10_000)
 
@@ -98,6 +107,7 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
     clock = _FixedClock()
     queue = InMemoryQueue(now_ms=clock.now_ms)
     sink = InMemoryRunPacketSink(settings=settings)
+    persistence = _RecordingPersistence()
 
     engine = OrchestratorEngine(
         reflex_router=router,
@@ -105,6 +115,7 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
         tool_registry=registry,
         queue=queue,
         run_sink=sink,
+        persistence=persistence,
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
         planner_debounce_s=settings.planner_debounce_s,
@@ -141,6 +152,7 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
 
     await queue.ack(lease)
     assert await queue.dequeue(wait_s=0.0) is None
+    assert persistence.calls == [(run_id, [envelope.task_id])]
 
     stored = await sink.get(run_id)
     assert stored is not None
