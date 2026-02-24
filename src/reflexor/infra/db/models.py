@@ -90,10 +90,23 @@ class RunPacketRow(Base):
     packet: Mapped[dict[str, object]] = mapped_column(JSON)
 
 
+class IdempotencyLedgerRow(Base):
+    __tablename__ = "idempotency_ledger"
+
+    idempotency_key: Mapped[str] = mapped_column(String, primary_key=True)
+    tool_name: Mapped[str] = mapped_column(String, index=True)
+    status: Mapped[str] = mapped_column(String, index=True)
+    result_json: Mapped[dict[str, object]] = mapped_column(JSON)
+    created_at_ms: Mapped[int] = mapped_column(Integer)
+    updated_at_ms: Mapped[int] = mapped_column(Integer, index=True)
+    expires_at_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+
 __all__ = [
     "ApprovalRow",
     "Base",
     "EventRow",
+    "IdempotencyLedgerRow",
     "RunPacketRow",
     "RunRow",
     "TaskRow",

@@ -12,6 +12,7 @@ from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus, ToolCal
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
+from reflexor.executor.idempotency import CachedOutcome, LedgerStatus, OutcomeToCache
 from reflexor.infra.db.mappers import (
     approval_from_orm,
     approval_to_row_dict,
@@ -25,13 +26,15 @@ from reflexor.infra.db.mappers import (
 from reflexor.infra.db.models import (
     ApprovalRow,
     EventRow,
+    IdempotencyLedgerRow,
     RunPacketRow,
     RunRow,
     TaskRow,
     ToolCallRow,
 )
-from reflexor.observability.audit_sanitize import sanitize_for_audit
+from reflexor.observability.audit_sanitize import sanitize_for_audit, sanitize_tool_output
 from reflexor.storage.ports import RunRecord, RunSummary
+from reflexor.tools.sdk import ToolResult
 
 RUN_PACKET_VERSION = 1
 
@@ -910,9 +913,135 @@ class SqlAlchemyRunPacketRepo:
         return packets
 
 
+class SqlAlchemyIdempotencyLedger:
+    """SQLAlchemy-backed adapter for the executor IdempotencyLedger port."""
+
+    def __init__(self, session: AsyncSession, *, settings: ReflexorSettings | None = None) -> None:
+        self._session = session
+        self._settings = settings
+
+    async def get_success(self, key: str) -> CachedOutcome | None:
+        normalized = key.strip()
+        if not normalized:
+            raise ValueError("key must be non-empty")
+
+        row = await self._session.get(IdempotencyLedgerRow, normalized)
+        if row is None:
+            return None
+
+        if row.status != LedgerStatus.SUCCEEDED.value:
+            return None
+
+        now_ms = int(time.time() * 1000)
+        if row.expires_at_ms is not None and row.expires_at_ms <= now_ms:
+            return None
+
+        cached_result = ToolResult.model_validate(row.result_json)
+        return CachedOutcome(
+            idempotency_key=row.idempotency_key,
+            tool_name=row.tool_name,
+            status=LedgerStatus.SUCCEEDED,
+            result=cached_result,
+            created_at_ms=row.created_at_ms,
+            updated_at_ms=row.updated_at_ms,
+            expires_at_ms=row.expires_at_ms,
+        )
+
+    async def record_success(self, key: str, outcome: OutcomeToCache) -> None:
+        if not outcome.result.ok:
+            raise ValueError("record_success requires an ok ToolResult")
+        await self._upsert(
+            key=key,
+            outcome=outcome,
+            status=LedgerStatus.SUCCEEDED,
+            allow_overwrite=True,
+        )
+
+    async def record_failure(self, key: str, outcome: OutcomeToCache, transient: bool) -> None:
+        if outcome.result.ok:
+            raise ValueError("record_failure requires ok=false ToolResult")
+
+        status = LedgerStatus.FAILED_TRANSIENT if transient else LedgerStatus.FAILED_PERMANENT
+        await self._upsert(
+            key=key,
+            outcome=outcome,
+            status=status,
+            allow_overwrite=False,
+        )
+
+    async def _upsert(
+        self,
+        *,
+        key: str,
+        outcome: OutcomeToCache,
+        status: LedgerStatus,
+        allow_overwrite: bool,
+    ) -> None:
+        normalized = key.strip()
+        if not normalized:
+            raise ValueError("key must be non-empty")
+
+        now_ms = int(time.time() * 1000)
+
+        result_payload = outcome.result.model_dump(mode="json")
+        sanitized_result = sanitize_tool_output(result_payload, settings=self._settings)
+        if not isinstance(sanitized_result, dict):
+            raise ValueError("sanitized tool result must be a JSON object")
+
+        row = await self._session.get(IdempotencyLedgerRow, normalized)
+        if row is not None:
+            if not allow_overwrite and row.status == LedgerStatus.SUCCEEDED.value:
+                return
+            row.tool_name = outcome.tool_name
+            row.status = status.value
+            row.result_json = sanitized_result
+            row.updated_at_ms = now_ms
+            row.expires_at_ms = outcome.expires_at_ms
+            await self._session.flush()
+            return
+
+        integrity_error: IntegrityError | None = None
+        async with self._session.begin_nested() as nested:
+            self._session.add(
+                IdempotencyLedgerRow(
+                    idempotency_key=normalized,
+                    tool_name=outcome.tool_name,
+                    status=status.value,
+                    result_json=sanitized_result,
+                    created_at_ms=now_ms,
+                    updated_at_ms=now_ms,
+                    expires_at_ms=outcome.expires_at_ms,
+                )
+            )
+            try:
+                await self._session.flush()
+            except IntegrityError as exc:
+                integrity_error = exc
+                await nested.rollback()
+            else:
+                return
+
+        row = await self._session.get(IdempotencyLedgerRow, normalized)
+        if row is not None:
+            if not allow_overwrite and row.status == LedgerStatus.SUCCEEDED.value:
+                return
+            row.tool_name = outcome.tool_name
+            row.status = status.value
+            row.result_json = sanitized_result
+            row.updated_at_ms = now_ms
+            row.expires_at_ms = outcome.expires_at_ms
+            await self._session.flush()
+            return
+
+        if integrity_error is not None:  # pragma: no cover
+            raise integrity_error
+        raise RuntimeError("failed to record outcome in idempotency ledger")
+
+
 __all__ = [
     "SqlAlchemyApprovalRepo",
     "SqlAlchemyEventRepo",
+    "SqlAlchemyIdempotencyLedger",
     "SqlAlchemyRunPacketRepo",
     "SqlAlchemyRunRepo",
     "SqlAlchemyTaskRepo",

@@ -43,6 +43,7 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
             "tasks",
             "approvals",
             "run_packets",
+            "idempotency_ledger",
         }
         tables = set(inspector.get_table_names())
         missing_tables = expected_tables - tables
@@ -95,12 +96,33 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
             f"Missing columns for run_packets: {sorted(missing_run_packet_columns)}"
         )
 
+        expected_ledger_columns = {
+            "idempotency_key",
+            "tool_name",
+            "status",
+            "result_json",
+            "created_at_ms",
+            "updated_at_ms",
+            "expires_at_ms",
+        }
+        ledger_columns = _column_names(inspector, table="idempotency_ledger")
+        missing_ledger_columns = expected_ledger_columns - ledger_columns
+        assert not missing_ledger_columns, (
+            f"Missing columns for idempotency_ledger: {sorted(missing_ledger_columns)}"
+        )
+
         expected_indexes = {
             "events": {"ix_events_type", "ux_events_source_dedupe_key"},
             "runs": {"ix_runs_created_at_ms"},
             "tasks": {"ix_tasks_run_id", "ix_tasks_status"},
             "tool_calls": {"ix_tool_calls_idempotency_key"},
             "approvals": {"ix_approvals_status"},
+            "idempotency_ledger": {
+                "ix_idempotency_ledger_expires_at_ms",
+                "ix_idempotency_ledger_status",
+                "ix_idempotency_ledger_tool_name",
+                "ix_idempotency_ledger_updated_at_ms",
+            },
         }
         for table, expected in expected_indexes.items():
             names = _index_names(inspector, table=table)
