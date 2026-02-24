@@ -101,6 +101,15 @@ class ReflexorSettings(BaseSettings):
     queue_backend: Literal["inmemory"] = "inmemory"
     queue_visibility_timeout_s: float = 60.0
 
+    planner_interval_s: float = 60.0
+    planner_debounce_s: float = 2.0
+    event_backlog_max: int = 200
+    max_events_per_planning_cycle: int = 50
+
+    max_tasks_per_run: int = 50
+    max_tool_calls_per_run: int = 50
+    max_run_wall_time_s: float = 30.0
+
     max_event_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
     max_tool_output_bytes: int = DEFAULT_MAX_TOOL_RESULT_BYTES
     max_run_packet_bytes: int = DEFAULT_MAX_PACKET_BYTES
@@ -160,6 +169,29 @@ class ReflexorSettings(BaseSettings):
         if timeout_s <= 0:
             raise ValueError("queue_visibility_timeout_s must be > 0")
         return timeout_s
+
+    @field_validator("planner_interval_s", "planner_debounce_s", "max_run_wall_time_s")
+    @classmethod
+    def _validate_positive_seconds(cls, value: float, info: ValidationInfo) -> float:
+        field_name = info.field_name or "seconds"
+        seconds = float(value)
+        if seconds <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+        return seconds
+
+    @field_validator(
+        "event_backlog_max",
+        "max_events_per_planning_cycle",
+        "max_tasks_per_run",
+        "max_tool_calls_per_run",
+    )
+    @classmethod
+    def _validate_positive_ints(cls, value: int, info: ValidationInfo) -> int:
+        field_name = info.field_name or "value"
+        number = int(value)
+        if number <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+        return number
 
     @field_validator("max_event_payload_bytes", "max_tool_output_bytes", "max_run_packet_bytes")
     @classmethod

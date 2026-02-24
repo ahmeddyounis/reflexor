@@ -37,6 +37,13 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.workspace_root.resolve(strict=False) == tmp_path.resolve(strict=False)
     assert settings.queue_backend == "inmemory"
     assert settings.queue_visibility_timeout_s == 60.0
+    assert settings.planner_interval_s == 60.0
+    assert settings.planner_debounce_s == 2.0
+    assert settings.event_backlog_max == 200
+    assert settings.max_events_per_planning_cycle == 50
+    assert settings.max_tasks_per_run == 50
+    assert settings.max_tool_calls_per_run == 50
+    assert settings.max_run_wall_time_s == 30.0
     assert settings.max_event_payload_bytes == DEFAULT_MAX_PAYLOAD_BYTES
     assert settings.max_tool_output_bytes == DEFAULT_MAX_TOOL_RESULT_BYTES
     assert settings.max_run_packet_bytes == DEFAULT_MAX_PACKET_BYTES
@@ -127,3 +134,30 @@ def test_queue_backend_is_normalized(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setenv("REFLEXOR_QUEUE_BACKEND", " INMEMORY ")
     settings = get_settings()
     assert settings.queue_backend == "inmemory"
+
+
+def test_orchestrator_settings_reject_non_positive_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="planner_interval_s must be > 0"):
+        ReflexorSettings(planner_interval_s=0)
+
+    with pytest.raises(ValueError, match="planner_debounce_s must be > 0"):
+        ReflexorSettings(planner_debounce_s=-1)
+
+    with pytest.raises(ValueError, match="event_backlog_max must be > 0"):
+        ReflexorSettings(event_backlog_max=0)
+
+    with pytest.raises(ValueError, match="max_events_per_planning_cycle must be > 0"):
+        ReflexorSettings(max_events_per_planning_cycle=0)
+
+    with pytest.raises(ValueError, match="max_tasks_per_run must be > 0"):
+        ReflexorSettings(max_tasks_per_run=0)
+
+    with pytest.raises(ValueError, match="max_tool_calls_per_run must be > 0"):
+        ReflexorSettings(max_tool_calls_per_run=0)
+
+    with pytest.raises(ValueError, match="max_run_wall_time_s must be > 0"):
+        ReflexorSettings(max_run_wall_time_s=0)

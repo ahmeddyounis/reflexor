@@ -118,6 +118,34 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
   - Default visibility timeout (seconds) used by queue backends when `Queue.dequeue()` is called
     without an explicit `timeout_s`.
 
+## Orchestrator defaults
+
+These values shape how often the planner runs and how much work a single run can admit.
+
+Planner cadence:
+
+- `REFLEXOR_PLANNER_INTERVAL_S` (default `60`)
+  - Periodic planning tick (safety net).
+- `REFLEXOR_PLANNER_DEBOUNCE_S` (default `2`)
+  - Event-driven planning debounce window (coalesces bursts of events into one cycle).
+
+Backlog and per-cycle limits:
+
+- `REFLEXOR_EVENT_BACKLOG_MAX` (default `200`)
+  - Maximum number of events buffered for planning.
+- `REFLEXOR_MAX_EVENTS_PER_PLANNING_CYCLE` (default `50`)
+  - Maximum number of backlog events consumed by a single planning cycle.
+
+Budgets (per run):
+
+- `REFLEXOR_MAX_TASKS_PER_RUN` (default `50`)
+- `REFLEXOR_MAX_TOOL_CALLS_PER_RUN` (default `50`)
+- `REFLEXOR_MAX_RUN_WALL_TIME_S` (default `30`)
+
+Note: In `prod`, be cautious with very small planner cadence values (e.g., sub-second intervals),
+which can cause excessive churn/cost. Validation enforces positivity but does not currently block
+"extreme" cadences.
+
 ## Settings reference
 
 | Setting | Env var | Type | Default |
@@ -133,6 +161,13 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
 | `workspace_root` | `REFLEXOR_WORKSPACE_ROOT` | path | CWD |
 | `queue_backend` | `REFLEXOR_QUEUE_BACKEND` | `inmemory` | `inmemory` |
 | `queue_visibility_timeout_s` | `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` | float | `60` |
+| `planner_interval_s` | `REFLEXOR_PLANNER_INTERVAL_S` | float | `60` |
+| `planner_debounce_s` | `REFLEXOR_PLANNER_DEBOUNCE_S` | float | `2` |
+| `event_backlog_max` | `REFLEXOR_EVENT_BACKLOG_MAX` | int | `200` |
+| `max_events_per_planning_cycle` | `REFLEXOR_MAX_EVENTS_PER_PLANNING_CYCLE` | int | `50` |
+| `max_tasks_per_run` | `REFLEXOR_MAX_TASKS_PER_RUN` | int | `50` |
+| `max_tool_calls_per_run` | `REFLEXOR_MAX_TOOL_CALLS_PER_RUN` | int | `50` |
+| `max_run_wall_time_s` | `REFLEXOR_MAX_RUN_WALL_TIME_S` | float | `30` |
 | `max_event_payload_bytes` | `REFLEXOR_MAX_EVENT_PAYLOAD_BYTES` | int | `64000` |
 | `max_tool_output_bytes` | `REFLEXOR_MAX_TOOL_OUTPUT_BYTES` | int | `64000` |
 | `max_run_packet_bytes` | `REFLEXOR_MAX_RUN_PACKET_BYTES` | int | `512000` |
