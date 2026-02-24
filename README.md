@@ -68,6 +68,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 
 - [Configuration & Profiles](docs/configuration.md)
 - [Policy & Approvals](docs/policy.md)
+- [Tools](docs/tools.md)
 - [Queue](docs/queue.md)
 - [Storage & Migrations](docs/storage.md)
 - [Security: Redaction & Truncation](docs/security_redaction.md)
