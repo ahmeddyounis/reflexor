@@ -7,6 +7,7 @@ class TaskStatus(StrEnum):
     """High-level lifecycle status for a task."""
 
     PENDING = "pending"
+    QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"

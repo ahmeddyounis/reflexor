@@ -17,6 +17,7 @@ from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import NoOpPlanner
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
 from reflexor.orchestrator.sinks import InMemoryRunPacketSink
+from reflexor.storage.ports import RunRecord
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
 
@@ -73,10 +74,19 @@ def _event(tmp_path: Path) -> Event:
 
 class _RecordingPersistence:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, list[str]]] = []
+        self.event_run_ids: list[str] = []
+        self.task_ids: list[str] = []
+        self.finalize_calls: list[tuple[str, list[str]]] = []
 
-    async def persist_run(self, packet: RunPacket, *, enqueued_task_ids: object = ()) -> None:
-        self.calls.append((packet.run_id, list(enqueued_task_ids)))
+    async def persist_event_and_run(self, *, event: Event, run_record: RunRecord) -> Event:
+        self.event_run_ids.append(run_record.run_id)
+        return event
+
+    async def persist_tasks_and_tool_calls(self, tasks: object) -> None:
+        self.task_ids.extend(getattr(task, "task_id", "") for task in tasks)
+
+    async def finalize_run(self, packet: RunPacket, *, enqueued_task_ids: object = ()) -> None:
+        self.finalize_calls.append((packet.run_id, list(enqueued_task_ids)))
 
 
 async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) -> None:
@@ -152,7 +162,9 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
 
     await queue.ack(lease)
     assert await queue.dequeue(wait_s=0.0) is None
-    assert persistence.calls == [(run_id, [envelope.task_id])]
+    assert persistence.event_run_ids == [run_id]
+    assert persistence.task_ids == [envelope.task_id]
+    assert persistence.finalize_calls == [(run_id, [envelope.task_id])]
 
     stored = await sink.get(run_id)
     assert stored is not None

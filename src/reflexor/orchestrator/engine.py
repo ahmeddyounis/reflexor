@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 from uuid import uuid4
 
+from reflexor.domain.enums import TaskStatus
 from reflexor.domain.errors import BudgetExceeded
 from reflexor.domain.models import Task
 from reflexor.domain.models_event import Event
@@ -33,6 +34,7 @@ from reflexor.orchestrator.queue import Queue, TaskEnvelope
 from reflexor.orchestrator.sinks import NoopRunPacketSink, RunPacketSink
 from reflexor.orchestrator.triggers import DebouncedTrigger, PeriodicTicker
 from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
+from reflexor.storage.ports import RunRecord
 from reflexor.tools.registry import ToolRegistry
 
 PlanningTrigger = Literal["tick", "event"]
@@ -106,6 +108,20 @@ class OrchestratorEngine:
 
         run_id = str(uuid4())
         created_at_ms = int(self.clock.now_ms())
+        persisted_event = event
+
+        if self.persistence is not None:
+            persisted_event = await self.persistence.persist_event_and_run(
+                event=event,
+                run_record=RunRecord(
+                    run_id=run_id,
+                    parent_run_id=None,
+                    created_at_ms=created_at_ms,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                ),
+            )
+
         tracker = BudgetTracker(limits=self.limits, clock=self.clock)
         validator = PlanValidator(registry=self.tool_registry)
 
@@ -114,12 +130,12 @@ class OrchestratorEngine:
         policy_decisions: list[dict[str, object]] = []
         enqueued_task_ids: list[str] = []
 
-        with correlation_context(event_id=event.event_id, run_id=run_id):
+        with correlation_context(event_id=persisted_event.event_id, run_id=run_id):
             try:
                 planning_input = PlanningInput(
-                    trigger="event", events=[event], now_ms=self.clock.now_ms()
+                    trigger="event", events=[persisted_event], now_ms=self.clock.now_ms()
                 )
-                decision = await self.reflex_router.route(event, planning_input)
+                decision = await self.reflex_router.route(persisted_event, planning_input)
                 reflex_decision_dict = decision.model_dump(mode="json")
 
                 if decision.action == "fast_tasks":
@@ -131,8 +147,11 @@ class OrchestratorEngine:
                         proposed_tasks,
                         run_id=run_id,
                         seed_source="reflex",
-                        event_id=event.event_id,
+                        event_id=persisted_event.event_id,
                     )
+                    if self.persistence is not None:
+                        await self.persistence.persist_tasks_and_tool_calls(tasks)
+
                     await self._enqueue_tasks(
                         tasks,
                         reason=decision.reason,
@@ -140,8 +159,18 @@ class OrchestratorEngine:
                         trigger="event",
                     )
                     enqueued_task_ids = [task.task_id for task in tasks]
+                    if enqueued_task_ids:
+                        enqueued_set = set(enqueued_task_ids)
+                        tasks = [
+                            (
+                                task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
+                                if task.task_id in enqueued_set
+                                else task
+                            )
+                            for task in tasks
+                        ]
                 elif decision.action == "needs_planning":
-                    await self._enqueue_backlog_event(event)
+                    await self._enqueue_backlog_event(persisted_event)
                     if self._planning_debouncer is not None:
                         self._planning_debouncer.trigger()
                 elif decision.action == "drop":
@@ -157,10 +186,17 @@ class OrchestratorEngine:
                         "message": str(exc),
                     }
                 )
+            except Exception as exc:  # pragma: no cover
+                policy_decisions.append(
+                    {
+                        "type": "reflex_error",
+                        "message": str(exc),
+                    }
+                )
 
             run_packet = RunPacket(
                 run_id=run_id,
-                event=event,
+                event=persisted_event,
                 reflex_decision=reflex_decision_dict,
                 tasks=tasks,
                 policy_decisions=policy_decisions,
@@ -168,7 +204,7 @@ class OrchestratorEngine:
             )
             await self.run_sink.emit(run_packet)
             if self.persistence is not None:
-                await self.persistence.persist_run(run_packet, enqueued_task_ids=enqueued_task_ids)
+                await self.persistence.finalize_run(run_packet, enqueued_task_ids=enqueued_task_ids)
         return run_id
 
     async def run_planning_once(self, *, trigger: PlanningTrigger) -> str:
@@ -214,8 +250,21 @@ class OrchestratorEngine:
                     "backlog_before": backlog_before,
                 },
             )
+            persisted_event = synthetic_event
 
-            with correlation_context(event_id=synthetic_event.event_id, run_id=planning_run_id):
+            if self.persistence is not None:
+                persisted_event = await self.persistence.persist_event_and_run(
+                    event=synthetic_event,
+                    run_record=RunRecord(
+                        run_id=planning_run_id,
+                        parent_run_id=None,
+                        created_at_ms=now_ms,
+                        started_at_ms=None,
+                        completed_at_ms=None,
+                    ),
+                )
+
+            with correlation_context(event_id=persisted_event.event_id, run_id=planning_run_id):
                 try:
                     effective_trigger: PlanningTrigger = trigger
                     if effective_trigger == "event" and not selected_events:
@@ -246,6 +295,9 @@ class OrchestratorEngine:
                         run_id=planning_run_id,
                         seed_source="planning",
                     )
+                    if self.persistence is not None:
+                        await self.persistence.persist_tasks_and_tool_calls(tasks)
+
                     await self._enqueue_tasks(
                         tasks,
                         reason=plan.summary,
@@ -253,6 +305,16 @@ class OrchestratorEngine:
                         trigger=effective_trigger,
                     )
                     enqueued_task_ids = [task.task_id for task in tasks]
+                    if enqueued_task_ids:
+                        enqueued_set = set(enqueued_task_ids)
+                        tasks = [
+                            (
+                                task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
+                                if task.task_id in enqueued_set
+                                else task
+                            )
+                            for task in tasks
+                        ]
 
                     if selected_events:
                         async with self._backlog_lock:
@@ -279,7 +341,7 @@ class OrchestratorEngine:
 
                 run_packet = RunPacket(
                     run_id=planning_run_id,
-                    event=synthetic_event,
+                    event=persisted_event,
                     plan=plan_dict,
                     tasks=tasks,
                     policy_decisions=policy_decisions,
@@ -287,7 +349,7 @@ class OrchestratorEngine:
                 )
                 await self.run_sink.emit(run_packet)
                 if self.persistence is not None:
-                    await self.persistence.persist_run(
+                    await self.persistence.finalize_run(
                         run_packet, enqueued_task_ids=enqueued_task_ids
                     )
 

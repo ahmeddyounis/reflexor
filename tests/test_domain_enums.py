@@ -10,6 +10,7 @@ from reflexor.domain.models import Approval, Task, ToolCall
 def test_enum_values_are_stable() -> None:
     assert [status.value for status in TaskStatus] == [
         "pending",
+        "queued",
         "running",
         "succeeded",
         "failed",

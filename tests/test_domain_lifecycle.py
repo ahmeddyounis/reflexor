@@ -15,7 +15,8 @@ from reflexor.domain.models import Task, ToolCall
 RUN_ID = "00000000-0000-4000-8000-000000000000"
 
 EXPECTED_TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.PENDING: {TaskStatus.RUNNING, TaskStatus.CANCELED},
+    TaskStatus.PENDING: {TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.CANCELED},
+    TaskStatus.QUEUED: {TaskStatus.RUNNING, TaskStatus.CANCELED},
     TaskStatus.RUNNING: {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED},
     TaskStatus.FAILED: {TaskStatus.RUNNING, TaskStatus.CANCELED},
     TaskStatus.SUCCEEDED: set(),
@@ -116,8 +117,11 @@ def test_tool_call_transition_invalid_edges_raise() -> None:
 @pytest.mark.parametrize(
     ("current", "target"),
     [
+        (TaskStatus.PENDING, TaskStatus.QUEUED),
         (TaskStatus.PENDING, TaskStatus.RUNNING),
         (TaskStatus.PENDING, TaskStatus.CANCELED),
+        (TaskStatus.QUEUED, TaskStatus.RUNNING),
+        (TaskStatus.QUEUED, TaskStatus.CANCELED),
         (TaskStatus.RUNNING, TaskStatus.SUCCEEDED),
         (TaskStatus.RUNNING, TaskStatus.FAILED),
         (TaskStatus.RUNNING, TaskStatus.CANCELED),
@@ -132,6 +136,15 @@ def test_task_transition_all_allowed_edges(current: TaskStatus, target: TaskStat
 
 
 def _task_for_transition(*, current: TaskStatus, target: TaskStatus) -> Task:
+    if target == TaskStatus.QUEUED:
+        tool_call = _tool_call(status=ToolCallStatus.PENDING)
+        return _task(
+            status=current,
+            tool_call=tool_call,
+            attempts=0,
+            max_attempts=1,
+        )
+
     if target == TaskStatus.RUNNING:
         tool_call = _tool_call(status=ToolCallStatus.RUNNING, started_at_ms=1)
         if current == TaskStatus.FAILED:

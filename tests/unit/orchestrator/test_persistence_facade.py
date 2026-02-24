@@ -36,6 +36,7 @@ from reflexor.infra.db.repos import (
 )
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.orchestrator.persistence import OrchestratorPersistence, OrchestratorRepoFactory
+from reflexor.storage.ports import RunRecord
 
 
 @asynccontextmanager
@@ -75,7 +76,7 @@ def _persistence(
     )
 
     return OrchestratorPersistence(
-        uow_factory=uow_factory, repos=repos, queued_status=TaskStatus.PENDING
+        uow_factory=uow_factory, repos=repos, queued_status=TaskStatus.QUEUED
     )
 
 
@@ -84,7 +85,7 @@ async def _count_rows(session: AsyncSession, row_type: type[Base]) -> int:
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_persistence_persists_all_artifacts_in_one_transaction() -> None:
+async def test_orchestrator_persistence_persists_all_artifacts_across_stages() -> None:
     settings = ReflexorSettings(max_tool_output_bytes=200, max_run_packet_bytes=10_000)
 
     async with _in_memory_session_factory() as session_factory:
@@ -136,7 +137,21 @@ async def test_orchestrator_persistence_persists_all_artifacts_in_one_transactio
             created_at_ms=10,
         )
 
-        await persistence.persist_run(packet, enqueued_task_ids=[task_id])
+        stored_event = await persistence.persist_event_and_run(
+            event=event,
+            run_record=RunRecord(
+                run_id=run_id,
+                parent_run_id=packet.parent_run_id,
+                created_at_ms=packet.created_at_ms,
+                started_at_ms=packet.started_at_ms,
+                completed_at_ms=packet.completed_at_ms,
+            ),
+        )
+        await persistence.persist_tasks_and_tool_calls([task])
+        await persistence.finalize_run(
+            packet.model_copy(update={"event": stored_event}, deep=True),
+            enqueued_task_ids=[task_id],
+        )
 
         uow = SqlAlchemyUnitOfWork(session_factory)
         async with uow:
@@ -146,6 +161,11 @@ async def test_orchestrator_persistence_persists_all_artifacts_in_one_transactio
             assert await _count_rows(session, ToolCallRow) == 1
             assert await _count_rows(session, TaskRow) == 1
             assert await _count_rows(session, RunPacketRow) == 1
+
+            task_row = (
+                await session.execute(select(TaskRow).where(TaskRow.task_id == task_id))
+            ).scalar_one()
+            assert task_row.status == TaskStatus.QUEUED.value
 
             row = (
                 await session.execute(select(RunPacketRow).where(RunPacketRow.run_id == run_id))
@@ -163,7 +183,7 @@ async def test_orchestrator_persistence_persists_all_artifacts_in_one_transactio
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_persistence_rolls_back_on_error() -> None:
+async def test_orchestrator_persistence_stage2_rolls_back_without_affecting_stage1() -> None:
     settings = ReflexorSettings(max_tool_output_bytes=200, max_run_packet_bytes=10_000)
 
     async with _in_memory_session_factory() as session_factory:
@@ -218,14 +238,32 @@ async def test_orchestrator_persistence_rolls_back_on_error() -> None:
             created_at_ms=10,
         )
 
+        stored_event = await persistence.persist_event_and_run(
+            event=event,
+            run_record=RunRecord(
+                run_id=run_id,
+                parent_run_id=packet.parent_run_id,
+                created_at_ms=packet.created_at_ms,
+                started_at_ms=packet.started_at_ms,
+                completed_at_ms=packet.completed_at_ms,
+            ),
+        )
+
         with pytest.raises(IntegrityError):
-            await persistence.persist_run(packet, enqueued_task_ids=[shared_task_id])
+            await persistence.persist_tasks_and_tool_calls([task_1, task_2])
 
         uow = SqlAlchemyUnitOfWork(session_factory)
         async with uow:
             session = cast(AsyncSession, uow.session)
-            assert await _count_rows(session, EventRow) == 0
-            assert await _count_rows(session, RunRow) == 0
+            assert await _count_rows(session, EventRow) == 1
+            assert await _count_rows(session, RunRow) == 1
             assert await _count_rows(session, ToolCallRow) == 0
             assert await _count_rows(session, TaskRow) == 0
             assert await _count_rows(session, RunPacketRow) == 0
+
+            persisted = (
+                await session.execute(
+                    select(EventRow).where(EventRow.event_id == stored_event.event_id)
+                )
+            ).scalar_one()
+            assert persisted.event_id == stored_event.event_id

@@ -95,6 +95,30 @@ def test_private_pending_invariants_reject_timestamps() -> None:
         _validate_tool_call_invariants(call, current_state=ToolCallStatus.RUNNING)
 
 
+def test_task_queued_requires_pending_tool_call_and_no_timestamps() -> None:
+    with pytest.raises(InvalidTransition, match="queued task must have tool_call"):
+        transition_task(_task(status=TaskStatus.PENDING, tool_call=None), TaskStatus.QUEUED)
+
+    with pytest.raises(InvalidTransition, match="queued task must have pending tool_call"):
+        transition_task(
+            _task(
+                status=TaskStatus.PENDING,
+                tool_call=_tool_call(status=ToolCallStatus.RUNNING, started_at_ms=1),
+            ),
+            TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(InvalidTransition, match="queued task cannot have started_at_ms"):
+        transition_task(
+            _task(
+                status=TaskStatus.PENDING,
+                tool_call=_tool_call(status=ToolCallStatus.PENDING),
+                started_at_ms=1,
+            ),
+            TaskStatus.QUEUED,
+        )
+
+
 def test_private_running_invariants_reject_completed_and_attempts_zero() -> None:
     running_task = _task(
         status=TaskStatus.RUNNING,

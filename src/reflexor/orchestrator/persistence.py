@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from reflexor.domain.enums import TaskStatus
 from reflexor.domain.models import Task, ToolCall
+from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.storage.ports import (
     EventRepo,
@@ -42,59 +43,72 @@ class OrchestratorRepoFactory:
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorPersistence:
-    """Persist orchestrator artifacts in a single transaction."""
+    """Persist orchestrator artifacts using staged UnitOfWork transactions.
+
+    Orchestrator queueing cannot be part of a DB transaction, so persistence is performed in
+    stages to preserve auditability while keeping the engine DB-agnostic:
+    1) Persist Event + Run record
+    2) Persist ToolCalls + Tasks (validated, but not yet enqueued)
+    3) Mark enqueued tasks as queued + persist RunPacket blob
+    """
 
     uow_factory: Callable[[], UnitOfWork]
     repos: OrchestratorRepoFactory
-    queued_status: TaskStatus = TaskStatus.PENDING
+    queued_status: TaskStatus = TaskStatus.QUEUED
 
-    async def persist_run(
-        self, packet: RunPacket, *, enqueued_task_ids: Sequence[str] = ()
-    ) -> None:
-        """Persist an orchestrator run packet and related entities.
+    async def persist_event_and_run(self, *, event: Event, run_record: RunRecord) -> Event:
+        """Persist the event and run metadata record (commit stage 1).
 
-        The intent is to keep all writes within a single UnitOfWork transaction:
-        - event row (idempotent when `dedupe_key` is present)
-        - run record row
-        - tool_calls + tasks
-        - task status updates for enqueued tasks
-        - run packet blob (sanitized by the repo implementation)
+        Returns the stored event (which may be an existing row when dedupe is enabled).
         """
-
-        run_record = RunRecord(
-            run_id=packet.run_id,
-            parent_run_id=packet.parent_run_id,
-            created_at_ms=packet.created_at_ms,
-            started_at_ms=packet.started_at_ms,
-            completed_at_ms=packet.completed_at_ms,
-        )
-
         uow = self.uow_factory()
         async with uow:
             session = uow.session
 
             event_repo = self.repos.event_repo(session)
             run_repo = self.repos.run_repo(session)
-            tool_call_repo = self.repos.tool_call_repo(session)
-            task_repo = self.repos.task_repo(session)
-            run_packet_repo = self.repos.run_packet_repo(session)
-
-            event = packet.event
+            stored_event: Event
             if event.dedupe_key is not None:
-                await event_repo.create_or_get_by_dedupe(
+                stored_event, _ = await event_repo.create_or_get_by_dedupe(
                     source=event.source, dedupe_key=event.dedupe_key, event=event
                 )
             else:
-                await event_repo.create(event)
+                stored_event = await event_repo.create(event)
 
             await run_repo.create(run_record)
 
-            tool_calls = _collect_tool_calls(packet.tasks)
-            for tool_call in tool_calls:
+        return stored_event
+
+    async def persist_tasks_and_tool_calls(self, tasks: Sequence[Task]) -> None:
+        """Persist tool calls and tasks (commit stage 2)."""
+
+        if not tasks:
+            return
+
+        uow = self.uow_factory()
+        async with uow:
+            session = uow.session
+
+            tool_call_repo = self.repos.tool_call_repo(session)
+            task_repo = self.repos.task_repo(session)
+
+            for tool_call in _collect_tool_calls(tasks):
                 await tool_call_repo.create(tool_call)
 
-            for task in packet.tasks:
+            for task in tasks:
                 await task_repo.create(task)
+
+    async def finalize_run(
+        self, packet: RunPacket, *, enqueued_task_ids: Sequence[str] = ()
+    ) -> None:
+        """Persist the run packet and mark enqueued tasks as queued (commit stage 3)."""
+
+        uow = self.uow_factory()
+        async with uow:
+            session = uow.session
+
+            task_repo = self.repos.task_repo(session)
+            run_packet_repo = self.repos.run_packet_repo(session)
 
             for task_id in enqueued_task_ids:
                 await task_repo.update_status(task_id, self.queued_status)

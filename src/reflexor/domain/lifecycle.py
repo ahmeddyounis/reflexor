@@ -7,7 +7,8 @@ from reflexor.domain.errors import InvalidTransition
 from reflexor.domain.models import Task, ToolCall
 
 TASK_ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.PENDING: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELED}),
+    TaskStatus.PENDING: frozenset({TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.CANCELED}),
+    TaskStatus.QUEUED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELED}),
     TaskStatus.RUNNING: frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}),
     TaskStatus.FAILED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELED}),
     TaskStatus.SUCCEEDED: frozenset(),
@@ -79,7 +80,11 @@ def transition_task(task: Task, target: TaskStatus) -> Task:
     updated = task.model_dump()
     updated["status"] = target
 
-    if target == TaskStatus.RUNNING and current in {TaskStatus.PENDING, TaskStatus.FAILED}:
+    if target == TaskStatus.RUNNING and current in {
+        TaskStatus.PENDING,
+        TaskStatus.QUEUED,
+        TaskStatus.FAILED,
+    }:
         if task.attempts >= task.max_attempts:
             raise InvalidTransition(
                 "max_attempts reached; cannot retry task",
@@ -138,6 +143,18 @@ def _validate_task_invariants(task: Task, *, current_state: TaskStatus) -> None:
     if status == TaskStatus.PENDING:
         if task.started_at_ms is not None or task.completed_at_ms is not None:
             fail("pending task cannot have started_at_ms/completed_at_ms set")
+        return
+
+    if status == TaskStatus.QUEUED:
+        if task.tool_call is None:
+            fail("queued task must have tool_call")
+        if task.tool_call.status != ToolCallStatus.PENDING:
+            fail(
+                "queued task must have pending tool_call",
+                tool_call_status=task.tool_call.status.value,
+            )
+        if task.started_at_ms is not None or task.completed_at_ms is not None:
+            fail("queued task cannot have started_at_ms/completed_at_ms set")
         return
 
     if status == TaskStatus.RUNNING:
