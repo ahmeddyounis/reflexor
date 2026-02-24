@@ -45,6 +45,53 @@ def test_write_text_dry_run_has_no_side_effects(tmp_path: Path) -> None:
     assert "text" not in result.data
 
 
+def test_write_text_dry_run_does_not_modify_existing_file(tmp_path: Path) -> None:
+    tool = FsWriteTextTool(settings=ReflexorSettings(workspace_root=tmp_path))
+    ctx = ToolContext(workspace_root=tmp_path, dry_run=True, timeout_s=1.0)
+
+    target = tmp_path / "note.txt"
+    target.write_text("old", encoding="utf-8")
+
+    result = asyncio.run(tool.run(FsWriteTextArgs(path="note.txt", text="new"), ctx))
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "old"
+
+    assert isinstance(result.data, dict)
+    assert result.data["dry_run"] is True
+    assert result.data["existed_before"] is True
+
+
+def test_write_text_blocks_absolute_path_outside_workspace(tmp_path: Path) -> None:
+    tool = FsWriteTextTool(settings=ReflexorSettings(workspace_root=tmp_path))
+    ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+    outside = tmp_path.parent / "outside.txt"
+    result = asyncio.run(tool.run(FsWriteTextArgs(path=outside, text="x"), ctx))
+
+    assert result.ok is False
+    assert result.error_code == "WORKSPACE_VIOLATION"
+
+
+def test_write_text_creates_file_inside_workspace(tmp_path: Path) -> None:
+    tool = FsWriteTextTool(settings=ReflexorSettings(workspace_root=tmp_path))
+    ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+    target = tmp_path / "created.txt"
+    assert target.exists() is False
+
+    result = asyncio.run(tool.run(FsWriteTextArgs(path="created.txt", text="hello"), ctx))
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "hello"
+
+    assert isinstance(result.data, dict)
+    assert result.data["dry_run"] is False
+    assert result.data["path"] == "created.txt"
+    assert result.data["bytes"] == 5
+    assert "sha256" in result.data
+    assert "text" not in result.data
+
+
 def test_write_text_is_atomic_on_replace_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -85,6 +132,7 @@ def test_read_text_truncates_large_files(tmp_path: Path) -> None:
     assert result.ok is True
     assert isinstance(result.data, dict)
     assert result.data["truncated"] is True
+    assert len(result.data["text"].encode("utf-8")) <= 50
     assert "<truncated>" in result.data["text"]
 
 
