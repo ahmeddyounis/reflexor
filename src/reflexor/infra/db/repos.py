@@ -865,13 +865,19 @@ class SqlAlchemyRunPacketRepo:
         sanitized_packet["created_at_ms"] = packet.created_at_ms
         sanitized_packet["packet_version"] = RUN_PACKET_VERSION
 
-        row = RunPacketRow(
-            run_id=packet.run_id,
-            packet_version=RUN_PACKET_VERSION,
-            created_at_ms=packet.created_at_ms,
-            packet=sanitized_packet,
-        )
-        self._session.add(row)
+        existing = await self._session.get(RunPacketRow, packet.run_id)
+        if existing is None:
+            row = RunPacketRow(
+                run_id=packet.run_id,
+                packet_version=RUN_PACKET_VERSION,
+                created_at_ms=packet.created_at_ms,
+                packet=sanitized_packet,
+            )
+            self._session.add(row)
+        else:
+            existing.packet_version = RUN_PACKET_VERSION
+            existing.created_at_ms = packet.created_at_ms
+            existing.packet = sanitized_packet
         await self._session.flush()
         return RunPacket.model_validate(sanitized_packet)
 
