@@ -74,6 +74,69 @@ def _parse_str_list(value: object, *, field_name: str) -> list[str]:
     raise TypeError(f"{field_name} must be a list[str] or str")
 
 
+def _parse_str_int_dict(value: object, *, field_name: str) -> dict[str, int]:
+    if value is None:
+        return {}
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+
+        if text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if not isinstance(parsed, dict):
+                raise TypeError(f"{field_name} must be a JSON object or comma-separated pairs")
+            parsed_json_dict: dict[str, int] = {}
+            for key, parsed_value in parsed.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"{field_name} keys must be strings")
+                if isinstance(parsed_value, bool):
+                    raise TypeError(f"{field_name} values must be integers")
+                if isinstance(parsed_value, int):
+                    parsed_json_dict[key] = parsed_value
+                    continue
+                if isinstance(parsed_value, str):
+                    parsed_json_dict[key] = int(parsed_value.strip())
+                    continue
+                raise TypeError(f"{field_name} values must be integers")
+            return parsed_json_dict
+
+        parsed_pairs: dict[str, int] = {}
+        for part in text.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            if "=" not in item:
+                raise TypeError(
+                    f"{field_name} must be a JSON object or comma-separated pairs like tool=3"
+                )
+            tool_name, raw_limit = item.split("=", 1)
+            parsed_pairs[tool_name.strip()] = int(raw_limit.strip())
+        return parsed_pairs
+
+    if isinstance(value, dict):
+        parsed_dict: dict[str, int] = {}
+        for key, parsed_value in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"{field_name} keys must be strings")
+            if isinstance(parsed_value, bool):
+                raise TypeError(f"{field_name} values must be integers")
+            if isinstance(parsed_value, int):
+                parsed_dict[key] = parsed_value
+                continue
+            if isinstance(parsed_value, str):
+                parsed_dict[key] = int(parsed_value.strip())
+                continue
+            raise TypeError(f"{field_name} values must be integers")
+        return parsed_dict
+
+    raise TypeError(f"{field_name} must be a dict[str,int] or str")
+
+
 class ReflexorSettings(BaseSettings):
     """Runtime configuration for Reflexor.
 
@@ -106,6 +169,14 @@ class ReflexorSettings(BaseSettings):
     queue_backend: Literal["inmemory"] = "inmemory"
     queue_visibility_timeout_s: float = 60.0
 
+    executor_max_concurrency: int = 50
+    executor_per_tool_concurrency: dict[str, int] = Field(default_factory=dict)
+    executor_default_timeout_s: float = 60.0
+    executor_visibility_timeout_s: float = 60.0
+    executor_retry_base_delay_s: float = 1.0
+    executor_retry_max_delay_s: float = 60.0
+    executor_retry_jitter: float = 0.0
+
     planner_interval_s: float = 60.0
     planner_debounce_s: float = 2.0
     event_backlog_max: int = 200
@@ -131,6 +202,15 @@ class ReflexorSettings(BaseSettings):
         field_name = info.field_name
         assert field_name is not None
         return _parse_str_list(value, field_name=field_name)
+
+    @field_validator("executor_per_tool_concurrency", mode="before")
+    @classmethod
+    def _parse_executor_per_tool_concurrency(
+        cls, value: object, info: ValidationInfo
+    ) -> dict[str, int]:
+        field_name = info.field_name
+        assert field_name is not None
+        return _parse_str_int_dict(value, field_name=field_name)
 
     @field_validator("enabled_scopes", "approval_required_scopes", mode="after")
     @classmethod
@@ -203,7 +283,15 @@ class ReflexorSettings(BaseSettings):
             raise ValueError("queue_visibility_timeout_s must be > 0")
         return timeout_s
 
-    @field_validator("planner_interval_s", "planner_debounce_s", "max_run_wall_time_s")
+    @field_validator(
+        "executor_default_timeout_s",
+        "executor_visibility_timeout_s",
+        "executor_retry_base_delay_s",
+        "executor_retry_max_delay_s",
+        "planner_interval_s",
+        "planner_debounce_s",
+        "max_run_wall_time_s",
+    )
     @classmethod
     def _validate_positive_seconds(cls, value: float, info: ValidationInfo) -> float:
         field_name = info.field_name or "seconds"
@@ -213,6 +301,7 @@ class ReflexorSettings(BaseSettings):
         return seconds
 
     @field_validator(
+        "executor_max_concurrency",
         "event_backlog_max",
         "max_events_per_planning_cycle",
         "max_tasks_per_run",
@@ -225,6 +314,44 @@ class ReflexorSettings(BaseSettings):
         if number <= 0:
             raise ValueError(f"{field_name} must be > 0")
         return number
+
+    @field_validator("executor_retry_jitter")
+    @classmethod
+    def _validate_executor_retry_jitter(cls, value: float) -> float:
+        jitter = float(value)
+        if jitter < 0 or jitter > 1:
+            raise ValueError("executor_retry_jitter must be in [0, 1]")
+        return jitter
+
+    @field_validator("executor_per_tool_concurrency", mode="after")
+    @classmethod
+    def _validate_executor_per_tool_concurrency(
+        cls, value: dict[str, int], info: ValidationInfo
+    ) -> dict[str, int]:
+        max_concurrency = int(info.data.get("executor_max_concurrency", 0) or 0)
+
+        normalized: dict[str, int] = {}
+        for tool_name, raw_limit in value.items():
+            normalized_tool_name = tool_name.strip()
+            if not normalized_tool_name:
+                raise ValueError("executor_per_tool_concurrency keys must be non-empty")
+
+            limit = int(raw_limit)
+            if limit <= 0:
+                raise ValueError("executor_per_tool_concurrency values must be > 0")
+            if max_concurrency and limit > max_concurrency:
+                raise ValueError(
+                    "executor_per_tool_concurrency values must be <= executor_max_concurrency"
+                )
+
+            if normalized_tool_name in normalized:
+                raise ValueError(
+                    "executor_per_tool_concurrency contains duplicate tool names "
+                    "after normalization"
+                )
+            normalized[normalized_tool_name] = limit
+
+        return normalized
 
     @field_validator("max_event_payload_bytes", "max_tool_output_bytes", "max_run_packet_bytes")
     @classmethod
@@ -241,6 +368,10 @@ class ReflexorSettings(BaseSettings):
                 "prod with dry_run=False requires allow_side_effects_in_prod=True "
                 "(set REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true)"
             )
+        if self.executor_retry_max_delay_s < self.executor_retry_base_delay_s:
+            raise ValueError("executor_retry_max_delay_s must be >= executor_retry_base_delay_s")
+        if self.executor_visibility_timeout_s < self.executor_default_timeout_s:
+            raise ValueError("executor_visibility_timeout_s must be >= executor_default_timeout_s")
         unknown_approval_scopes = sorted(
             set(self.approval_required_scopes) - set(self.enabled_scopes)
         )

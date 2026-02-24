@@ -41,6 +41,13 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.db_pool_timeout_s is None
     assert settings.queue_backend == "inmemory"
     assert settings.queue_visibility_timeout_s == 60.0
+    assert settings.executor_max_concurrency == 50
+    assert settings.executor_per_tool_concurrency == {}
+    assert settings.executor_default_timeout_s == 60.0
+    assert settings.executor_visibility_timeout_s == 60.0
+    assert settings.executor_retry_base_delay_s == 1.0
+    assert settings.executor_retry_max_delay_s == 60.0
+    assert settings.executor_retry_jitter == 0.0
     assert settings.planner_interval_s == 60.0
     assert settings.planner_debounce_s == 2.0
     assert settings.event_backlog_max == 200
@@ -181,3 +188,49 @@ def test_orchestrator_settings_reject_non_positive_values(
 
     with pytest.raises(ValueError, match="max_run_wall_time_s must be > 0"):
         ReflexorSettings(max_run_wall_time_s=0)
+
+
+def test_executor_settings_reject_invalid_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="executor_max_concurrency must be > 0"):
+        ReflexorSettings(executor_max_concurrency=0)
+
+    with pytest.raises(ValueError, match="executor_default_timeout_s must be > 0"):
+        ReflexorSettings(executor_default_timeout_s=0)
+
+    with pytest.raises(ValueError, match="executor_retry_jitter must be in \\[0, 1\\]"):
+        ReflexorSettings(executor_retry_jitter=2)
+
+    with pytest.raises(
+        ValueError, match="executor_retry_max_delay_s must be >= executor_retry_base_delay_s"
+    ):
+        ReflexorSettings(executor_retry_base_delay_s=5, executor_retry_max_delay_s=1)
+
+    with pytest.raises(
+        ValueError, match="executor_visibility_timeout_s must be >= executor_default_timeout_s"
+    ):
+        ReflexorSettings(executor_default_timeout_s=20, executor_visibility_timeout_s=10)
+
+    with pytest.raises(
+        ValueError, match="executor_per_tool_concurrency values must be <= executor_max_concurrency"
+    ):
+        ReflexorSettings(executor_max_concurrency=3, executor_per_tool_concurrency={"echo": 4})
+
+
+def test_executor_per_tool_concurrency_parses_env_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    clear_settings_cache()
+
+    monkeypatch.setenv("REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY", '{"echo": 2, "other": 1}')
+    settings = get_settings()
+    assert settings.executor_per_tool_concurrency == {"echo": 2, "other": 1}
+
+    clear_settings_cache()
+    monkeypatch.setenv("REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY", " echo=2 , other=1 ")
+    settings = get_settings()
+    assert settings.executor_per_tool_concurrency == {"echo": 2, "other": 1}

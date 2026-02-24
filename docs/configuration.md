@@ -24,6 +24,13 @@ List-valued settings accept either:
 - JSON array strings, e.g. `REFLEXOR_ENABLED_SCOPES='["fs.read","net.http"]'`, or
 - Comma-separated strings, e.g. `REFLEXOR_ENABLED_SCOPES='fs.read,net.http'`.
 
+### Dict parsing
+
+Dict-valued settings accept either:
+
+- JSON object strings, e.g. `REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY='{"echo":5,"other":2}'`, or
+- Comma-separated pairs, e.g. `REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY='echo=5,other=2'`.
+
 ## Profiles
 
 `REFLEXOR_PROFILE` supports:
@@ -131,6 +138,24 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
   - Default visibility timeout (seconds) used by queue backends when `Queue.dequeue()` is called
     without an explicit `timeout_s`.
 
+## Executor defaults
+
+These settings shape worker/executor behavior (concurrency, leasing, and retry backoff).
+
+- `REFLEXOR_EXECUTOR_MAX_CONCURRENCY` (default `50`)
+  - Global cap on in-flight task executions.
+- `REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY` (default `{}`)
+  - Optional per-tool concurrency overrides (must be `<= executor_max_concurrency`).
+- `REFLEXOR_EXECUTOR_DEFAULT_TIMEOUT_S` (default `60`)
+  - Default tool execution timeout (seconds) when a task/tool call does not specify one.
+- `REFLEXOR_EXECUTOR_VISIBILITY_TIMEOUT_S` (default `60`)
+  - Visibility timeout (seconds) used when leasing tasks from the queue.
+  - Must be `>= executor_default_timeout_s` to avoid lease expiry during default-length work.
+- Retry defaults (used by backoff strategies):
+  - `REFLEXOR_EXECUTOR_RETRY_BASE_DELAY_S` (default `1`)
+  - `REFLEXOR_EXECUTOR_RETRY_MAX_DELAY_S` (default `60`)
+  - `REFLEXOR_EXECUTOR_RETRY_JITTER` (default `0`, fraction in `[0,1]`)
+
 ## Orchestrator defaults
 
 These values shape how often the planner runs and how much work a single run can admit.
@@ -178,6 +203,13 @@ which can cause excessive churn/cost. Validation enforces positivity but does no
 | `db_pool_timeout_s` | `REFLEXOR_DB_POOL_TIMEOUT_S` | float? | unset |
 | `queue_backend` | `REFLEXOR_QUEUE_BACKEND` | `inmemory` | `inmemory` |
 | `queue_visibility_timeout_s` | `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` | float | `60` |
+| `executor_max_concurrency` | `REFLEXOR_EXECUTOR_MAX_CONCURRENCY` | int | `50` |
+| `executor_per_tool_concurrency` | `REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY` | dict[str,int] | `{}` |
+| `executor_default_timeout_s` | `REFLEXOR_EXECUTOR_DEFAULT_TIMEOUT_S` | float | `60` |
+| `executor_visibility_timeout_s` | `REFLEXOR_EXECUTOR_VISIBILITY_TIMEOUT_S` | float | `60` |
+| `executor_retry_base_delay_s` | `REFLEXOR_EXECUTOR_RETRY_BASE_DELAY_S` | float | `1` |
+| `executor_retry_max_delay_s` | `REFLEXOR_EXECUTOR_RETRY_MAX_DELAY_S` | float | `60` |
+| `executor_retry_jitter` | `REFLEXOR_EXECUTOR_RETRY_JITTER` | float | `0` |
 | `planner_interval_s` | `REFLEXOR_PLANNER_INTERVAL_S` | float | `60` |
 | `planner_debounce_s` | `REFLEXOR_PLANNER_DEBOUNCE_S` | float | `2` |
 | `event_backlog_max` | `REFLEXOR_EVENT_BACKLOG_MAX` | int | `200` |
