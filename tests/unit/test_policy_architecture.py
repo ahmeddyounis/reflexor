@@ -139,6 +139,7 @@ def test_security_and_policy_layers_do_not_import_framework_or_outer_layers() ->
         "reflexor.api",
         "reflexor.application",
         "reflexor.cli",
+        "reflexor.executor",
         "reflexor.infra",
         "reflexor.interfaces",
         "reflexor.orchestrator",

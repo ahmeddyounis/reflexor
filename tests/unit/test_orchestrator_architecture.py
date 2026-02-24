@@ -115,6 +115,7 @@ def test_orchestrator_layer_does_not_import_frameworks_or_outer_layers() -> None
         # Outer entrypoints / process boundaries.
         "reflexor.api",
         "reflexor.cli",
+        "reflexor.executor",
         "reflexor.worker",
         # Orchestrator should depend on queue interfaces, not infrastructure adapters.
         "reflexor.infra",

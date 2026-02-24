@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 
@@ -34,7 +34,7 @@ def _resolve_from_import(current_package: str, module: str | None, level: int) -
     return base
 
 
-def _iter_imported_modules(path: Path, src_root: Path) -> set[str]:
+def _iter_imported_modules(path: Path, *, src_root: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     module_name = _module_name_for_path(path, src_root)
     current_package = _package_for_module(module_name)
@@ -60,60 +60,45 @@ def _matches_prefix(module: str, prefix: str) -> bool:
     return module == prefix or module.startswith(f"{prefix}.")
 
 
-def test_domain_imports_are_pure() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+def _assert_no_forbidden_imports(
+    python_files: Iterable[Path],
+    *,
+    src_root: Path,
+    repo_root: Path,
+    forbidden_prefixes: set[str],
+) -> None:
+    offenders: dict[str, list[str]] = {}
+    for path in python_files:
+        imported = _iter_imported_modules(path, src_root=src_root)
+        forbidden = sorted(
+            module
+            for module in imported
+            if any(_matches_prefix(module, prefix) for prefix in forbidden_prefixes)
+        )
+        if forbidden:
+            offenders[str(path.relative_to(repo_root))] = forbidden
+
+    assert not offenders, (
+        "Forbidden imports detected in `reflexor.worker` (layering violation). "
+        f"Offenders (file -> imports): {offenders}"
+    )
+
+
+def test_worker_does_not_import_fastapi_or_cli_entrypoints() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
     src_root = repo_root / "src"
-    domain_root = repo_root / "src" / "reflexor" / "domain"
+    worker_root = src_root / "reflexor" / "worker"
 
     forbidden_prefixes = {
         "fastapi",
-        "httpx",
-        "sqlalchemy",
-        "reflexor.application",
-        "reflexor.executor",
-        "reflexor.infra",
-        "reflexor.interfaces",
-        "reflexor.orchestrator",
-        "reflexor.tools",
+        "starlette",
+        "reflexor.api",
         "reflexor.cli",
-        "reflexor.worker",
     }
 
-    allowed_third_party = {"pydantic"}
-    stdlib = sys.stdlib_module_names
-
-    offenders: dict[str, dict[str, set[str]]] = {}
-    for path in _iter_python_files(domain_root):
-        imported = _iter_imported_modules(path, src_root)
-
-        forbidden_by_prefix = {
-            module
-            for module in imported
-            if any(_matches_prefix(module, p) for p in forbidden_prefixes)
-        }
-
-        non_stdlib_or_pydantic = set()
-        for module in imported:
-            if module.startswith("reflexor.domain"):
-                continue
-            if any(_matches_prefix(module, p) for p in forbidden_prefixes):
-                continue
-
-            top_level = module.split(".", 1)[0]
-            if top_level in stdlib:
-                continue
-            if top_level in allowed_third_party:
-                continue
-
-            non_stdlib_or_pydantic.add(module)
-
-        if forbidden_by_prefix or non_stdlib_or_pydantic:
-            offenders[str(path.relative_to(repo_root))] = {
-                "forbidden": forbidden_by_prefix,
-                "non_stdlib_or_pydantic": non_stdlib_or_pydantic,
-            }
-
-    assert not offenders, (
-        "Domain layer imports must be stdlib-only (plus optional pydantic) and must not depend on "
-        f"outer layers/frameworks. Offenders: {offenders}"
+    _assert_no_forbidden_imports(
+        _iter_python_files(worker_root),
+        src_root=src_root,
+        repo_root=repo_root,
+        forbidden_prefixes=forbidden_prefixes,
     )
