@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import cast
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.infra.db.engine import AsyncSessionFactory, create_async_session_factory
-from reflexor.infra.db.models import Base
+from reflexor.infra.db.models import Base, RunPacketRow
 from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyEventRepo,
@@ -335,3 +338,95 @@ async def test_event_repo_create_or_get_by_dedupe_is_idempotent() -> None:
 
             listed_events = await event_repo.list(limit=10, offset=0)
             assert [event.event_id for event in listed_events] == [stored1.event_id]
+
+
+@pytest.mark.asyncio
+async def test_run_packet_repo_persists_sanitized_packet() -> None:
+    settings = ReflexorSettings(max_tool_output_bytes=200)
+
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        run = RunRecord(
+            run_id=run_id,
+            parent_run_id=None,
+            created_at_ms=1,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        event = Event(
+            event_id=_uuid(),
+            type="webhook.received",
+            source="tests",
+            received_at_ms=10,
+            payload={
+                "authorization": "Bearer SUPERSECRETTOKENVALUE",
+                "note": "ok",
+            },
+        )
+        tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            status=ToolCallStatus.SUCCEEDED,
+            created_at_ms=100,
+            started_at_ms=100,
+            completed_at_ms=101,
+        )
+        task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="echo",
+            status=TaskStatus.SUCCEEDED,
+            tool_call=tool_call,
+            created_at_ms=1_000,
+            started_at_ms=1_000,
+            completed_at_ms=1_001,
+        )
+        packet = RunPacket(
+            run_id=run_id,
+            parent_run_id=None,
+            event=event,
+            reflex_decision={"action": "fast_tasks"},
+            tasks=[task],
+            tool_results=[
+                {
+                    "tool_call_id": tool_call.tool_call_id,
+                    "message": "Bearer SUPERSECRETTOKENVALUE",
+                    "output": "x" * 5_000,
+                }
+            ],
+            created_at_ms=5_000,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(session, settings=settings)
+
+            assert await run_repo.create(run) == run
+            stored = await run_packet_repo.create(packet)
+
+            assert stored.run_id == run_id
+            assert stored.event.event_id == event.event_id
+            assert stored.event.payload["authorization"] == "<redacted>"
+
+            row = (
+                await session.execute(select(RunPacketRow).where(RunPacketRow.run_id == run_id))
+            ).scalar_one()
+            assert row.packet_version == 1
+
+            dumped = json.dumps(row.packet, ensure_ascii=False, separators=(",", ":"))
+            assert "SUPERSECRETTOKENVALUE" not in dumped
+            assert "<redacted>" in dumped
+            assert "<truncated>" in dumped
+            assert run_id in dumped
+            assert event.event_id in dumped
+            assert task.task_id in dumped
+            assert tool_call.tool_call_id in dumped
+
+            fetched = await run_packet_repo.get(run_id)
+            assert fetched is not None
+            assert fetched.event.payload["authorization"] == "<redacted>"

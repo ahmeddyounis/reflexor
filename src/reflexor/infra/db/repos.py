@@ -7,6 +7,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
@@ -16,8 +17,6 @@ from reflexor.infra.db.mappers import (
     approval_to_row_dict,
     event_from_orm,
     event_to_row_dict,
-    run_packet_from_row_dict,
-    run_packet_to_row_dict,
     task_from_row_dict,
     task_to_row_dict,
     tool_call_from_orm,
@@ -31,7 +30,10 @@ from reflexor.infra.db.models import (
     TaskRow,
     ToolCallRow,
 )
+from reflexor.observability.audit_sanitize import sanitize_for_audit
 from reflexor.storage.ports import RunRecord
+
+RUN_PACKET_VERSION = 1
 
 
 def _validate_limit_offset(*, limit: int, offset: int) -> tuple[int, int]:
@@ -544,18 +546,30 @@ class SqlAlchemyApprovalRepo:
 
 
 class SqlAlchemyRunPacketRepo:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, settings: ReflexorSettings | None = None) -> None:
         self._session = session
+        self._settings = settings
 
     async def create(self, packet: RunPacket) -> RunPacket:
         run = await self._session.get(RunRow, packet.run_id)
         if run is None:
             raise KeyError(f"unknown run_id: {packet.run_id!r}")
 
-        row = RunPacketRow(**run_packet_to_row_dict(packet))
+        packet_dict = packet.model_dump(mode="json")
+        sanitized_packet = sanitize_for_audit(packet_dict, settings=self._settings)
+        sanitized_packet["run_id"] = packet.run_id
+        sanitized_packet["created_at_ms"] = packet.created_at_ms
+        sanitized_packet["packet_version"] = RUN_PACKET_VERSION
+
+        row = RunPacketRow(
+            run_id=packet.run_id,
+            packet_version=RUN_PACKET_VERSION,
+            created_at_ms=packet.created_at_ms,
+            packet=sanitized_packet,
+        )
         self._session.add(row)
         await self._session.flush()
-        return packet
+        return RunPacket.model_validate(sanitized_packet)
 
     async def get(self, run_id: str) -> RunPacket | None:
         normalized = run_id.strip()
@@ -565,13 +579,12 @@ class SqlAlchemyRunPacketRepo:
         row = await self._session.get(RunPacketRow, normalized)
         if row is None:
             return None
-        return run_packet_from_row_dict(
-            {
-                "run_id": row.run_id,
-                "created_at_ms": row.created_at_ms,
-                "packet": row.packet,
-            }
-        )
+
+        sanitized_packet = sanitize_for_audit(row.packet, settings=self._settings)
+        sanitized_packet["run_id"] = row.run_id
+        sanitized_packet["created_at_ms"] = row.created_at_ms
+        sanitized_packet["packet_version"] = int(row.packet_version)
+        return RunPacket.model_validate(sanitized_packet)
 
     async def list_recent(self, *, limit: int, offset: int) -> list[RunPacket]:
         limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)
@@ -586,16 +599,14 @@ class SqlAlchemyRunPacketRepo:
         )
         result = await self._session.execute(stmt)
         rows = result.scalars().all()
-        return [
-            run_packet_from_row_dict(
-                {
-                    "run_id": row.run_id,
-                    "created_at_ms": row.created_at_ms,
-                    "packet": row.packet,
-                }
-            )
-            for row in rows
-        ]
+        packets: list[RunPacket] = []
+        for row in rows:
+            sanitized_packet = sanitize_for_audit(row.packet, settings=self._settings)
+            sanitized_packet["run_id"] = row.run_id
+            sanitized_packet["created_at_ms"] = row.created_at_ms
+            sanitized_packet["packet_version"] = int(row.packet_version)
+            packets.append(RunPacket.model_validate(sanitized_packet))
+        return packets
 
 
 __all__ = [

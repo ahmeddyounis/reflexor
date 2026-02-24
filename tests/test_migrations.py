@@ -69,5 +69,9 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
         assert "ix_tasks_status" in _index_names(connection, table="tasks")
         assert "ix_tool_calls_idempotency_key" in _index_names(connection, table="tool_calls")
         assert "ix_approvals_status" in _index_names(connection, table="approvals")
+
+        assert {"run_id", "packet_version", "created_at_ms", "packet"}.issubset(
+            _column_names(connection, table="run_packets")
+        )
     finally:
         connection.close()

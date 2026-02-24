@@ -85,6 +85,7 @@ class RunPacketRow(Base):
     __tablename__ = "run_packets"
 
     run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.run_id"), primary_key=True)
+    packet_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at_ms: Mapped[int] = mapped_column(Integer)
     packet: Mapped[dict[str, object]] = mapped_column(JSON)
 
