@@ -7,11 +7,12 @@ from reflexor.domain.models_event import Event
 from reflexor.domain.serialization import canonical_json, stable_sha256
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
-from reflexor.orchestrator.engine import OrchestratorEngine, RunPacketSink
+from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import NoOpPlanner
 from reflexor.orchestrator.plans import PlanningInput, ProposedTask, ReflexDecision
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
+from reflexor.orchestrator.sinks import RunPacketSink
 from reflexor.tools.impl.echo import EchoTool
 from reflexor.tools.registry import ToolRegistry
 
@@ -66,7 +67,7 @@ class _InMemoryRunSink(RunPacketSink):
     def __init__(self) -> None:
         self.packets = []
 
-    async def write(self, packet) -> None:  # type: ignore[override]
+    async def emit(self, packet) -> None:  # type: ignore[override]
         self.packets.append(packet)
 
 

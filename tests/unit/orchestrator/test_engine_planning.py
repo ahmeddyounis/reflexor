@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 from reflexor.domain.models_event import Event
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
-from reflexor.orchestrator.engine import OrchestratorEngine, RunPacketSink
+from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import NeedsPlanningRouter
 from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
+from reflexor.orchestrator.sinks import RunPacketSink
 from reflexor.tools.impl.echo import EchoTool
 from reflexor.tools.registry import ToolRegistry
 
@@ -81,7 +82,7 @@ class _InMemoryRunSink(RunPacketSink):
         self.packets = []
         self._condition = asyncio.Condition()
 
-    async def write(self, packet) -> None:  # type: ignore[override]
+    async def emit(self, packet) -> None:  # type: ignore[override]
         async with self._condition:
             self.packets.append(packet)
             self._condition.notify_all()

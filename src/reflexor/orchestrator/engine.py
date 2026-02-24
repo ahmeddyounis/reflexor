@@ -16,7 +16,7 @@ import asyncio
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Literal
 from uuid import uuid4
 
 from reflexor.domain.errors import BudgetExceeded
@@ -29,20 +29,12 @@ from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.interfaces import Planner, ReflexRouter
 from reflexor.orchestrator.plans import LimitsSnapshot, PlanningInput
 from reflexor.orchestrator.queue import Queue, TaskEnvelope
+from reflexor.orchestrator.sinks import NoopRunPacketSink, RunPacketSink
 from reflexor.orchestrator.triggers import DebouncedTrigger, PeriodicTicker
 from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
 from reflexor.tools.registry import ToolRegistry
 
 PlanningTrigger = Literal["tick", "event"]
-
-
-class RunPacketSink(Protocol):
-    async def write(self, packet: RunPacket) -> None: ...
-
-
-class NoopRunPacketSink:
-    async def write(self, packet: RunPacket) -> None:
-        _ = packet
 
 
 @dataclass(slots=True)
@@ -168,7 +160,7 @@ class OrchestratorEngine:
                 tasks=tasks,
                 policy_decisions=policy_decisions,
             )
-            await self.run_sink.write(run_packet)
+            await self.run_sink.emit(run_packet)
         return run_id
 
     async def run_planning_once(self, *, trigger: PlanningTrigger) -> str:
@@ -282,7 +274,7 @@ class OrchestratorEngine:
                     tasks=tasks,
                     policy_decisions=policy_decisions,
                 )
-                await self.run_sink.write(run_packet)
+                await self.run_sink.emit(run_packet)
 
         return planning_run_id
 
