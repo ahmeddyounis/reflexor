@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall
@@ -31,9 +31,19 @@ from reflexor.executor.retries import (
     RetryPolicy,
     exponential_backoff_s,
 )
+from reflexor.executor.state import (
+    ExecutionState,
+    complete_canceled,
+    complete_denied,
+    complete_failed,
+    complete_succeeded,
+    mark_waiting_approval,
+    start_execution,
+)
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Queue
+from reflexor.security.policy.context import tool_spec_from_tool
 from reflexor.security.policy.decision import PolicyAction, PolicyDecision
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner, ToolExecutionOutcome
 from reflexor.storage.ports import ApprovalRepo, RunPacketRepo, TaskRepo, ToolCallRepo
@@ -159,7 +169,6 @@ class ExecutorService:
             tool_call_id=tool_call.tool_call_id,
         ):
             if task.status == TaskStatus.CANCELED:
-                await self._persist_canceled(task, tool_call)
                 return ExecutionReport(
                     task_id=task.task_id,
                     run_id=task.run_id,
@@ -179,6 +188,11 @@ class ExecutorService:
             if cached is not None:
                 return cached
 
+            if await self._should_start_execution(tool_call=tool_call):
+                started = await self._persist_started(task=task, tool_call=tool_call)
+                task = started.task
+                tool_call = started.tool_call
+
             ctx = tool_context_from_settings(
                 self._policy_runner.gate.settings,
                 timeout_s=float(task.timeout_s),
@@ -188,16 +202,6 @@ class ExecutorService:
                 outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
 
             return await self._persist_outcome(task, tool_call, outcome)
-
-    async def _persist_canceled(self, task: Task, tool_call: ToolCall) -> None:
-        uow = self._uow_factory()
-        async with uow:
-            session = uow.session
-            tool_call_repo = self._repos.tool_call_repo(session)
-            task_repo = self._repos.task_repo(session)
-
-            await tool_call_repo.update_status(tool_call.tool_call_id, ToolCallStatus.CANCELED)
-            await task_repo.update_status(task.task_id, TaskStatus.CANCELED)
 
     async def _maybe_use_cached_success(
         self, task: Task, tool_call: ToolCall
@@ -221,8 +225,14 @@ class ExecutorService:
             task_repo = self._repos.task_repo(session)
             run_packet_repo = self._repos.run_packet_repo(session)
 
-            await tool_call_repo.update_status(tool_call.tool_call_id, ToolCallStatus.SUCCEEDED)
-            await task_repo.update_status(task.task_id, TaskStatus.SUCCEEDED)
+            now_ms = int(self._clock.now_ms())
+            started = start_execution(task=task, tool_call=tool_call, now_ms=now_ms)
+            completed = complete_succeeded(
+                task=started.task, tool_call=started.tool_call, now_ms=now_ms
+            )
+
+            await tool_call_repo.update(completed.tool_call)
+            await task_repo.update(completed.task)
 
             decision = PolicyDecision.allow(
                 reason_code="idempotency_cache",
@@ -233,8 +243,8 @@ class ExecutorService:
 
             await self._append_audit(
                 run_packet_repo=run_packet_repo,
-                task=task,
-                tool_call=tool_call,
+                task=completed.task,
+                tool_call=completed.tool_call,
                 decision=decision,
                 result=cached.result,
                 approval_id=None,
@@ -253,6 +263,89 @@ class ExecutorService:
                 result=cached.result,
             )
 
+    async def _should_start_execution(self, *, tool_call: ToolCall) -> bool:
+        """Return True if this task should transition to RUNNING before tool execution."""
+
+        tool = self._try_get_tool(tool_call.tool_name)
+        if tool is None:
+            return False
+
+        try:
+            parsed_args = tool.ArgsModel.model_validate(tool_call.args)
+        except ValidationError:
+            return False
+
+        decision = self._policy_runner.gate.evaluate(
+            tool_call=tool_call,
+            tool_spec=tool_spec_from_tool(tool),
+            parsed_args=parsed_args,
+        )
+
+        if decision.action == PolicyAction.ALLOW:
+            return True
+
+        if decision.action == PolicyAction.REQUIRE_APPROVAL:
+            approval = await self._policy_runner.approvals.get_by_tool_call(tool_call.tool_call_id)
+            return approval is not None and approval.status == ApprovalStatus.APPROVED
+
+        return False
+
+    async def _persist_started(self, *, task: Task, tool_call: ToolCall) -> ExecutionState:
+        now_ms = int(self._clock.now_ms())
+        state = start_execution(task=task, tool_call=tool_call, now_ms=now_ms)
+
+        uow = self._uow_factory()
+        async with uow:
+            session = uow.session
+            task_repo = self._repos.task_repo(session)
+            tool_call_repo = self._repos.tool_call_repo(session)
+
+            await tool_call_repo.update(state.tool_call)
+            await task_repo.update(state.task)
+
+        return state
+
+    def _apply_state_transition(
+        self,
+        *,
+        task: Task,
+        tool_call: ToolCall,
+        decision: PolicyDecision,
+        disposition: ExecutionDisposition,
+        now_ms: int,
+    ) -> ExecutionState:
+        _ = decision
+
+        if disposition == ExecutionDisposition.WAITING_APPROVAL:
+            return mark_waiting_approval(task=task, tool_call=tool_call)
+
+        if disposition == ExecutionDisposition.DENIED:
+            if tool_call.status == ToolCallStatus.PENDING:
+                return complete_denied(task=task, tool_call=tool_call, now_ms=now_ms)
+            return complete_canceled(task=task, tool_call=tool_call, now_ms=now_ms)
+
+        if disposition == ExecutionDisposition.CANCELED:
+            return complete_canceled(task=task, tool_call=tool_call, now_ms=now_ms)
+
+        if disposition == ExecutionDisposition.SUCCEEDED:
+            if task.status != TaskStatus.RUNNING or tool_call.status != ToolCallStatus.RUNNING:
+                started = start_execution(task=task, tool_call=tool_call, now_ms=now_ms)
+                task = started.task
+                tool_call = started.tool_call
+            return complete_succeeded(task=task, tool_call=tool_call, now_ms=now_ms)
+
+        if disposition in {
+            ExecutionDisposition.FAILED_TRANSIENT,
+            ExecutionDisposition.FAILED_PERMANENT,
+        }:
+            if task.status != TaskStatus.RUNNING or tool_call.status != ToolCallStatus.RUNNING:
+                started = start_execution(task=task, tool_call=tool_call, now_ms=now_ms)
+                task = started.task
+                tool_call = started.tool_call
+            return complete_failed(task=task, tool_call=tool_call, now_ms=now_ms)
+
+        raise ValueError(f"unhandled disposition: {disposition}")
+
     async def _persist_outcome(
         self,
         task: Task,
@@ -263,8 +356,13 @@ class ExecutorService:
         result = outcome.result
 
         disposition, retry_after_s = self._classify_outcome(task, outcome)
-        task_status, tool_call_status = self._map_statuses(
-            disposition=disposition, decision=decision
+        now_ms = int(self._clock.now_ms())
+        state = self._apply_state_transition(
+            task=task,
+            tool_call=tool_call,
+            decision=decision,
+            disposition=disposition,
+            now_ms=now_ms,
         )
 
         uow = self._uow_factory()
@@ -282,15 +380,13 @@ class ExecutorService:
                     approval_repo=approval_repo,
                 )
 
-            if tool_call_status is not None:
-                await tool_call_repo.update_status(tool_call.tool_call_id, tool_call_status)
-            if task_status is not None:
-                await task_repo.update_status(task.task_id, task_status)
+            await tool_call_repo.update(state.tool_call)
+            await task_repo.update(state.task)
 
             await self._append_audit(
                 run_packet_repo=run_packet_repo,
-                task=task,
-                tool_call=tool_call,
+                task=state.task,
+                tool_call=state.tool_call,
                 decision=decision,
                 result=result,
                 approval_id=outcome.approval_id,
@@ -302,17 +398,17 @@ class ExecutorService:
             if tool_is_idempotent and did_attempt_tool_run:
                 await self._record_ledger(
                     ledger=ledger,
-                    tool_call=tool_call,
+                    tool_call=state.tool_call,
                     result=result,
                     disposition=disposition,
                 )
 
         return ExecutionReport(
-            task_id=task.task_id,
-            run_id=task.run_id,
-            tool_call_id=tool_call.tool_call_id,
-            tool_name=tool_call.tool_name,
-            idempotency_key=tool_call.idempotency_key,
+            task_id=state.task.task_id,
+            run_id=state.task.run_id,
+            tool_call_id=state.tool_call.tool_call_id,
+            tool_name=state.tool_call.tool_name,
+            idempotency_key=state.tool_call.idempotency_key,
             disposition=disposition,
             used_cached_result=False,
             retry_after_s=retry_after_s,
@@ -360,7 +456,7 @@ class ExecutorService:
             return ExecutionDisposition.WAITING_APPROVAL, None
 
         if disposition == RetryDisposition.TRANSIENT:
-            attempt = max(1, int(task.attempts) + 1)
+            attempt = max(1, int(task.attempts))
             retry_after_s = exponential_backoff_s(
                 attempt,
                 base_delay_s=self._retry_policy.base_delay_s,
@@ -369,33 +465,6 @@ class ExecutorService:
             return ExecutionDisposition.FAILED_TRANSIENT, retry_after_s
 
         return ExecutionDisposition.FAILED_PERMANENT, None
-
-    def _map_statuses(
-        self, *, disposition: ExecutionDisposition, decision: PolicyDecision
-    ) -> tuple[TaskStatus | None, ToolCallStatus | None]:
-        if disposition == ExecutionDisposition.CANCELED:
-            return TaskStatus.CANCELED, ToolCallStatus.CANCELED
-
-        if disposition == ExecutionDisposition.CACHED:
-            return TaskStatus.SUCCEEDED, ToolCallStatus.SUCCEEDED
-
-        if disposition == ExecutionDisposition.SUCCEEDED:
-            return TaskStatus.SUCCEEDED, ToolCallStatus.SUCCEEDED
-
-        if disposition == ExecutionDisposition.WAITING_APPROVAL:
-            # Tool call remains pending; task moves to explicit gate state.
-            return TaskStatus.WAITING_APPROVAL, None
-
-        if disposition == ExecutionDisposition.DENIED or decision.action == PolicyAction.DENY:
-            return TaskStatus.CANCELED, ToolCallStatus.DENIED
-
-        if disposition in {
-            ExecutionDisposition.FAILED_TRANSIENT,
-            ExecutionDisposition.FAILED_PERMANENT,
-        }:
-            return TaskStatus.FAILED, ToolCallStatus.FAILED
-
-        return None, None
 
     async def _record_ledger(
         self,

@@ -119,6 +119,10 @@ class _InMemoryTaskRepo:
         self._tasks[task_id] = updated
         return updated
 
+    async def update(self, task: Task) -> Task:
+        self._tasks[task.task_id] = task
+        return task
+
 
 class _InMemoryToolCallRepo:
     def __init__(self) -> None:
@@ -136,6 +140,10 @@ class _InMemoryToolCallRepo:
         updated = tool_call.model_copy(update={"status": status})
         self._tool_calls[tool_call_id] = updated
         return updated
+
+    async def update(self, tool_call: ToolCall) -> ToolCall:
+        self._tool_calls[tool_call.tool_call_id] = tool_call
+        return tool_call
 
 
 class _InMemoryApprovalRepo:

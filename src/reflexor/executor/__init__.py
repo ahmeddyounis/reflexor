@@ -18,4 +18,4 @@ Process/runtime concerns (signals, long-running loops, process lifecycle) belong
 
 from __future__ import annotations
 
-__all__ = ["concurrency", "errors", "idempotency", "retries", "service"]
+__all__ = ["concurrency", "errors", "idempotency", "retries", "service", "state"]

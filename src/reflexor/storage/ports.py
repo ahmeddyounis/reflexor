@@ -102,6 +102,8 @@ class TaskRepo(Protocol):
 
     async def update_status(self, task_id: str, status: TaskStatus) -> Task: ...
 
+    async def update(self, task: Task) -> Task: ...
+
     async def list(
         self,
         *,
@@ -122,6 +124,8 @@ class ToolCallRepo(Protocol):
     async def get_by_idempotency_key(self, idempotency_key: str) -> ToolCall | None: ...
 
     async def update_status(self, tool_call_id: str, status: ToolCallStatus) -> ToolCall: ...
+
+    async def update(self, tool_call: ToolCall) -> ToolCall: ...
 
     async def list(
         self,
@@ -179,6 +183,8 @@ if TYPE_CHECKING:
         async def get_by_idempotency_key(self, idempotency_key: str) -> ToolCall | None: ...
 
         async def update_status(self, tool_call_id: str, status: ToolCallStatus) -> ToolCall: ...
+
+        async def update(self, tool_call: ToolCall) -> ToolCall: ...
 
         async def list(
             self, *, limit: int, offset: int, status: ToolCallStatus | None = None

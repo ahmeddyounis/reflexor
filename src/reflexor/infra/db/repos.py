@@ -627,6 +627,22 @@ class SqlAlchemyToolCallRepo:
         await self._session.flush()
         return tool_call_from_orm(row)
 
+    async def update(self, tool_call: ToolCall) -> ToolCall:
+        normalized = tool_call.tool_call_id.strip()
+        if not normalized:
+            raise ValueError("tool_call_id must be non-empty")
+
+        row = await self._session.get(ToolCallRow, normalized)
+        if row is None:
+            raise KeyError(f"unknown tool_call_id: {normalized!r}")
+
+        row.status = tool_call.status.value
+        row.started_at_ms = tool_call.started_at_ms
+        row.completed_at_ms = tool_call.completed_at_ms
+        row.result_ref = tool_call.result_ref
+        await self._session.flush()
+        return tool_call_from_orm(row)
+
     async def list(
         self,
         *,
@@ -700,6 +716,26 @@ class SqlAlchemyTaskRepo:
             raise KeyError(f"unknown task_id: {normalized!r}")
 
         task_row.status = status.value
+        await self._session.flush()
+
+        tool_call_row = None
+        if task_row.tool_call_id is not None:
+            tool_call_row = await self._session.get(ToolCallRow, task_row.tool_call_id)
+        return _task_from_rows(task_row, tool_call_row)
+
+    async def update(self, task: Task) -> Task:
+        normalized = task.task_id.strip()
+        if not normalized:
+            raise ValueError("task_id must be non-empty")
+
+        task_row = await self._session.get(TaskRow, normalized)
+        if task_row is None:
+            raise KeyError(f"unknown task_id: {normalized!r}")
+
+        task_row.status = task.status.value
+        task_row.attempts = task.attempts
+        task_row.started_at_ms = task.started_at_ms
+        task_row.completed_at_ms = task.completed_at_ms
         await self._session.flush()
 
         tool_call_row = None
