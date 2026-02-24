@@ -8,6 +8,7 @@ class TaskStatus(StrEnum):
 
     PENDING = "pending"
     QUEUED = "queued"
+    WAITING_APPROVAL = "waiting_approval"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"

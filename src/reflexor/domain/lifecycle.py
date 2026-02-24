@@ -8,8 +8,13 @@ from reflexor.domain.models import Task, ToolCall
 
 TASK_ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PENDING: frozenset({TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.CANCELED}),
-    TaskStatus.QUEUED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELED}),
-    TaskStatus.RUNNING: frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}),
+    TaskStatus.QUEUED: frozenset(
+        {TaskStatus.WAITING_APPROVAL, TaskStatus.RUNNING, TaskStatus.CANCELED}
+    ),
+    TaskStatus.RUNNING: frozenset(
+        {TaskStatus.WAITING_APPROVAL, TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}
+    ),
+    TaskStatus.WAITING_APPROVAL: frozenset({TaskStatus.QUEUED, TaskStatus.CANCELED}),
     TaskStatus.FAILED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELED}),
     TaskStatus.SUCCEEDED: frozenset(),
     TaskStatus.CANCELED: frozenset(),
@@ -155,6 +160,36 @@ def _validate_task_invariants(task: Task, *, current_state: TaskStatus) -> None:
             )
         if task.started_at_ms is not None or task.completed_at_ms is not None:
             fail("queued task cannot have started_at_ms/completed_at_ms set")
+        return
+
+    if status == TaskStatus.WAITING_APPROVAL:
+        if task.tool_call is None:
+            fail("waiting approval task must have tool_call")
+        if task.tool_call.status not in {ToolCallStatus.PENDING, ToolCallStatus.RUNNING}:
+            fail(
+                "waiting approval task must have pending/running tool_call",
+                tool_call_status=task.tool_call.status.value,
+            )
+        if task.completed_at_ms is not None:
+            fail("waiting approval task must not have completed_at_ms set")
+        if task.tool_call.completed_at_ms is not None:
+            fail(
+                "waiting approval task must not have completed tool_call",
+                tool_call_completed_at_ms=task.tool_call.completed_at_ms,
+            )
+        if task.tool_call.status == ToolCallStatus.PENDING:
+            if task.tool_call.started_at_ms is not None:
+                fail(
+                    "waiting approval task must not have started tool_call",
+                    tool_call_started_at_ms=task.tool_call.started_at_ms,
+                )
+            if task.started_at_ms is not None:
+                fail("waiting approval task must not have started_at_ms set")
+        if task.tool_call.status == ToolCallStatus.RUNNING:
+            if task.started_at_ms is None:
+                fail("waiting approval task must have started_at_ms when tool_call is running")
+            if task.attempts <= 0:
+                fail("waiting approval task must have attempts >= 1", attempts=task.attempts)
         return
 
     if status == TaskStatus.RUNNING:

@@ -172,6 +172,48 @@ def test_task_complete_requires_tool_call_and_attempts() -> None:
         transition_task(attempts_zero, TaskStatus.SUCCEEDED)
 
 
+def test_task_waiting_approval_invariants() -> None:
+    with pytest.raises(InvalidTransition, match="waiting approval task must have tool_call"):
+        _validate_task_invariants(
+            _task(status=TaskStatus.WAITING_APPROVAL, tool_call=None),
+            current_state=TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(
+        InvalidTransition, match="waiting approval task must not have completed_at_ms"
+    ):
+        _validate_task_invariants(
+            _task(
+                status=TaskStatus.WAITING_APPROVAL,
+                tool_call=_tool_call(status=ToolCallStatus.PENDING),
+                completed_at_ms=1,
+            ),
+            current_state=TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(
+        InvalidTransition, match="waiting approval task must not have started tool_call"
+    ):
+        _validate_task_invariants(
+            _task(
+                status=TaskStatus.WAITING_APPROVAL,
+                tool_call=_tool_call(status=ToolCallStatus.PENDING, started_at_ms=1),
+            ),
+            current_state=TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(InvalidTransition, match="waiting approval task must have attempts >= 1"):
+        _validate_task_invariants(
+            _task(
+                status=TaskStatus.WAITING_APPROVAL,
+                tool_call=_tool_call(status=ToolCallStatus.RUNNING, started_at_ms=1),
+                attempts=0,
+                started_at_ms=1,
+            ),
+            current_state=TaskStatus.RUNNING,
+        )
+
+
 def test_tool_call_complete_requires_started_and_cancel_requires_completed() -> None:
     missing_started = _tool_call(
         status=ToolCallStatus.RUNNING, started_at_ms=None, completed_at_ms=2

@@ -14,7 +14,7 @@ Defined in `src/reflexor/domain/enums.py`.
 
 | Enum | Values (stable strings) | Notes |
 | --- | --- | --- |
-| `TaskStatus` | `pending`, `running`, `succeeded`, `failed`, `canceled` | Task lifecycle state |
+| `TaskStatus` | `pending`, `queued`, `waiting_approval`, `running`, `succeeded`, `failed`, `canceled` | Task lifecycle state |
 | `ToolCallStatus` | `pending`, `running`, `succeeded`, `failed`, `denied`, `canceled` | Tool execution lifecycle state |
 | `ApprovalStatus` | `pending`, `approved`, `denied`, `expired`, `canceled` | `Approval` model currently restricts to `pending/approved/denied` |
 | `RunStatus` | `created`, `running`, `succeeded`, `failed`, `canceled` | Run lifecycle state (used later) |
@@ -80,7 +80,7 @@ Fields:
 | `run_id` | `str` | Required UUID4 string |
 | `name` | `str` | Trimmed; must be non-empty |
 | `status` | `TaskStatus` | Defaults to `pending` |
-| `tool_call` | `ToolCall \| None` | Optional (but lifecycle requires it for `running/succeeded/failed`) |
+| `tool_call` | `ToolCall \| None` | Optional (but lifecycle requires it for `queued/waiting_approval/running/succeeded/failed`) |
 | `attempts` | `int` | Defaults to `0`; must be `>= 0` |
 | `max_attempts` | `int` | Defaults to `1`; must be `> 0` |
 | `timeout_s` | `int` | Defaults to `60`; must be `> 0` |
@@ -174,8 +174,10 @@ invariants. It is **pure and deterministic**:
 
 | From | To |
 | --- | --- |
-| `pending` | `running`, `canceled` |
-| `running` | `succeeded`, `failed`, `canceled` |
+| `pending` | `queued`, `running`, `canceled` |
+| `queued` | `waiting_approval`, `running`, `canceled` |
+| `waiting_approval` | `queued`, `canceled` |
+| `running` | `waiting_approval`, `succeeded`, `failed`, `canceled` |
 | `failed` | `running`, `canceled` |
 | `succeeded` | *(terminal)* |
 | `canceled` | *(terminal)* |
@@ -183,7 +185,12 @@ invariants. It is **pure and deterministic**:
 ```mermaid
 stateDiagram-v2
     [*] --> pending
+    pending --> queued
+    queued --> waiting_approval
+    waiting_approval --> queued
+    queued --> running
     pending --> running
+    running --> waiting_approval
     pending --> canceled
     running --> succeeded
     running --> failed
@@ -194,13 +201,21 @@ stateDiagram-v2
 
 Additional task transition behavior:
 
-- Entering `running` from `pending` or `failed` increments `Task.attempts`.
+- Entering `running` from `pending`, `queued`, or `failed` increments `Task.attempts`.
 - A retry (`failed → running`) is blocked once `attempts >= max_attempts`.
 - Entering `running` clears `Task.completed_at_ms` (sets it to `None`).
 
 Task invariants enforced by lifecycle (see `_validate_task_invariants`):
 
 - `pending`: `started_at_ms` and `completed_at_ms` must be `None`
+- `queued`:
+  - `tool_call` must exist and have `status == ToolCallStatus.PENDING`
+  - `started_at_ms` and `completed_at_ms` must be `None`
+- `waiting_approval`:
+  - `tool_call` must exist and have `status in {pending, running}`
+  - `completed_at_ms` must be `None`
+  - when `tool_call.status == pending`: `started_at_ms` must be `None`
+  - when `tool_call.status == running`: `started_at_ms` is required and `attempts >= 1`
 - `running`:
   - `tool_call` must exist and have `status == ToolCallStatus.RUNNING`
   - `started_at_ms` is required
@@ -274,4 +289,3 @@ Idempotency keys are computed as:
 4. `stable_sha256(...)` over those three parts
 
 Code: `src/reflexor/domain/serialization.py`.
-

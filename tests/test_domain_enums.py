@@ -11,6 +11,7 @@ def test_enum_values_are_stable() -> None:
     assert [status.value for status in TaskStatus] == [
         "pending",
         "queued",
+        "waiting_approval",
         "running",
         "succeeded",
         "failed",
