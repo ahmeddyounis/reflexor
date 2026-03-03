@@ -16,6 +16,7 @@ from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from reflexor.application.approvals_service import ApprovalCommandService
 from reflexor.application.services import (
     ApprovalsService,
     EventSubmissionService,
@@ -104,6 +105,7 @@ class AppContainer:
 
     submit_events: EventSubmissionService
     approvals: ApprovalsService
+    approval_commands: ApprovalCommandService
     queries: QueryService
     run_queries: RunQueryService
     task_queries: TaskQueryService
@@ -229,6 +231,14 @@ class AppContainer:
             run_packet_repo=repos.run_packet_repo,
         )
         approvals = ApprovalsService(uow_factory=uow_factory, approval_repo=repos.approval_repo)
+        approval_commands = ApprovalCommandService(
+            uow_factory=uow_factory,
+            approval_repo=repos.approval_repo,
+            task_repo=repos.task_repo,
+            tool_call_repo=repos.tool_call_repo,
+            queue=effective_queue,
+            clock=effective_clock,
+        )
         queries = QueryService(
             uow_factory=uow_factory,
             task_repo=repos.task_repo,
@@ -255,6 +265,7 @@ class AppContainer:
             orchestrator_engine=orchestrator_engine,
             submit_events=submit_events,
             approvals=approvals,
+            approval_commands=approval_commands,
             queries=queries,
             run_queries=run_queries,
             task_queries=task_queries,

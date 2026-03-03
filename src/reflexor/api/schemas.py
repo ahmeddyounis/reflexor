@@ -134,6 +134,12 @@ class ApprovalDecisionRequest(BaseModel):
     decided_by: str | None = None
 
 
+class ApprovalActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decided_by: str | None = None
+
+
 class ApprovalDecisionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -141,6 +147,7 @@ class ApprovalDecisionResponse(BaseModel):
 
 
 __all__ = [
+    "ApprovalActionRequest",
     "ApprovalDecisionRequest",
     "ApprovalDecisionResponse",
     "ApprovalSummary",

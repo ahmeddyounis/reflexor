@@ -1054,6 +1054,7 @@ class SqlAlchemyApprovalRepo:
         limit: int,
         offset: int,
         status: ApprovalStatus | None = None,
+        run_id: str | None = None,
     ) -> list[Approval]:
         limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)
         if limit_int == 0:
@@ -1064,6 +1065,11 @@ class SqlAlchemyApprovalRepo:
             if not _approval_status_is_supported(status):
                 raise ValueError("unsupported approval status")
             stmt = stmt.where(ApprovalRow.status == status.value)
+        if run_id is not None:
+            normalized = _normalize_optional_str(run_id)
+            if normalized is None:
+                raise ValueError("run_id must be non-empty when provided")
+            stmt = stmt.where(ApprovalRow.run_id == normalized)
 
         if status is None:
             pending_first = case((ApprovalRow.status == ApprovalStatus.PENDING.value, 0), else_=1)
@@ -1075,6 +1081,26 @@ class SqlAlchemyApprovalRepo:
         result = await self._session.execute(stmt)
         rows = result.scalars().all()
         return [approval_from_orm(row) for row in rows]
+
+    async def count(
+        self,
+        *,
+        status: ApprovalStatus | None = None,
+        run_id: str | None = None,
+    ) -> int:
+        stmt = select(func.count(ApprovalRow.approval_id)).select_from(ApprovalRow)
+        if status is not None:
+            if not _approval_status_is_supported(status):
+                raise ValueError("unsupported approval status")
+            stmt = stmt.where(ApprovalRow.status == status.value)
+        if run_id is not None:
+            normalized = _normalize_optional_str(run_id)
+            if normalized is None:
+                raise ValueError("run_id must be non-empty when provided")
+            stmt = stmt.where(ApprovalRow.run_id == normalized)
+
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
 
 
 class SqlAlchemyRunPacketRepo:

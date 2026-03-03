@@ -11,6 +11,7 @@ from typing import Annotated, cast
 from fastapi import Depends, Request
 
 from reflexor.api.container import AppContainer
+from reflexor.application.approvals_service import ApprovalCommandService
 from reflexor.application.services import (
     ApprovalsService,
     EventSubmissionService,
@@ -44,6 +45,13 @@ def get_approvals_service(container: ContainerDep) -> ApprovalsService:
 ApprovalsServiceDep = Annotated[ApprovalsService, Depends(get_approvals_service)]
 
 
+def get_approval_command_service(container: ContainerDep) -> ApprovalCommandService:
+    return container.approval_commands
+
+
+ApprovalCommandServiceDep = Annotated[ApprovalCommandService, Depends(get_approval_command_service)]
+
+
 def get_query_service(container: ContainerDep) -> QueryService:
     return container.queries
 
@@ -66,6 +74,7 @@ TaskQueryServiceDep = Annotated[TaskQueryService, Depends(get_task_query_service
 
 
 __all__ = [
+    "ApprovalCommandServiceDep",
     "ApprovalsServiceDep",
     "ContainerDep",
     "EventSubmitterDep",

@@ -207,7 +207,15 @@ class ApprovalRepo(Protocol):
         limit: int,
         offset: int,
         status: ApprovalStatus | None = None,
+        run_id: str | None = None,
     ) -> list[Approval]: ...
+
+    async def count(
+        self,
+        *,
+        status: ApprovalStatus | None = None,
+        run_id: str | None = None,
+    ) -> int: ...
 
 
 class RunPacketRepo(Protocol):
