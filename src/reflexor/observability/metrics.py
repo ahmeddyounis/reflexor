@@ -187,6 +187,8 @@ class ReflexorMetrics:
     planner_latency_seconds: Histogram
     tool_latency_seconds: Histogram
     tasks_completed_total: Counter
+    executor_retries_total: Counter
+    idempotency_cache_hits_total: Counter
     policy_decisions_total: Counter
     queue_depth: Gauge
     queue_redeliver_total: Counter
@@ -220,6 +222,7 @@ class ReflexorMetrics:
             ),
             tool_latency_seconds=histogram(
                 "tool_latency_seconds",
+                labels=["tool_name", "ok"],
                 registry=effective_registry,
                 description="Tool execution latency in seconds",
             ),
@@ -228,6 +231,17 @@ class ReflexorMetrics:
                 labels=["status"],
                 registry=effective_registry,
                 description="Tasks completed by status",
+            ),
+            executor_retries_total=counter(
+                "executor_retries",
+                labels=["tool_name", "error_code"],
+                registry=effective_registry,
+                description="Executor retries scheduled by tool/error code",
+            ),
+            idempotency_cache_hits_total=counter(
+                "idempotency_cache_hits",
+                registry=effective_registry,
+                description="Total idempotency ledger cache hits",
             ),
             policy_decisions_total=counter(
                 "policy_decisions",

@@ -60,6 +60,8 @@ def test_healthz_and_metrics_endpoints(tmp_path: Path) -> None:
         assert "planner_latency_seconds" in text_before
         assert "tool_latency_seconds" in text_before
         assert "tasks_completed_total" in text_before
+        assert "executor_retries_total" in text_before
+        assert "idempotency_cache_hits_total" in text_before
         assert "policy_decisions_total" in text_before
         assert "queue_depth" in text_before
         assert "queue_redeliver_total" in text_before

@@ -12,6 +12,7 @@ Clean Architecture:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -42,6 +43,7 @@ from reflexor.executor.state import (
 )
 from reflexor.observability.audit_sanitize import sanitize_tool_output
 from reflexor.observability.context import correlation_context, get_correlation_ids
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue
 from reflexor.security.policy.context import tool_spec_from_tool
@@ -133,6 +135,7 @@ class ExecutorService:
         retry_policy: RetryPolicy,
         limiter: ConcurrencyLimiter,
         clock: Clock,
+        metrics: ReflexorMetrics | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._repos = repos
@@ -143,6 +146,7 @@ class ExecutorService:
         self._retry_policy = retry_policy
         self._limiter = limiter
         self._clock = clock
+        self._metrics = metrics
 
     @property
     def queue(self) -> Queue:
@@ -202,9 +206,20 @@ class ExecutorService:
             )
 
             async with self._limiter.limit(tool_call.tool_name):
-                outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
+                tool_latency_s: float | None = None
+                if self._metrics is None:
+                    outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
+                else:
+                    started_s = time.perf_counter()
+                    outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
+                    tool_latency_s = time.perf_counter() - started_s
 
-            return await self._persist_outcome(task, tool_call, outcome)
+            return await self._persist_outcome(
+                task,
+                tool_call,
+                outcome,
+                tool_latency_s=tool_latency_s,
+            )
 
     async def process_lease(self, lease: Lease) -> ExecutionReport:
         """Execute a leased queue item and apply ack/nack retry scheduling.
@@ -369,6 +384,14 @@ class ExecutorService:
                 approval_status=None,
             )
 
+            if self._metrics is not None:
+                self._metrics.idempotency_cache_hits_total.inc()
+                self._metrics.tasks_completed_total.labels(status=completed.task.status.value).inc()
+                self._metrics.policy_decisions_total.labels(
+                    action=decision.action.value,
+                    reason_code=decision.reason_code,
+                ).inc()
+
             return ExecutionReport(
                 task_id=task.task_id,
                 run_id=task.run_id,
@@ -469,6 +492,8 @@ class ExecutorService:
         task: Task,
         tool_call: ToolCall,
         outcome: ToolExecutionOutcome,
+        *,
+        tool_latency_s: float | None = None,
     ) -> ExecutionReport:
         decision = outcome.decision
         result = outcome.result
@@ -527,6 +552,26 @@ class ExecutorService:
                     result=result,
                     disposition=disposition,
                 )
+
+        if self._metrics is not None:
+            self._metrics.tasks_completed_total.labels(status=state.task.status.value).inc()
+            self._metrics.policy_decisions_total.labels(
+                action=decision.action.value,
+                reason_code=decision.reason_code,
+            ).inc()
+
+            if will_retry:
+                error_code = (result.error_code or "unknown").strip() or "unknown"
+                self._metrics.executor_retries_total.labels(
+                    tool_name=tool_call.tool_name,
+                    error_code=error_code,
+                ).inc()
+
+            if tool_latency_s is not None and did_attempt_tool_run:
+                self._metrics.tool_latency_seconds.labels(
+                    tool_name=tool_call.tool_name,
+                    ok="true" if result.ok else "false",
+                ).observe(float(tool_latency_s))
 
         return ExecutionReport(
             task_id=state.task.task_id,

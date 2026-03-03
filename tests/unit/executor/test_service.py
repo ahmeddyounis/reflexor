@@ -5,6 +5,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from prometheus_client import generate_latest
+from prometheus_client.parser import text_string_to_metric_families
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
@@ -25,6 +27,7 @@ from reflexor.executor.service import (
     ExecutorRepoFactory,
     ExecutorService,
 )
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
 from reflexor.security.policy.approvals import InMemoryApprovalStore
@@ -32,9 +35,26 @@ from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
+from reflexor.tools.mock_tool import MockTool
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
+
+
+def _metric_value(
+    text: str,
+    *,
+    name: str,
+    labels: dict[str, str] | None = None,
+) -> float | None:
+    for family in text_string_to_metric_families(text):
+        for sample in family.samples:
+            if sample.name != name:
+                continue
+            if labels is not None and any(sample.labels.get(k) != v for k, v in labels.items()):
+                continue
+            return float(sample.value)
+    return None
 
 
 @dataclass(slots=True)
@@ -268,16 +288,17 @@ async def _build_service(
     *,
     tmp_path: Path,
     settings: ReflexorSettings,
-    tool: _RecordingTool,
+    tool: object,
     task: Task,
     task_repo: _InMemoryTaskRepo,
     tool_call_repo: _InMemoryToolCallRepo,
     approval_repo: _InMemoryApprovalRepo,
     packet_repo: _InMemoryRunPacketRepo,
     ledger: _FakeLedger,
+    metrics: ReflexorMetrics | None = None,
 ) -> ExecutorService:
     registry = ToolRegistry()
-    registry.register(tool)
+    registry.register(tool)  # type: ignore[arg-type]
     runner = _policy_runner(settings=settings, registry=registry)
 
     await task_repo.create(task)
@@ -315,6 +336,7 @@ async def _build_service(
         ),
         limiter=ConcurrencyLimiter(max_global=10),
         clock=_FixedClock(now=1_000),
+        metrics=metrics,
     )
 
 
@@ -634,3 +656,197 @@ async def test_execute_task_success_marks_succeeded_and_records_ledger_success(
     assert report.disposition == ExecutionDisposition.SUCCEEDED
     assert ledger.recorded_success == ["k"]
     assert len(tool.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_metrics_cache_hit_increments_counters(tmp_path: Path) -> None:
+    metrics = ReflexorMetrics.build()
+
+    tool = MockTool(tool_name="tests.mock", permission_scope="fs.read", idempotent=True)
+    run_id = str(uuid4())
+    tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "hello"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-cache",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="cached",
+        status=TaskStatus.QUEUED,
+        tool_call=tool_call,
+        max_attempts=3,
+        created_at_ms=0,
+    )
+
+    ledger = _FakeLedger()
+    ledger.seed_success(
+        "k-cache",
+        CachedOutcome(
+            idempotency_key="k-cache",
+            tool_name=tool.manifest.name,
+            status=LedgerStatus.SUCCEEDED,
+            result=ToolResult(ok=True, data={"ok": True}),
+            created_at_ms=0,
+            updated_at_ms=0,
+        ),
+    )
+
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
+        tool=tool,
+        task=task,
+        task_repo=_InMemoryTaskRepo(),
+        tool_call_repo=_InMemoryToolCallRepo(),
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=_InMemoryRunPacketRepo(),
+        ledger=ledger,
+        metrics=metrics,
+    )
+
+    report = await service.execute_task(task.task_id)
+    assert report.disposition == ExecutionDisposition.CACHED
+
+    text = generate_latest(metrics.registry).decode()
+    assert _metric_value(text, name="idempotency_cache_hits_total") == 1.0
+    assert _metric_value(text, name="tasks_completed_total", labels={"status": "succeeded"}) == 1.0
+    assert (
+        _metric_value(
+            text,
+            name="policy_decisions_total",
+            labels={"action": "allow", "reason_code": "idempotency_cache"},
+        )
+        == 1.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_executor_metrics_success_increments_latency_and_outcomes(tmp_path: Path) -> None:
+    metrics = ReflexorMetrics.build()
+
+    tool = MockTool(tool_name="tests.mock", permission_scope="fs.read", idempotent=True)
+    run_id = str(uuid4())
+    tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "hello"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="ok",
+        status=TaskStatus.QUEUED,
+        tool_call=tool_call,
+        max_attempts=3,
+        created_at_ms=0,
+    )
+
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
+        tool=tool,
+        task=task,
+        task_repo=_InMemoryTaskRepo(),
+        tool_call_repo=_InMemoryToolCallRepo(),
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=_InMemoryRunPacketRepo(),
+        ledger=_FakeLedger(),
+        metrics=metrics,
+    )
+
+    report = await service.execute_task(task.task_id)
+    assert report.disposition == ExecutionDisposition.SUCCEEDED
+
+    text = generate_latest(metrics.registry).decode()
+    assert (
+        _metric_value(
+            text,
+            name="tool_latency_seconds_count",
+            labels={"tool_name": tool.manifest.name, "ok": "true"},
+        )
+        == 1.0
+    )
+    assert _metric_value(text, name="tasks_completed_total", labels={"status": "succeeded"}) == 1.0
+    assert (
+        _metric_value(
+            text,
+            name="policy_decisions_total",
+            labels={"action": "allow", "reason_code": "ok"},
+        )
+        == 1.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_executor_metrics_transient_failure_increments_retry_counter(tmp_path: Path) -> None:
+    metrics = ReflexorMetrics.build()
+
+    tool = MockTool(tool_name="tests.mock", permission_scope="fs.read", idempotent=True)
+    tool.set_static_result(
+        {"text": "hello"},
+        ToolResult(ok=False, error_code="TOOL_ERROR", error_message="boom"),
+    )
+
+    run_id = str(uuid4())
+    tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "hello"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="boom",
+        status=TaskStatus.QUEUED,
+        tool_call=tool_call,
+        max_attempts=3,
+        created_at_ms=0,
+    )
+
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
+        tool=tool,
+        task=task,
+        task_repo=_InMemoryTaskRepo(),
+        tool_call_repo=_InMemoryToolCallRepo(),
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=_InMemoryRunPacketRepo(),
+        ledger=_FakeLedger(),
+        metrics=metrics,
+    )
+
+    report = await service.execute_task(task.task_id)
+    assert report.disposition == ExecutionDisposition.FAILED_TRANSIENT
+
+    text = generate_latest(metrics.registry).decode()
+    assert (
+        _metric_value(
+            text,
+            name="tool_latency_seconds_count",
+            labels={"tool_name": tool.manifest.name, "ok": "false"},
+        )
+        == 1.0
+    )
+    assert _metric_value(text, name="tasks_completed_total", labels={"status": "failed"}) == 1.0
+    assert (
+        _metric_value(
+            text,
+            name="executor_retries_total",
+            labels={"tool_name": tool.manifest.name, "error_code": "TOOL_ERROR"},
+        )
+        == 1.0
+    )
