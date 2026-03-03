@@ -5,7 +5,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus
@@ -22,41 +21,10 @@ from reflexor.security.policy.enforcement import (
 )
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
+from reflexor.tools.mock_tool import MockTool
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
-from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
-
-
-class MockArgs(BaseModel):
-    url: str
-    headers: dict[str, str]
-    body: str
-
-
-class RecordingMockTool:
-    manifest = ToolManifest(
-        name="tests.recording",
-        version="0.1.0",
-        description="Recording mock tool.",
-        permission_scope="fs.read",
-        idempotent=True,
-        max_output_bytes=10_000,
-    )
-    ArgsModel = MockArgs
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    async def run(self, args: MockArgs, ctx: ToolContext) -> ToolResult:
-        self.calls.append({"args": args.model_dump(mode="json"), "dry_run": ctx.dry_run})
-        return ToolResult(
-            ok=True,
-            data={
-                "token": "sk-super-secret-token-1234567890",
-                "authorization": "Bearer abcdefghijklmnopqrstuvwxyz",
-                "text": "Bearer abcdefghijklmnopqrstuvwxyz",
-            },
-        )
+from reflexor.tools.sdk import ToolContext, ToolResult
 
 
 def _tool_call(*, tool_call_id: str, scope: str) -> ToolCall:
@@ -80,7 +48,7 @@ def _gate(*, settings: ReflexorSettings) -> PolicyGate:
 @pytest.mark.asyncio
 async def test_denied_never_invokes_tool(tmp_path: Path) -> None:
     settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=[])
-    tool = RecordingMockTool()
+    tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
 
     registry = ToolRegistry()
     registry.register(tool)
@@ -97,7 +65,7 @@ async def test_denied_never_invokes_tool(tmp_path: Path) -> None:
         ctx=ToolContext(workspace_root=tmp_path, timeout_s=1.0),
     )
 
-    assert tool.calls == []
+    assert tool.invocations == []
     assert outcome.decision.action == PolicyAction.DENY
     assert outcome.decision.reason_code == REASON_SCOPE_DISABLED
     assert outcome.result.ok is False
@@ -113,7 +81,7 @@ async def test_approval_required_creates_single_pending_and_never_invokes_tool(
         enabled_scopes=["fs.read"],
         approval_required_scopes=["fs.read"],
     )
-    tool = RecordingMockTool()
+    tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
 
     registry = ToolRegistry()
     registry.register(tool)
@@ -132,7 +100,7 @@ async def test_approval_required_creates_single_pending_and_never_invokes_tool(
     first = await enforced.execute_tool_call(tool_call, ctx=ctx)
     second = await enforced.execute_tool_call(tool_call, ctx=ctx)
 
-    assert tool.calls == []
+    assert tool.invocations == []
     assert first.result.ok is False
     assert first.result.error_code == APPROVAL_REQUIRED_ERROR_CODE
     assert first.approval_id is not None
@@ -155,7 +123,7 @@ async def test_approval_decision_controls_execution(tmp_path: Path) -> None:
         enabled_scopes=["fs.read"],
         approval_required_scopes=["fs.read"],
     )
-    tool = RecordingMockTool()
+    tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
 
     registry = ToolRegistry()
     registry.register(tool)
@@ -173,7 +141,7 @@ async def test_approval_decision_controls_execution(tmp_path: Path) -> None:
 
     pending = await enforced.execute_tool_call(tool_call, ctx=ctx)
     assert pending.approval_id is not None
-    assert tool.calls == []
+    assert tool.invocations == []
 
     decided = await approvals.decide(
         pending.approval_id, ApprovalStatus.APPROVED, decided_by="tester"
@@ -182,9 +150,9 @@ async def test_approval_decision_controls_execution(tmp_path: Path) -> None:
 
     allowed = await enforced.execute_tool_call(tool_call, ctx=ctx)
     assert allowed.result.ok is True
-    assert len(tool.calls) == 1
+    assert len(tool.invocations) == 1
 
-    tool.calls.clear()
+    tool.reset()
     tool_call_2 = _tool_call(tool_call_id=str(uuid4()), scope="fs.read")
     pending_2 = await enforced.execute_tool_call(tool_call_2, ctx=ctx)
     assert pending_2.approval_id is not None
@@ -197,13 +165,13 @@ async def test_approval_decision_controls_execution(tmp_path: Path) -> None:
     blocked = await enforced.execute_tool_call(tool_call_2, ctx=ctx)
     assert blocked.result.ok is False
     assert blocked.result.error_code == POLICY_DENIED_ERROR_CODE
-    assert tool.calls == []
+    assert tool.invocations == []
 
 
 @pytest.mark.asyncio
 async def test_allow_path_runs_tool_and_sanitizes_result(tmp_path: Path) -> None:
     settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"])
-    tool = RecordingMockTool()
+    tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
 
     registry = ToolRegistry()
     registry.register(tool)
@@ -216,6 +184,17 @@ async def test_allow_path_runs_tool_and_sanitizes_result(tmp_path: Path) -> None
     )
 
     tool_call = _tool_call(tool_call_id=str(uuid4()), scope="fs.read")
+    tool.set_static_result(
+        tool_call.args,
+        ToolResult(
+            ok=True,
+            data={
+                "token": "sk-super-secret-token-1234567890",
+                "authorization": "Bearer abcdefghijklmnopqrstuvwxyz",
+                "text": "Bearer abcdefghijklmnopqrstuvwxyz",
+            },
+        ),
+    )
     outcome = await enforced.execute_tool_call(
         tool_call,
         ctx=ToolContext(workspace_root=tmp_path, timeout_s=1.0),
@@ -223,7 +202,7 @@ async def test_allow_path_runs_tool_and_sanitizes_result(tmp_path: Path) -> None
 
     assert outcome.decision.action == PolicyAction.ALLOW
     assert outcome.result.ok is True
-    assert len(tool.calls) == 1
+    assert len(tool.invocations) == 1
     assert isinstance(outcome.result.data, dict)
 
     data = outcome.result.data

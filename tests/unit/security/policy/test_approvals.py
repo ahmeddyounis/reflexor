@@ -5,7 +5,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus
@@ -13,32 +12,7 @@ from reflexor.domain.models import Approval, ToolCall
 from reflexor.security.policy.approvals import ApprovalBuilder, InMemoryApprovalStore
 from reflexor.security.policy.context import tool_spec_from_tool
 from reflexor.security.policy.decision import PolicyDecision
-from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
-
-
-class MockArgs(BaseModel):
-    url: str
-    headers: dict[str, str]
-    body: str
-
-
-class MockTool:
-    manifest = ToolManifest(
-        name="tests.mock",
-        version="0.1.0",
-        description="Mock tool for policy approval tests.",
-        permission_scope="fs.read",
-        idempotent=True,
-        max_output_bytes=10_000,
-    )
-    ArgsModel = MockArgs
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    async def run(self, args: MockArgs, ctx: ToolContext) -> ToolResult:
-        self.calls.append({"args": args.model_dump(mode="json"), "dry_run": ctx.dry_run})
-        return ToolResult(ok=True, data={"ok": True})
+from reflexor.tools.mock_tool import MockTool
 
 
 def _tool_call(*, tool_call_id: str) -> ToolCall:
@@ -53,15 +27,6 @@ def _tool_call(*, tool_call_id: str) -> ToolCall:
             "headers": {"Authorization": "Bearer abcdefghijklmnopqrstuvwxyz"},
             "body": f"hello {secret}",
         },
-    )
-
-
-def _parsed_args() -> MockArgs:
-    secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
-    return MockArgs(
-        url=f"https://example.com/path?token={secret}",
-        headers={"Authorization": "Bearer abcdefghijklmnopqrstuvwxyz"},
-        body=f"hello {secret}",
     )
 
 
@@ -118,10 +83,10 @@ def test_approval_builder_preview_and_hash_never_include_secret_values(tmp_path:
     settings = ReflexorSettings(workspace_root=tmp_path)
     builder = ApprovalBuilder(settings=settings, max_preview_bytes=400)
 
-    tool = MockTool()
+    tool = MockTool(tool_name="tests.mock", permission_scope="fs.read")
     tool_spec = tool_spec_from_tool(tool)
     tool_call = _tool_call(tool_call_id=str(uuid4()))
-    parsed_args = _parsed_args()
+    parsed_args = tool.ArgsModel.model_validate(tool_call.args)
     decision = PolicyDecision.require_approval(rule_id="tests.rule")
 
     approval = builder.build_pending(
