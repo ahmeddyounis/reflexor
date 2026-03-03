@@ -166,7 +166,7 @@ for an already-pending tool call returns the existing approval rather than creat
 
 `ApprovalBuilder` is designed to prevent secret and large-payload leakage:
 
-- **Payload hash**: computed as `sha256(canonical_json(redacted_args))` where:
+- **Payload hash**: computed as `stable_sha256(canonical_json(redacted_args))` where:
   - `canonical_json(...)` sorts keys and uses stable separators
   - `redacted_args` uses key-based + regex-based redaction (e.g., `authorization`, `token`, etc.)
   - redaction is size-bounded using the stricter of the configured size limits
