@@ -55,7 +55,7 @@ def test_runs_list_text_output_includes_headers_and_row() -> None:
 
 def test_runs_list_json_output_is_valid_and_has_expected_keys() -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["--json", "runs", "list"], obj=_container_with_fake_client())
+    result = runner.invoke(app, ["runs", "list", "--json"], obj=_container_with_fake_client())
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -64,4 +64,3 @@ def test_runs_list_json_output_is_valid_and_has_expected_keys() -> None:
     assert payload["total"] == 1
     assert isinstance(payload["items"], list)
     assert payload["items"][0]["run_id"] == "run-1"
-

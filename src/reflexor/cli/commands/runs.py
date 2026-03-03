@@ -10,6 +10,8 @@ from reflexor.domain.enums import RunStatus
 
 MAX_PAGE_LIMIT = 200
 
+JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
+PRETTY_OPT = typer.Option(False, "--pretty", help="Pretty-print JSON (implies --json).")
 LIMIT_OPT = typer.Option(50, min=0, max=MAX_PAGE_LIMIT)
 OFFSET_OPT = typer.Option(0, min=0)
 STATUS_OPT = typer.Option(None, "--status", help="Filter by status.")
@@ -27,6 +29,8 @@ def register(app: typer.Typer) -> None:
         offset: int = OFFSET_OPT,
         status: RunStatus | None = STATUS_OPT,
         since_ms: int | None = SINCE_MS_OPT,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
     ) -> None:
         container = ctx.obj
         if not isinstance(container, CliContainer):
@@ -37,13 +41,20 @@ def register(app: typer.Typer) -> None:
             client.list_runs(limit=limit, offset=offset, status=status, since_ms=since_ms)
         )
 
-        if container.output_json:
-            output.print_json(page, pretty=container.output_pretty)
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
+            output.print_json(page, pretty=pretty_enabled)
             return
         output.print_runs_table(page)
 
     @runs_app.command("get")
-    def get_run(ctx: typer.Context, run_id: str) -> None:
+    def get_run(
+        ctx: typer.Context,
+        run_id: str,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
+    ) -> None:
         container = ctx.obj
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
@@ -51,8 +62,10 @@ def register(app: typer.Typer) -> None:
         client = container.get_client()
         result = asyncio.run(client.get_run(run_id))
 
-        if container.output_json:
-            output.print_json(result, pretty=container.output_pretty)
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
+            output.print_json(result, pretty=pretty_enabled)
             return
 
         output.print_json(result, pretty=True)

@@ -7,13 +7,20 @@ import typer
 from reflexor.cli import output
 from reflexor.cli.container import CliContainer
 
+JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
+PRETTY_OPT = typer.Option(False, "--pretty", help="Pretty-print JSON (implies --json).")
+
 
 def register(app: typer.Typer) -> None:
     tools_app = typer.Typer(help="Tool registry info.")
     app.add_typer(tools_app, name="tools")
 
     @tools_app.command("list")
-    def list_tools(ctx: typer.Context) -> None:
+    def list_tools(
+        ctx: typer.Context,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
+    ) -> None:
         container = ctx.obj
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
@@ -22,20 +29,24 @@ def register(app: typer.Typer) -> None:
         try:
             tools = asyncio.run(client.list_tools())
         except NotImplementedError:
-            if container.output_json:
+            pretty_enabled = bool(container.output_pretty or pretty)
+            json_enabled = bool(container.output_json or json_output or pretty_enabled)
+            if json_enabled:
                 output.print_json(
                     {
                         "ok": False,
                         "error_code": "not_supported",
                         "message": "tool listing is not supported by this client",
                     },
-                    pretty=container.output_pretty,
+                    pretty=pretty_enabled,
                 )
                 raise typer.Exit(2) from None
             output.abort("tool listing is not supported by this client", exit_code=2)
 
-        if container.output_json:
-            output.print_json({"items": tools}, pretty=container.output_pretty)
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
+            output.print_json({"items": tools}, pretty=pretty_enabled)
             return
 
         rows = [

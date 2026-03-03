@@ -5,14 +5,22 @@ import typer
 from reflexor.cli import output
 from reflexor.cli.container import CliContainer
 
+JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
+PRETTY_OPT = typer.Option(False, "--pretty", help="Pretty-print JSON (implies --json).")
+HOST_OPT = typer.Option("127.0.0.1", help="Bind host.")
+PORT_OPT = typer.Option(8000, help="Bind port.")
+RELOAD_OPT = typer.Option(True, help="Enable auto-reload (dev only).")
+
 
 def register(app: typer.Typer) -> None:
     @app.command()
     def api(
         ctx: typer.Context,
-        host: str = typer.Option("127.0.0.1", help="Bind host."),
-        port: int = typer.Option(8000, help="Bind port."),
-        reload: bool = typer.Option(True, help="Enable auto-reload (dev only)."),
+        host: str = HOST_OPT,
+        port: int = PORT_OPT,
+        reload: bool = RELOAD_OPT,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
     ) -> None:
         """Run the Reflexor API server."""
 
@@ -20,10 +28,12 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        if container.output_json:
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
             output.print_json(
                 {"ok": True, "command": "api", "host": host, "port": port, "reload": reload},
-                pretty=container.output_pretty,
+                pretty=pretty_enabled,
             )
             return
 

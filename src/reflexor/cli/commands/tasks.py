@@ -10,6 +10,8 @@ from reflexor.domain.enums import TaskStatus
 
 MAX_PAGE_LIMIT = 200
 
+JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
+PRETTY_OPT = typer.Option(False, "--pretty", help="Pretty-print JSON (implies --json).")
 LIMIT_OPT = typer.Option(50, min=0, max=MAX_PAGE_LIMIT)
 OFFSET_OPT = typer.Option(0, min=0)
 RUN_ID_OPT = typer.Option(None, "--run-id", help="Filter by run_id.")
@@ -27,6 +29,8 @@ def register(app: typer.Typer) -> None:
         offset: int = OFFSET_OPT,
         run_id: str | None = RUN_ID_OPT,
         status: TaskStatus | None = STATUS_OPT,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
     ) -> None:
         container = ctx.obj
         if not isinstance(container, CliContainer):
@@ -37,8 +41,10 @@ def register(app: typer.Typer) -> None:
             client.list_tasks(limit=limit, offset=offset, run_id=run_id, status=status)
         )
 
-        if container.output_json:
-            output.print_json(page, pretty=container.output_pretty)
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
+            output.print_json(page, pretty=pretty_enabled)
             return
         output.print_tasks_table(page)
 
