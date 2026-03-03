@@ -38,6 +38,16 @@ Dict-valued settings accept either:
 - `dev` (default)
 - `prod`
 
+## API authentication (admin)
+
+The API supports a lightweight admin API key check for "admin" endpoints (runs, tasks, approvals).
+
+- `REFLEXOR_ADMIN_API_KEY` (default unset)
+  - If unset: admin endpoints are allowed in `dev` and denied in `prod`.
+  - If set: require header `X-API-Key` to match.
+- `REFLEXOR_EVENTS_REQUIRE_ADMIN` (default `false`)
+  - If `true`, `/v1/events` also requires admin auth.
+
 ### Prod safety latch
 
 In `prod`, disabling dry-run requires an explicit acknowledgement:
@@ -192,6 +202,8 @@ which can cause excessive churn/cost. Validation enforces positivity but does no
 | `dry_run` | `REFLEXOR_DRY_RUN` | bool | `true` |
 | `allow_side_effects_in_prod` | `REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD` | bool | `false` |
 | `allow_wildcards` | `REFLEXOR_ALLOW_WILDCARDS` | bool | `false` |
+| `admin_api_key` | `REFLEXOR_ADMIN_API_KEY` | str? | unset |
+| `events_require_admin` | `REFLEXOR_EVENTS_REQUIRE_ADMIN` | bool | `false` |
 | `enabled_scopes` | `REFLEXOR_ENABLED_SCOPES` | list[str] | `[]` |
 | `approval_required_scopes` | `REFLEXOR_APPROVAL_REQUIRED_SCOPES` | list[str] | `[]` |
 | `http_allowed_domains` | `REFLEXOR_HTTP_ALLOWED_DOMAINS` | list[str] | `[]` |

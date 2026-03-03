@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from reflexor.api.auth import require_admin
 from reflexor.api.deps import ApprovalsServiceDep
 from reflexor.api.schemas import (
     DEFAULT_PAGE_LIMIT,
@@ -13,7 +14,9 @@ from reflexor.api.schemas import (
     Page,
 )
 
-router = APIRouter(prefix="/v1/approvals", tags=["approvals"])
+router = APIRouter(
+    prefix="/v1/approvals", tags=["approvals"], dependencies=[Depends(require_admin)]
+)
 
 
 @router.get(

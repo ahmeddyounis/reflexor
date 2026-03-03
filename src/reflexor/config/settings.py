@@ -155,6 +155,9 @@ class ReflexorSettings(BaseSettings):
     allow_side_effects_in_prod: bool = False
     allow_wildcards: bool = False
 
+    admin_api_key: str | None = None
+    events_require_admin: bool = False
+
     enabled_scopes: list[str] = Field(default_factory=list)
     approval_required_scopes: list[str] = Field(default_factory=list)
     http_allowed_domains: list[str] = Field(default_factory=list)
@@ -189,6 +192,16 @@ class ReflexorSettings(BaseSettings):
     max_event_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
     max_tool_output_bytes: int = DEFAULT_MAX_TOOL_RESULT_BYTES
     max_run_packet_bytes: int = DEFAULT_MAX_PACKET_BYTES
+
+    @field_validator("admin_api_key")
+    @classmethod
+    def _normalize_admin_api_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        if not trimmed:
+            return None
+        return trimmed
 
     @field_validator(
         "enabled_scopes",

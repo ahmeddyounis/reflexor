@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from reflexor.api.auth import require_events_access
 from reflexor.api.deps import EventSubmitterDep, QueryServiceDep
 from reflexor.api.schemas import ErrorResponse, SubmitEventRequest, SubmitEventResponse
 
-router = APIRouter(prefix="/v1/events", tags=["events"])
+router = APIRouter(
+    prefix="/v1/events", tags=["events"], dependencies=[Depends(require_events_access)]
+)
 
 
 @router.post(

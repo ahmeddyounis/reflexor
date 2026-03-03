@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from reflexor.api.auth import require_admin
 from reflexor.api.deps import QueryServiceDep
 from reflexor.api.schemas import (
     DEFAULT_PAGE_LIMIT,
@@ -12,7 +13,7 @@ from reflexor.api.schemas import (
     RunSummary,
 )
 
-router = APIRouter(prefix="/v1/runs", tags=["runs"])
+router = APIRouter(prefix="/v1/runs", tags=["runs"], dependencies=[Depends(require_admin)])
 
 
 @router.get("", response_model=Page[RunSummary], responses={400: {"model": ErrorResponse}})
