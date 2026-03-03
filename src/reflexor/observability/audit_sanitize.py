@@ -106,12 +106,46 @@ def _prepare_packet_for_audit(
     tool_results = packet.get("tool_results")
     if isinstance(tool_results, Sequence) and not isinstance(tool_results, (str, bytes, bytearray)):
         packet["tool_results"] = [
-            sanitize_tool_output(item, settings=settings, redactor=redactor)
+            _sanitize_tool_result_entry(item, settings=settings, redactor=redactor)
             for item in tool_results
         ]
 
     ordered = _order_packet_keys(packet)
     return ordered
+
+
+def _sanitize_tool_result_entry(
+    obj: object,
+    *,
+    settings: ReflexorSettings,
+    redactor: Redactor,
+) -> object:
+    """Sanitize a single tool_results entry while preserving top-level keys.
+
+    Tool results often mix metadata (IDs, statuses) and tool output (debug/data). We
+    redact using mapping-aware rules (keys + token patterns), then truncate *values*
+    to the tool-output budget. This avoids dropping important top-level fields when
+    `max_tool_output_bytes` is small.
+    """
+
+    if not isinstance(obj, Mapping):
+        return sanitize_tool_output(obj, settings=settings, redactor=redactor)
+
+    redacted = redactor.redact(obj)
+    if not isinstance(redacted, Mapping):
+        return sanitize_tool_output(obj, settings=settings, redactor=redactor)
+
+    value_budget = min(int(settings.max_tool_output_bytes), int(settings.max_run_packet_bytes))
+    sanitized: dict[str, object] = {}
+    for key, value in redacted.items():
+        sanitized[str(key)] = truncate_collection(
+            value,
+            max_bytes=value_budget,
+            max_depth=redactor.max_depth,
+            max_items=redactor.max_items,
+        )
+
+    return sanitized
 
 
 def _order_packet_keys(packet: dict[str, object]) -> dict[str, object]:

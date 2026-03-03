@@ -40,6 +40,7 @@ from reflexor.executor.state import (
     mark_waiting_approval,
     start_execution,
 )
+from reflexor.observability.audit_sanitize import sanitize_tool_output
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue
@@ -51,6 +52,8 @@ from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.context import tool_context_from_settings
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import Tool, ToolResult
+
+DEFAULT_MAX_EXECUTION_RESULT_SUMMARY_BYTES = 8_000
 
 
 class ExecutionDisposition(StrEnum):
@@ -359,6 +362,9 @@ class ExecutorService:
                 tool_call=completed.tool_call,
                 decision=decision,
                 result=cached.result,
+                disposition=ExecutionDisposition.CACHED,
+                retry_after_s=None,
+                will_retry=False,
                 approval_id=None,
                 approval_status=None,
             )
@@ -477,6 +483,10 @@ class ExecutorService:
             now_ms=now_ms,
         )
 
+        will_retry = disposition == ExecutionDisposition.FAILED_TRANSIENT and int(
+            state.task.attempts
+        ) < int(state.task.max_attempts)
+
         uow = self._uow_factory()
         async with uow:
             session = uow.session
@@ -501,6 +511,9 @@ class ExecutorService:
                 tool_call=state.tool_call,
                 decision=decision,
                 result=result,
+                disposition=disposition,
+                retry_after_s=retry_after_s,
+                will_retry=will_retry,
                 approval_id=outcome.approval_id,
                 approval_status=outcome.approval_status,
             )
@@ -632,6 +645,9 @@ class ExecutorService:
         tool_call: ToolCall,
         decision: PolicyDecision,
         result: ToolResult,
+        disposition: ExecutionDisposition,
+        retry_after_s: float | None,
+        will_retry: bool,
         approval_id: str | None,
         approval_status: ApprovalStatus | None,
     ) -> None:
@@ -640,15 +656,33 @@ class ExecutorService:
         if packet is None:
             packet = self._new_fallback_packet(task=task, now_ms=now_ms)
 
+        settings = self._policy_runner.gate.settings
+        summary_budget = min(
+            int(settings.max_tool_output_bytes),
+            DEFAULT_MAX_EXECUTION_RESULT_SUMMARY_BYTES,
+        )
+        summary_settings = settings.model_copy(update={"max_tool_output_bytes": summary_budget})
+
         tool_result_entry: dict[str, object] = {
             "task_id": task.task_id,
             "tool_call_id": tool_call.tool_call_id,
             "tool_name": tool_call.tool_name,
-            "ok": result.ok,
+            "status": disposition.value,
             "error_code": result.error_code,
-            "error_message": result.error_message,
-            "data": result.data,
-            "debug": result.debug,
+            "retry": {
+                "will_retry": bool(will_retry),
+                "retry_after_s": retry_after_s,
+                "attempt": int(task.attempts),
+                "max_attempts": int(task.max_attempts),
+            },
+            "policy_decision": {
+                "action": decision.action.value,
+                "reason_code": decision.reason_code,
+                "rule_id": decision.rule_id,
+            },
+            "result_summary": sanitize_tool_output(
+                result.model_dump(mode="json"), settings=summary_settings
+            ),
             "approval_id": approval_id,
             "approval_status": None if approval_status is None else approval_status.value,
             "recorded_at_ms": now_ms,
