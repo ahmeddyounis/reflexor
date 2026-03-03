@@ -9,6 +9,7 @@ from reflexor.domain.models import ToolCall
 from reflexor.security.policy.context import PolicyContext, ToolSpec
 from reflexor.security.policy.decision import (
     REASON_APPROVAL_REQUIRED,
+    REASON_ARGS_INVALID,
     REASON_DOMAIN_NOT_ALLOWLISTED,
     REASON_PROFILE_GUARDRAIL,
     REASON_SCOPE_DISABLED,
@@ -147,6 +148,7 @@ def test_network_allowlist_rule_denies_unallowlisted_domain(tmp_path: Path) -> N
     assert decision is not None
     assert decision.action == PolicyAction.DENY
     assert decision.reason_code == REASON_DOMAIN_NOT_ALLOWLISTED
+    assert decision.metadata["host"] == "evil.example"
     assert decision.metadata["scope"] == "net.http"
 
 
@@ -176,6 +178,96 @@ def test_network_allowlist_rule_blocks_ip_literals(tmp_path: Path) -> None:
     assert decision is not None
     assert decision.action == PolicyAction.DENY
     assert decision.reason_code == REASON_SSRF_BLOCKED
+
+
+def test_network_allowlist_rule_denies_missing_url_args(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["net.http"],
+        http_allowed_domains=["example.com"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.http",
+        version="0.1.0",
+        description="http tool",
+        permission_scope="net.http",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=PathArgs)
+
+    rule = NetworkAllowlistRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="net.http"),
+        tool_spec=tool_spec,
+        parsed_args=PathArgs(path=Path("x.txt")),
+        ctx=ctx,
+    )
+
+    assert decision is not None
+    assert decision.action == PolicyAction.DENY
+    assert decision.reason_code == REASON_ARGS_INVALID
+    assert decision.metadata["scope"] == "net.http"
+
+
+def test_network_allowlist_rule_allows_allowlisted_webhook_target(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["webhook.emit"],
+        webhook_allowed_targets=["https://hooks.example.com/path"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.webhook",
+        version="0.1.0",
+        description="webhook tool",
+        permission_scope="webhook.emit",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = NetworkAllowlistRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="webhook.emit"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url=" https://Hooks.Example.com/path "),
+        ctx=ctx,
+    )
+    assert decision is None
+
+
+def test_network_allowlist_rule_denies_unallowlisted_webhook_target(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["webhook.emit"],
+        webhook_allowed_targets=["https://hooks.example.com/path"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.webhook",
+        version="0.1.0",
+        description="webhook tool",
+        permission_scope="webhook.emit",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = NetworkAllowlistRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="webhook.emit"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://hooks.example.com/other"),
+        ctx=ctx,
+    )
+
+    assert decision is not None
+    assert decision.action == PolicyAction.DENY
+    assert decision.reason_code == REASON_DOMAIN_NOT_ALLOWLISTED
+    assert decision.metadata["host"] == "hooks.example.com"
+    assert decision.metadata["scope"] == "webhook.emit"
 
 
 def test_workspace_rule_denies_paths_outside_workspace(tmp_path: Path) -> None:
