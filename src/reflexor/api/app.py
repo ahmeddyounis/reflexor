@@ -16,40 +16,30 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from reflexor.api.deps import ApiContainer
+from reflexor.api.container import AppContainer
 from reflexor.api.errors import install_error_handlers
 from reflexor.api.routes import approvals, events, health, runs, tasks
 from reflexor.config import ReflexorSettings, get_settings
-from reflexor.infra.db.engine import create_async_engine, create_async_session_factory
-from reflexor.infra.queue.factory import build_queue
 from reflexor.version import __version__
 
 
-def create_app(*, settings: ReflexorSettings | None = None) -> FastAPI:
+def create_app(
+    *,
+    settings: ReflexorSettings | None = None,
+    container: AppContainer | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         effective_settings = get_settings() if settings is None else settings
-
-        engine = create_async_engine(
-            effective_settings.database_url,
-            echo=bool(effective_settings.db_echo),
+        effective_container = (
+            AppContainer.build(settings=effective_settings) if container is None else container
         )
-        session_factory = create_async_session_factory(engine)
-        queue = build_queue(effective_settings)
-
-        app.state.container = ApiContainer(
-            settings=effective_settings,
-            engine=engine,
-            session_factory=session_factory,
-            queue=queue,
-        )
+        app.state.container = effective_container
+        effective_container.start()
         try:
             yield
         finally:
-            try:
-                await queue.aclose()
-            finally:
-                await engine.dispose()
+            await effective_container.aclose()
 
     app = FastAPI(title="Reflexor", version=__version__, lifespan=lifespan)
     install_error_handlers(app)

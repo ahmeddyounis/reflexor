@@ -1,0 +1,259 @@
+"""API composition root container.
+
+This module wires concrete adapters (infra) to application services and exposes a single
+`AppContainer` object that API routes can depend on.
+
+Clean Architecture:
+- This is an outer-layer composition root. It may import infrastructure adapters.
+- Route modules should depend on services, not directly on SQLAlchemy sessions.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import cast
+
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+from reflexor.application.services import (
+    ApprovalsService,
+    EventSubmissionService,
+    QueryService,
+)
+from reflexor.config import ReflexorSettings, get_settings
+from reflexor.executor.approval_store import DbApprovalStore
+from reflexor.infra.db.engine import (
+    AsyncSessionFactory,
+    create_async_engine,
+    create_async_session_factory,
+)
+from reflexor.infra.db.repos import (
+    SqlAlchemyApprovalRepo,
+    SqlAlchemyEventRepo,
+    SqlAlchemyRunPacketRepo,
+    SqlAlchemyRunRepo,
+    SqlAlchemyTaskRepo,
+    SqlAlchemyToolCallRepo,
+)
+from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
+from reflexor.infra.queue.factory import build_queue
+from reflexor.orchestrator.budgets import BudgetLimits
+from reflexor.orchestrator.clock import Clock, SystemClock
+from reflexor.orchestrator.engine import OrchestratorEngine
+from reflexor.orchestrator.interfaces import (
+    NeedsPlanningRouter,
+    NoOpPlanner,
+    Planner,
+    ReflexRouter,
+)
+from reflexor.orchestrator.persistence import OrchestratorPersistence, OrchestratorRepoFactory
+from reflexor.orchestrator.queue import Queue
+from reflexor.orchestrator.sinks import NoopRunPacketSink, RunPacketSink
+from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
+from reflexor.security.policy.gate import PolicyGate
+from reflexor.security.policy.rules import (
+    ApprovalRequiredRule,
+    NetworkAllowlistRule,
+    ScopeEnabledRule,
+    WorkspaceRule,
+)
+from reflexor.storage.ports import (
+    ApprovalRepo,
+    EventRepo,
+    RunPacketRepo,
+    RunRepo,
+    TaskRepo,
+    ToolCallRepo,
+)
+from reflexor.storage.uow import DatabaseSession, UnitOfWork
+from reflexor.tools.fs_tool import FsListDirTool, FsReadTextTool, FsWriteTextTool
+from reflexor.tools.http_tool import HttpTool
+from reflexor.tools.registry import ToolRegistry
+from reflexor.tools.runner import ToolRunner
+from reflexor.tools.webhook_tool import WebhookEmitTool
+
+
+@dataclass(frozen=True, slots=True)
+class RepoProviders:
+    event_repo: Callable[[DatabaseSession], EventRepo]
+    run_repo: Callable[[DatabaseSession], RunRepo]
+    task_repo: Callable[[DatabaseSession], TaskRepo]
+    tool_call_repo: Callable[[DatabaseSession], ToolCallRepo]
+    approval_repo: Callable[[DatabaseSession], ApprovalRepo]
+    run_packet_repo: Callable[[DatabaseSession], RunPacketRepo]
+
+
+@dataclass(slots=True)
+class AppContainer:
+    """Application container stored on `app.state.container`."""
+
+    settings: ReflexorSettings
+    engine: AsyncEngine
+    session_factory: AsyncSessionFactory
+    uow_factory: Callable[[], UnitOfWork]
+    repos: RepoProviders
+    queue: Queue
+    tool_registry: ToolRegistry
+    tool_runner: ToolRunner
+    policy_gate: PolicyGate
+    policy_runner: PolicyEnforcedToolRunner
+    orchestrator_engine: OrchestratorEngine
+
+    submit_events: EventSubmissionService
+    approvals: ApprovalsService
+    queries: QueryService
+
+    _owns_engine: bool = True
+    _owns_queue: bool = True
+
+    def start(self) -> None:
+        """Start any background application tasks."""
+
+        self.orchestrator_engine.start()
+
+    async def aclose(self) -> None:
+        """Close resources owned by this container."""
+
+        try:
+            await self.orchestrator_engine.aclose()
+        finally:
+            if self._owns_queue:
+                await self.queue.aclose()
+            if self._owns_engine:
+                await self.engine.dispose()
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        settings: ReflexorSettings | None = None,
+        engine: AsyncEngine | None = None,
+        session_factory: AsyncSessionFactory | None = None,
+        queue: Queue | None = None,
+        tool_registry: ToolRegistry | None = None,
+        reflex_router: ReflexRouter | None = None,
+        planner: Planner | None = None,
+        clock: Clock | None = None,
+        run_sink: RunPacketSink | None = None,
+    ) -> AppContainer:
+        effective_settings = get_settings() if settings is None else settings
+
+        owns_engine = engine is None
+        effective_engine = engine or create_async_engine(
+            effective_settings.database_url,
+            echo=bool(effective_settings.db_echo),
+        )
+        effective_session_factory = session_factory or create_async_session_factory(
+            effective_engine
+        )
+
+        def uow_factory() -> UnitOfWork:
+            return SqlAlchemyUnitOfWork(effective_session_factory)
+
+        repos = RepoProviders(
+            event_repo=lambda session: SqlAlchemyEventRepo(cast(AsyncSession, session)),
+            run_repo=lambda session: SqlAlchemyRunRepo(cast(AsyncSession, session)),
+            task_repo=lambda session: SqlAlchemyTaskRepo(cast(AsyncSession, session)),
+            tool_call_repo=lambda session: SqlAlchemyToolCallRepo(cast(AsyncSession, session)),
+            approval_repo=lambda session: SqlAlchemyApprovalRepo(cast(AsyncSession, session)),
+            run_packet_repo=lambda session: SqlAlchemyRunPacketRepo(
+                cast(AsyncSession, session), settings=effective_settings
+            ),
+        )
+
+        owns_queue = queue is None
+        effective_queue = queue or build_queue(effective_settings)
+
+        registry = tool_registry or _build_default_tool_registry(effective_settings)
+        tool_runner = ToolRunner(registry=registry, settings=effective_settings)
+
+        policy_gate = PolicyGate(
+            rules=[
+                ScopeEnabledRule(),
+                NetworkAllowlistRule(),
+                WorkspaceRule(),
+                ApprovalRequiredRule(),
+            ],
+            settings=effective_settings,
+        )
+
+        approval_store = DbApprovalStore(uow_factory=uow_factory, approval_repo=repos.approval_repo)
+
+        policy_runner = PolicyEnforcedToolRunner(
+            registry=registry,
+            runner=tool_runner,
+            gate=policy_gate,
+            approvals=approval_store,
+        )
+
+        orchestrator_repos = OrchestratorRepoFactory(
+            event_repo=repos.event_repo,
+            run_repo=repos.run_repo,
+            task_repo=repos.task_repo,
+            tool_call_repo=repos.tool_call_repo,
+            run_packet_repo=repos.run_packet_repo,
+        )
+        persistence = OrchestratorPersistence(uow_factory=uow_factory, repos=orchestrator_repos)
+
+        limits = BudgetLimits(
+            max_tasks_per_run=effective_settings.max_tasks_per_run,
+            max_tool_calls_per_run=effective_settings.max_tool_calls_per_run,
+            max_wall_time_s=effective_settings.max_run_wall_time_s,
+            max_events_per_planning_cycle=effective_settings.max_events_per_planning_cycle,
+            max_backlog_events=effective_settings.event_backlog_max,
+        )
+
+        effective_clock = clock or SystemClock()
+        orchestrator_engine = OrchestratorEngine(
+            reflex_router=NeedsPlanningRouter() if reflex_router is None else reflex_router,
+            planner=NoOpPlanner() if planner is None else planner,
+            tool_registry=registry,
+            queue=effective_queue,
+            run_sink=NoopRunPacketSink() if run_sink is None else run_sink,
+            persistence=persistence,
+            limits=limits,
+            clock=effective_clock,
+            planner_debounce_s=float(effective_settings.planner_debounce_s),
+            planner_interval_s=float(effective_settings.planner_interval_s),
+        )
+
+        submit_events = EventSubmissionService(orchestrator=orchestrator_engine)
+        approvals = ApprovalsService(uow_factory=uow_factory, approval_repo=repos.approval_repo)
+        queries = QueryService(
+            uow_factory=uow_factory,
+            task_repo=repos.task_repo,
+            run_packet_repo=repos.run_packet_repo,
+        )
+
+        return cls(
+            settings=effective_settings,
+            engine=effective_engine,
+            session_factory=effective_session_factory,
+            uow_factory=uow_factory,
+            repos=repos,
+            queue=effective_queue,
+            tool_registry=registry,
+            tool_runner=tool_runner,
+            policy_gate=policy_gate,
+            policy_runner=policy_runner,
+            orchestrator_engine=orchestrator_engine,
+            submit_events=submit_events,
+            approvals=approvals,
+            queries=queries,
+            _owns_engine=owns_engine,
+            _owns_queue=owns_queue,
+        )
+
+
+def _build_default_tool_registry(settings: ReflexorSettings) -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(FsReadTextTool(settings=settings))
+    registry.register(FsWriteTextTool(settings=settings))
+    registry.register(FsListDirTool(settings=settings))
+    registry.register(HttpTool(settings=settings))
+    registry.register(WebhookEmitTool(settings=settings))
+    return registry
+
+
+__all__ = ["AppContainer", "RepoProviders"]

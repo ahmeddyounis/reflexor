@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from reflexor.api.app import create_app
-from reflexor.api.deps import ApiContainer
+from reflexor.api.container import AppContainer
 from reflexor.config import ReflexorSettings
 
 
@@ -26,5 +26,5 @@ def test_create_app_lifespan_startup_and_shutdown(tmp_path: Path) -> None:
         assert response.json()["status"] == "ok"
 
         container = app.state.container
-        assert isinstance(container, ApiContainer)
+        assert isinstance(container, AppContainer)
         assert container.settings.workspace_root == tmp_path
