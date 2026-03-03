@@ -283,3 +283,26 @@ def test_dev_profile_is_not_permissive_without_scopes_and_allowlists(tmp_path: P
 
     _assert_json_safe_decision(decision)
     assert decision.action == PolicyAction.ALLOW
+
+
+def test_allowlisted_domain_allows_and_includes_no_host_metadata(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["net.http"],
+        http_allowed_domains=["example.com"],
+    )
+    gate = _gate(settings=settings)
+
+    tool_name = "tests.http"
+    tool_spec = _tool_spec(
+        tool_name=tool_name, scope="net.http", side_effects=False, args_model=UrlArgs
+    )
+
+    decision = gate.evaluate(
+        tool_call=_tool_call(tool_name=tool_name, scope="net.http"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://example.com/path"),
+    )
+
+    _assert_json_safe_decision(decision)
+    assert decision.action == PolicyAction.ALLOW
