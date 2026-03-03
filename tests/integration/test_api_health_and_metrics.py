@@ -56,6 +56,13 @@ def test_healthz_and_metrics_endpoints(tmp_path: Path) -> None:
         assert metrics_before.headers["content-type"].startswith("text/plain")
         text_before = metrics_before.text
         assert "events_received_total" in text_before
+        assert "event_to_enqueue_seconds" in text_before
+        assert "planner_latency_seconds" in text_before
+        assert "tool_latency_seconds" in text_before
+        assert "tasks_completed_total" in text_before
+        assert "policy_decisions_total" in text_before
+        assert "queue_depth" in text_before
+        assert "queue_redeliver_total" in text_before
         assert "event_ingest_latency_seconds" in text_before
         assert "approvals_pending_total" in text_before
         assert "api_requests_total" in text_before
