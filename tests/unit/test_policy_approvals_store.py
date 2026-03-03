@@ -96,3 +96,45 @@ async def test_concurrent_create_pending_is_idempotent() -> None:
 
     pending = await store.list_pending(limit=10, offset=0)
     assert len(pending) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_pending_requires_pending_status() -> None:
+    store = InMemoryApprovalStore()
+    approval = _approval(tool_call_id=str(uuid4())).approve(decided_by="alice")
+
+    with pytest.raises(ValueError, match="status=pending"):
+        await store.create_pending(approval)
+
+
+@pytest.mark.asyncio
+async def test_list_pending_validates_pagination_args() -> None:
+    store = InMemoryApprovalStore()
+
+    with pytest.raises(ValueError, match="limit must be >= 0"):
+        await store.list_pending(limit=-1, offset=0)
+    with pytest.raises(ValueError, match="offset must be >= 0"):
+        await store.list_pending(limit=1, offset=-1)
+
+    assert await store.list_pending(limit=0, offset=0) == []
+
+
+@pytest.mark.asyncio
+async def test_decide_validates_decision_and_unknown_ids() -> None:
+    store = InMemoryApprovalStore()
+    created = await store.create_pending(_approval(tool_call_id=str(uuid4())))
+
+    with pytest.raises(ValueError, match="decision must be approved or denied"):
+        await store.decide(created.approval_id, ApprovalStatus.PENDING, decided_by="alice")
+    with pytest.raises(ValueError, match="decision must be approved or denied"):
+        await store.decide(created.approval_id, ApprovalStatus.CANCELED, decided_by="alice")
+
+    with pytest.raises(KeyError, match="unknown approval_id"):
+        await store.decide(str(uuid4()), ApprovalStatus.APPROVED, decided_by="alice")
+
+
+@pytest.mark.asyncio
+async def test_missing_gets_return_none() -> None:
+    store = InMemoryApprovalStore()
+    assert await store.get(str(uuid4())) is None
+    assert await store.get_by_tool_call(str(uuid4())) is None
