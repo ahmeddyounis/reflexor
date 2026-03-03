@@ -6,9 +6,10 @@ This document describes Reflexor’s **task execution** pipeline:
 - the single-task execution pipeline (`ExecutorService`)
 - how retries, idempotency caching, and approvals interact
 
-Reflexor currently wires the worker/executor primarily in tests (there is no standalone worker CLI
-yet). The behavior described here matches what exists in `src/reflexor/executor/` and
-`src/reflexor/worker/`.
+Reflexor currently wires the worker/executor primarily in tests. A dev convenience wrapper exists
+(`reflexor run worker`), but end-to-end multi-process execution still requires a durable queue
+backend (not implemented yet). The behavior described here matches what exists in
+`src/reflexor/executor/` and `src/reflexor/worker/`.
 
 Code:
 
@@ -120,7 +121,7 @@ To continue after approval:
 
 - An external component must (a) set the approval to `approved`, then (b) transition the task from
   `waiting_approval` back to `queued`, and (c) enqueue a new `TaskEnvelope` for that task.
-  (Auto-resume wiring is not implemented yet.)
+  Reflexor’s API/CLI wire this behavior via `ApprovalCommandService` (approve → requeue).
 
 ### Cancellation
 

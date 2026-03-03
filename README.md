@@ -41,8 +41,9 @@ Reflexor ships with safe-by-default runtime configuration in `reflexor.config.Re
   `REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true` or settings validation fails fast.
 
 Note: configuration alone does not execute anything. Runtime enforcement happens when tool calls are
-executed through `reflexor.security.policy.PolicyEnforcedToolRunner`; Reflexor does not yet ship a
-full CLI/executor wiring this up end-to-end.
+executed through `reflexor.security.policy.PolicyEnforcedToolRunner`. Reflexor includes an API and
+CLI wrappers, but multi-process end-to-end execution requires a durable queue backend (not
+implemented yet).
 
 ## Permission scopes (vocabulary)
 
@@ -68,6 +69,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 
 - [Configuration & Profiles](docs/configuration.md)
 - [API](docs/api.md)
+- [CLI](docs/cli.md)
 - [Policy & Approvals](docs/policy.md)
 - [Tools](docs/tools.md)
 - [Queue](docs/queue.md)
@@ -81,15 +83,17 @@ Using `make`:
 ```sh
 make venv
 make ci
+source .venv/bin/activate
 ```
 
 Run the API locally:
 
 ```sh
-uvicorn reflexor.api.app:create_app --factory --reload
+reflexor run api
+# (or) uvicorn reflexor.api.app:create_app --factory --reload
 ```
 
-Send an event:
+Send an event (via API):
 
 ```sh
 curl -X POST http://localhost:8000/v1/events \
@@ -97,9 +101,34 @@ curl -X POST http://localhost:8000/v1/events \
   -d '{"type":"webhook","source":"demo","payload":{},"dedupe_key":"demo:1"}'
 ```
 
-Note: the default queue backend is `inmemory`, which is single-process only. Running the API and a
-worker/executor in separate processes will not share the queue; a durable queue backend is needed
-for multi-process deployments (not implemented yet).
+List runs and tasks (via CLI in remote mode):
+
+```sh
+reflexor --api-url http://localhost:8000 runs list
+reflexor --api-url http://localhost:8000 tasks list
+```
+
+Start the worker (dev wrapper):
+
+```sh
+reflexor run worker --concurrency 1
+```
+
+Approvals (when required by policy):
+
+```sh
+reflexor --api-url http://localhost:8000 approvals list --pending-only
+reflexor --api-url http://localhost:8000 approvals approve <approval_id>
+```
+
+Important: the default queue backend is `inmemory`, which is **single-process only**. Running the
+API and a worker in separate processes will not share the queue; a durable queue backend is needed
+for multi-process deployments (not implemented yet). For an end-to-end offline demo (including an
+approval-required execution path), run:
+
+```sh
+pytest -q tests/integration/test_cli_smoke.py
+```
 
 Or directly with pip:
 
