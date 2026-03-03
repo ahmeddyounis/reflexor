@@ -70,6 +70,7 @@ def test_domain_imports_are_pure() -> None:
         "httpx",
         "sqlalchemy",
         "reflexor.application",
+        "reflexor.api",
         "reflexor.executor",
         "reflexor.infra",
         "reflexor.interfaces",
