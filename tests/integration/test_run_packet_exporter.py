@@ -28,6 +28,7 @@ from reflexor.infra.db.repos import (
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.orchestrator.persistence import OrchestratorPersistence, OrchestratorRepoFactory
 from reflexor.replay.exporter import EXPORT_SCHEMA_VERSION, export_run_packet
+from reflexor.replay.importer import RunPacketImportError, import_run_packet
 from reflexor.storage.ports import RunRecord
 
 
@@ -183,3 +184,134 @@ async def test_export_run_packet_writes_sanitized_bounded_json(
         assert len(raw.encode("utf-8")) <= settings.max_run_packet_bytes
 
     assert not db_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_import_run_packet_creates_new_run_and_packet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        max_tool_output_bytes=200,
+        max_run_packet_bytes=32_000,
+    )
+
+    async with _sqlite_file_session_factory(tmp_path) as (session_factory, db_path):
+        assert db_path.exists()
+        database_url = f"sqlite+aiosqlite:///{db_path}"
+
+        persistence = _persistence(session_factory, settings=settings)
+
+        run_id = _uuid()
+        event_id = _uuid()
+        tool_call_id = _uuid()
+        task_id = _uuid()
+
+        event = Event(
+            event_id=event_id,
+            type="webhook.received",
+            source="tests",
+            received_at_ms=1,
+            payload={"authorization": "Bearer sk-import-secret-1234567890"},
+        )
+        tool_call = ToolCall(
+            tool_call_id=tool_call_id,
+            tool_name="tests.mock",
+            args={"authorization": "Bearer sk-import-secret-1234567890"},
+            permission_scope="net.http",
+            idempotency_key="k1",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=10,
+        )
+        task = Task(
+            task_id=task_id,
+            run_id=run_id,
+            name="mock",
+            status=TaskStatus.PENDING,
+            tool_call=tool_call,
+            created_at_ms=10,
+        )
+
+        packet = RunPacket(
+            run_id=run_id,
+            event=event,
+            reflex_decision={"authorization": "Bearer sk-import-secret-1234567890"},
+            tasks=[task],
+            created_at_ms=10,
+        )
+
+        stored_event = await persistence.persist_event_and_run(
+            event=event,
+            run_record=RunRecord(
+                run_id=run_id,
+                parent_run_id=None,
+                created_at_ms=packet.created_at_ms,
+                started_at_ms=packet.started_at_ms,
+                completed_at_ms=packet.completed_at_ms,
+            ),
+        )
+        await persistence.persist_tasks_and_tool_calls([task])
+        await persistence.finalize_run(
+            packet.model_copy(update={"event": stored_event}, deep=True),
+            enqueued_task_ids=[task_id],
+        )
+
+        monkeypatch.setenv("REFLEXOR_DATABASE_URL", database_url)
+        monkeypatch.setenv("REFLEXOR_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.setenv("REFLEXOR_MAX_TOOL_OUTPUT_BYTES", str(settings.max_tool_output_bytes))
+        monkeypatch.setenv("REFLEXOR_MAX_RUN_PACKET_BYTES", str(settings.max_run_packet_bytes))
+        clear_settings_cache()
+
+        out_path = tmp_path / "exported_run_packet.json"
+        await export_run_packet(run_id, out_path)
+
+        imported_run_id = await import_run_packet(out_path)
+        assert imported_run_id != run_id
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            run_repo = SqlAlchemyRunRepo(cast(AsyncSession, uow.session))
+            imported_run = await run_repo.get(imported_run_id)
+            assert imported_run is not None
+            assert imported_run.parent_run_id == run_id
+
+            packet_repo = SqlAlchemyRunPacketRepo(
+                cast(AsyncSession, uow.session),
+                settings=settings,
+            )
+            imported_packet = await packet_repo.get(imported_run_id)
+            assert imported_packet is not None
+            assert imported_packet.run_id == imported_run_id
+
+            dumped = json.dumps(imported_packet.model_dump(mode="json"), ensure_ascii=False)
+            assert "sk-import-secret-1234567890" not in dumped
+
+
+@pytest.mark.asyncio
+async def test_import_run_packet_rejects_invalid_schema_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        max_tool_output_bytes=200,
+        max_run_packet_bytes=5_000,
+    )
+
+    async with _sqlite_file_session_factory(tmp_path) as (_session_factory, db_path):
+        database_url = f"sqlite+aiosqlite:///{db_path}"
+        monkeypatch.setenv("REFLEXOR_DATABASE_URL", database_url)
+        monkeypatch.setenv("REFLEXOR_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.setenv("REFLEXOR_MAX_TOOL_OUTPUT_BYTES", str(settings.max_tool_output_bytes))
+        monkeypatch.setenv("REFLEXOR_MAX_RUN_PACKET_BYTES", str(settings.max_run_packet_bytes))
+        clear_settings_cache()
+
+        bad_path = tmp_path / "bad_schema.json"
+        bad_path.write_text(
+            json.dumps({"schema_version": 999, "exported_at_ms": 1, "packet": {}}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(RunPacketImportError, match="schema_version"):
+            await import_run_packet(bad_path)
