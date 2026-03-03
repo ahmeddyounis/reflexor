@@ -387,10 +387,6 @@ class ExecutorService:
             if self._metrics is not None:
                 self._metrics.idempotency_cache_hits_total.inc()
                 self._metrics.tasks_completed_total.labels(status=completed.task.status.value).inc()
-                self._metrics.policy_decisions_total.labels(
-                    action=decision.action.value,
-                    reason_code=decision.reason_code,
-                ).inc()
 
             return ExecutionReport(
                 task_id=task.task_id,
@@ -420,6 +416,7 @@ class ExecutorService:
             tool_call=tool_call,
             tool_spec=tool_spec_from_tool(tool),
             parsed_args=parsed_args,
+            emit_metrics=False,
         )
 
         if decision.action == PolicyAction.ALLOW:
@@ -555,10 +552,6 @@ class ExecutorService:
 
         if self._metrics is not None:
             self._metrics.tasks_completed_total.labels(status=state.task.status.value).inc()
-            self._metrics.policy_decisions_total.labels(
-                action=decision.action.value,
-                reason_code=decision.reason_code,
-            ).inc()
 
             if will_retry:
                 error_code = (result.error_code or "unknown").strip() or "unknown"

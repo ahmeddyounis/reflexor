@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
+import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.approvals import ApprovalBuilder, ApprovalStore
 from reflexor.security.policy.context import tool_spec_from_tool
 from reflexor.security.policy.decision import (
@@ -35,6 +37,9 @@ from reflexor.tools.sdk import ToolContext, ToolResult
 
 POLICY_DENIED_ERROR_CODE = "policy_denied"
 APPROVAL_REQUIRED_ERROR_CODE = "approval_required"
+
+
+_logger = structlog.get_logger(__name__)
 
 
 class ToolExecutionOutcome(BaseModel):
@@ -61,12 +66,14 @@ class PolicyEnforcedToolRunner:
         gate: PolicyGate,
         approvals: ApprovalStore,
         approval_builder: ApprovalBuilder | None = None,
+        metrics: ReflexorMetrics | None = None,
     ) -> None:
         self._registry = registry
         self._runner = runner
         self._gate = gate
         self._approvals = approvals
         self._approval_builder = approval_builder or ApprovalBuilder(settings=gate.settings)
+        self._metrics = metrics
 
     @property
     def registry(self) -> ToolRegistry:
@@ -87,6 +94,39 @@ class PolicyEnforcedToolRunner:
     @property
     def approval_builder(self) -> ApprovalBuilder:
         return self._approval_builder
+
+    @property
+    def metrics(self) -> ReflexorMetrics | None:
+        return self._metrics
+
+    def _emit_decision_metric(self, decision: PolicyDecision) -> None:
+        if self._metrics is None:
+            return
+        self._metrics.policy_decisions_total.labels(
+            action=decision.action.value,
+            reason_code=decision.reason_code,
+        ).inc()
+
+    def _log_decision(
+        self,
+        *,
+        decision: PolicyDecision,
+        tool_call: ToolCall,
+        approval_id: str | None = None,
+        approval_status: ApprovalStatus | None = None,
+    ) -> None:
+        payload = {
+            "tool_call_id": tool_call.tool_call_id,
+            "tool_name": tool_call.tool_name,
+            "permission_scope": tool_call.permission_scope,
+            "approval_id": approval_id,
+            "approval_status": None if approval_status is None else approval_status.value,
+            "decision": decision.to_audit_dict(),
+        }
+        if decision.action == PolicyAction.DENY:
+            _logger.warning("policy denied tool call", **payload)
+        elif decision.action == PolicyAction.REQUIRE_APPROVAL:
+            _logger.info("policy requires approval", **payload)
 
     async def execute_tool_call(
         self,
@@ -111,6 +151,8 @@ class PolicyEnforcedToolRunner:
                 error_code=POLICY_DENIED_ERROR_CODE,
                 error_message=str(exc),
             )
+            self._emit_decision_metric(decision)
+            self._log_decision(decision=decision, tool_call=tool_call)
             return ToolExecutionOutcome(
                 tool_call_id=tool_call.tool_call_id,
                 tool_name=tool_call.tool_name,
@@ -136,6 +178,8 @@ class PolicyEnforcedToolRunner:
                 error_message="invalid tool args",
                 debug={"errors": errors},
             )
+            self._emit_decision_metric(decision)
+            self._log_decision(decision=decision, tool_call=tool_call)
             return ToolExecutionOutcome(
                 tool_call_id=tool_call.tool_call_id,
                 tool_name=tool_call.tool_name,
@@ -152,6 +196,7 @@ class PolicyEnforcedToolRunner:
                 error_code=POLICY_DENIED_ERROR_CODE,
                 error_message=decision.message or f"policy denied: {decision.reason_code}",
             )
+            self._log_decision(decision=decision, tool_call=tool_call)
             return ToolExecutionOutcome(
                 tool_call_id=tool_call.tool_call_id,
                 tool_name=tool_call.tool_name,
@@ -181,6 +226,13 @@ class PolicyEnforcedToolRunner:
                         error_message="approval does not match current tool_call args",
                         data={"approval_id": existing.approval_id},
                     )
+                    self._emit_decision_metric(mismatch)
+                    self._log_decision(
+                        decision=mismatch,
+                        tool_call=tool_call,
+                        approval_id=existing.approval_id,
+                        approval_status=existing.status,
+                    )
                     return ToolExecutionOutcome(
                         tool_call_id=tool_call.tool_call_id,
                         tool_name=tool_call.tool_name,
@@ -202,6 +254,7 @@ class PolicyEnforcedToolRunner:
                             "required_rule_id": decision.rule_id,
                         },
                     )
+                    self._emit_decision_metric(override)
                     result = await self._runner.run_tool(
                         tool_call.tool_name,
                         tool_call.args,
@@ -234,6 +287,13 @@ class PolicyEnforcedToolRunner:
                         error_message="approval denied",
                         data={"approval_id": existing.approval_id},
                     )
+                    self._emit_decision_metric(override)
+                    self._log_decision(
+                        decision=override,
+                        tool_call=tool_call,
+                        approval_id=existing.approval_id,
+                        approval_status=existing.status,
+                    )
                     return ToolExecutionOutcome(
                         tool_call_id=tool_call.tool_call_id,
                         tool_name=tool_call.tool_name,
@@ -249,6 +309,12 @@ class PolicyEnforcedToolRunner:
                     error_message="approval required",
                     data={"approval_id": existing.approval_id},
                 )
+                self._log_decision(
+                    decision=decision,
+                    tool_call=tool_call,
+                    approval_id=existing.approval_id,
+                    approval_status=existing.status,
+                )
                 return ToolExecutionOutcome(
                     tool_call_id=tool_call.tool_call_id,
                     tool_name=tool_call.tool_name,
@@ -261,16 +327,23 @@ class PolicyEnforcedToolRunner:
             run_id = _coerce_uuid4_str(ctx.correlation_ids.get("run_id")) or str(uuid4())
             task_id = _coerce_uuid4_str(ctx.correlation_ids.get("task_id")) or str(uuid4())
 
-            created = await self._approvals.create_pending(
-                self._approval_builder.build_pending(
-                    run_id=run_id,
-                    task_id=task_id,
-                    tool_call=tool_call,
-                    tool_spec=tool_spec,
-                    parsed_args=parsed_args,
-                    decision=decision,
-                )
+            attempted = self._approval_builder.build_pending(
+                run_id=run_id,
+                task_id=task_id,
+                tool_call=tool_call,
+                tool_spec=tool_spec,
+                parsed_args=parsed_args,
+                decision=decision,
             )
+            created = await self._approvals.create_pending(
+                attempted
+            )
+            if (
+                self._metrics is not None
+                and created.approval_id == attempted.approval_id
+                and created.status == ApprovalStatus.PENDING
+            ):
+                self._metrics.approvals_pending_total.inc()
 
             if created.status == ApprovalStatus.APPROVED:
                 override = PolicyDecision.allow(
@@ -284,6 +357,7 @@ class PolicyEnforcedToolRunner:
                         "required_rule_id": decision.rule_id,
                     },
                 )
+                self._emit_decision_metric(override)
                 result = await self._runner.run_tool(tool_call.tool_name, tool_call.args, ctx=ctx)
                 return ToolExecutionOutcome(
                     tool_call_id=tool_call.tool_call_id,
@@ -312,6 +386,13 @@ class PolicyEnforcedToolRunner:
                     error_message="approval denied",
                     data={"approval_id": created.approval_id},
                 )
+                self._emit_decision_metric(override)
+                self._log_decision(
+                    decision=override,
+                    tool_call=tool_call,
+                    approval_id=created.approval_id,
+                    approval_status=created.status,
+                )
                 return ToolExecutionOutcome(
                     tool_call_id=tool_call.tool_call_id,
                     tool_name=tool_call.tool_name,
@@ -326,6 +407,12 @@ class PolicyEnforcedToolRunner:
                 error_code=APPROVAL_REQUIRED_ERROR_CODE,
                 error_message="approval required",
                 data={"approval_id": created.approval_id},
+            )
+            self._log_decision(
+                decision=decision,
+                tool_call=tool_call,
+                approval_id=created.approval_id,
+                approval_status=created.status,
             )
             return ToolExecutionOutcome(
                 tool_call_id=tool_call.tool_call_id,

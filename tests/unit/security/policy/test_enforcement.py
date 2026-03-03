@@ -5,10 +5,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from prometheus_client import generate_latest
+from prometheus_client.parser import text_string_to_metric_families
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.approvals import InMemoryApprovalStore
 from reflexor.security.policy.decision import (
     REASON_APPROVAL_DENIED,
@@ -29,6 +32,22 @@ from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolContext, ToolResult
 
 
+def _metric_value(
+    text: str,
+    *,
+    name: str,
+    labels: dict[str, str] | None = None,
+) -> float | None:
+    for family in text_string_to_metric_families(text):
+        for sample in family.samples:
+            if sample.name != name:
+                continue
+            if labels is not None and any(sample.labels.get(k) != v for k, v in labels.items()):
+                continue
+            return float(sample.value)
+    return None
+
+
 def _tool_call(*, tool_call_id: str, scope: str) -> ToolCall:
     return ToolCall(
         tool_call_id=tool_call_id,
@@ -43,23 +62,32 @@ def _tool_call(*, tool_call_id: str, scope: str) -> ToolCall:
     )
 
 
-def _gate(*, settings: ReflexorSettings) -> PolicyGate:
-    return PolicyGate(rules=[ScopeEnabledRule(), ApprovalRequiredRule()], settings=settings)
+def _gate(*, settings: ReflexorSettings, metrics: ReflexorMetrics | None = None) -> PolicyGate:
+    return PolicyGate(
+        rules=[ScopeEnabledRule(), ApprovalRequiredRule()],
+        settings=settings,
+        metrics=metrics,
+    )
 
 
 @pytest.mark.asyncio
 async def test_denied_never_invokes_tool(tmp_path: Path) -> None:
     settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=[])
     tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
+    metrics = ReflexorMetrics.build()
 
     registry = ToolRegistry()
     registry.register(tool)
 
     runner = ToolRunner(registry=registry, settings=settings)
-    gate = _gate(settings=settings)
+    gate = _gate(settings=settings, metrics=metrics)
     approvals = InMemoryApprovalStore()
     enforced = PolicyEnforcedToolRunner(
-        registry=registry, runner=runner, gate=gate, approvals=approvals
+        registry=registry,
+        runner=runner,
+        gate=gate,
+        approvals=approvals,
+        metrics=metrics,
     )
 
     outcome = await enforced.execute_tool_call(
@@ -72,6 +100,15 @@ async def test_denied_never_invokes_tool(tmp_path: Path) -> None:
     assert outcome.decision.reason_code == REASON_SCOPE_DISABLED
     assert outcome.result.ok is False
     assert outcome.result.error_code == POLICY_DENIED_ERROR_CODE
+    text = generate_latest(metrics.registry).decode()
+    assert (
+        _metric_value(
+            text,
+            name="policy_decisions_total",
+            labels={"action": "deny", "reason_code": REASON_SCOPE_DISABLED},
+        )
+        == 1.0
+    )
 
 
 @pytest.mark.asyncio
@@ -84,15 +121,20 @@ async def test_approval_required_creates_single_pending_and_never_invokes_tool(
         approval_required_scopes=["fs.read"],
     )
     tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
+    metrics = ReflexorMetrics.build()
 
     registry = ToolRegistry()
     registry.register(tool)
 
     runner = ToolRunner(registry=registry, settings=settings)
-    gate = _gate(settings=settings)
+    gate = _gate(settings=settings, metrics=metrics)
     approvals = InMemoryApprovalStore()
     enforced = PolicyEnforcedToolRunner(
-        registry=registry, runner=runner, gate=gate, approvals=approvals
+        registry=registry,
+        runner=runner,
+        gate=gate,
+        approvals=approvals,
+        metrics=metrics,
     )
 
     tool_call_id = str(uuid4())
@@ -116,6 +158,16 @@ async def test_approval_required_creates_single_pending_and_never_invokes_tool(
     secret = "sk-super-secret-token-1234567890"
     assert secret not in stored.preview
     assert secret not in json.dumps(first.model_dump(mode="json"), separators=(",", ":"))
+    text = generate_latest(metrics.registry).decode()
+    assert (
+        _metric_value(
+            text,
+            name="policy_decisions_total",
+            labels={"action": "require_approval", "reason_code": "approval_required"},
+        )
+        == 2.0
+    )
+    assert _metric_value(text, name="approvals_pending_total") == 1.0
 
 
 @pytest.mark.asyncio

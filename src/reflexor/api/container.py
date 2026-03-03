@@ -223,6 +223,7 @@ class AppContainer:
                 ApprovalRequiredRule(),
             ],
             settings=effective_settings,
+            metrics=effective_metrics,
         )
 
         approval_store = DbApprovalStore(uow_factory=uow_factory, approval_repo=repos.approval_repo)
@@ -232,6 +233,7 @@ class AppContainer:
             runner=tool_runner,
             gate=policy_gate,
             approvals=approval_store,
+            metrics=effective_metrics,
         )
 
         orchestrator_repos = OrchestratorRepoFactory(

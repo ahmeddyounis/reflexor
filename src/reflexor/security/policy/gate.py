@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.models import ToolCall
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.context import PolicyContext, ToolSpec
 from reflexor.security.policy.decision import REASON_OK, PolicyAction, PolicyDecision
 from reflexor.security.policy.rules import PolicyRule
@@ -48,13 +49,27 @@ class PolicyGate:
         *,
         rules: Sequence[PolicyRule] | None = None,
         settings: ReflexorSettings | None = None,
+        metrics: ReflexorMetrics | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._rules = list(rules or [])
+        self._metrics = metrics
 
     @property
     def settings(self) -> ReflexorSettings:
         return self._settings
+
+    @property
+    def metrics(self) -> ReflexorMetrics | None:
+        return self._metrics
+
+    def _emit_decision_metric(self, decision: PolicyDecision) -> None:
+        if self._metrics is None:
+            return
+        self._metrics.policy_decisions_total.labels(
+            action=decision.action.value,
+            reason_code=decision.reason_code,
+        ).inc()
 
     def _evaluate_with_trace(
         self,
@@ -99,6 +114,7 @@ class PolicyGate:
         tool_spec: ToolSpec,
         parsed_args: BaseModel,
         ctx: PolicyContext | None = None,
+        emit_metrics: bool = True,
         policy_trace: Literal[False] = False,
     ) -> PolicyDecision: ...
 
@@ -110,6 +126,7 @@ class PolicyGate:
         tool_spec: ToolSpec,
         parsed_args: BaseModel,
         ctx: PolicyContext | None = None,
+        emit_metrics: bool = True,
         policy_trace: Literal[True],
     ) -> PolicyEvaluation: ...
 
@@ -120,6 +137,7 @@ class PolicyGate:
         tool_spec: ToolSpec,
         parsed_args: BaseModel,
         ctx: PolicyContext | None = None,
+        emit_metrics: bool = True,
         policy_trace: bool = False,
     ) -> PolicyDecision | PolicyEvaluation:
         resolved_ctx = ctx or PolicyContext.from_settings(self._settings)
@@ -129,6 +147,8 @@ class PolicyGate:
             parsed_args=parsed_args,
             ctx=resolved_ctx,
         )
+        if emit_metrics:
+            self._emit_decision_metric(decision)
         if not policy_trace:
             return decision
         return PolicyEvaluation(decision=decision, trace=trace)

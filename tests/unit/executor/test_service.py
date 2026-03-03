@@ -263,13 +263,21 @@ class _RecordingTool:
 
 
 def _policy_runner(
-    *, settings: ReflexorSettings, registry: ToolRegistry
+    *, settings: ReflexorSettings, registry: ToolRegistry, metrics: ReflexorMetrics | None = None
 ) -> PolicyEnforcedToolRunner:
     runner = ToolRunner(registry=registry, settings=settings)
-    gate = PolicyGate(rules=[ScopeEnabledRule(), ApprovalRequiredRule()], settings=settings)
+    gate = PolicyGate(
+        rules=[ScopeEnabledRule(), ApprovalRequiredRule()],
+        settings=settings,
+        metrics=metrics,
+    )
     approvals = InMemoryApprovalStore()
     return PolicyEnforcedToolRunner(
-        registry=registry, runner=runner, gate=gate, approvals=approvals
+        registry=registry,
+        runner=runner,
+        gate=gate,
+        approvals=approvals,
+        metrics=metrics,
     )
 
 
@@ -299,7 +307,7 @@ async def _build_service(
 ) -> ExecutorService:
     registry = ToolRegistry()
     registry.register(tool)  # type: ignore[arg-type]
-    runner = _policy_runner(settings=settings, registry=registry)
+    runner = _policy_runner(settings=settings, registry=registry, metrics=metrics)
 
     await task_repo.create(task)
     assert task.tool_call is not None
@@ -715,14 +723,6 @@ async def test_executor_metrics_cache_hit_increments_counters(tmp_path: Path) ->
     text = generate_latest(metrics.registry).decode()
     assert _metric_value(text, name="idempotency_cache_hits_total") == 1.0
     assert _metric_value(text, name="tasks_completed_total", labels={"status": "succeeded"}) == 1.0
-    assert (
-        _metric_value(
-            text,
-            name="policy_decisions_total",
-            labels={"action": "allow", "reason_code": "idempotency_cache"},
-        )
-        == 1.0
-    )
 
 
 @pytest.mark.asyncio
