@@ -1,8 +1,14 @@
-def test_cli_main_prints_help(capsys) -> None:
-    from reflexor.cli.main import main
+from typer.testing import CliRunner
 
-    exit_code = main([])
-    captured = capsys.readouterr()
+from reflexor.cli.main import app
 
-    assert exit_code == 0
-    assert "Reflexor CLI (stub)" in captured.out
+
+def test_cli_help_shows_commands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "Reflexor CLI" in result.output
+    assert "Commands" in result.output
+    assert "version" in result.output
+    assert "api" in result.output

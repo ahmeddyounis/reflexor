@@ -1,26 +1,40 @@
 from __future__ import annotations
 
-import argparse
-from collections.abc import Sequence
+import typer
 
-from reflexor import __version__
+from reflexor.version import __version__
+
+app = typer.Typer(
+    help="Reflexor CLI.",
+    add_completion=False,
+    no_args_is_help=True,
+)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="reflexor",
-        description="Reflexor CLI (stub).",
+@app.command()
+def version() -> None:
+    """Print Reflexor version."""
+
+    typer.echo(__version__)
+
+
+@app.command()
+def api(
+    host: str = typer.Option("127.0.0.1", help="Bind host."),
+    port: int = typer.Option(8000, help="Bind port."),
+    reload: bool = typer.Option(True, help="Enable auto-reload (dev only)."),
+) -> None:
+    """Run the Reflexor API server."""
+
+    import uvicorn
+
+    uvicorn.run(
+        "reflexor.api.app:create_app",
+        factory=True,
+        host=host,
+        port=port,
+        reload=reload,
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"reflexor {__version__}",
-    )
-    return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    parser.parse_args(list(argv) if argv is not None else None)
-    parser.print_help()
-    return 0
+__all__ = ["app"]
