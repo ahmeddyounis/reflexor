@@ -157,6 +157,7 @@ class ReflexorSettings(BaseSettings):
 
     admin_api_key: str | None = None
     events_require_admin: bool = False
+    api_url: str | None = None
 
     enabled_scopes: list[str] = Field(default_factory=list)
     approval_required_scopes: list[str] = Field(default_factory=list)
@@ -196,6 +197,16 @@ class ReflexorSettings(BaseSettings):
     @field_validator("admin_api_key")
     @classmethod
     def _normalize_admin_api_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        if not trimmed:
+            return None
+        return trimmed
+
+    @field_validator("api_url")
+    @classmethod
+    def _normalize_api_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
         trimmed = str(value).strip()
