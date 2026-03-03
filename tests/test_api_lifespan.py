@@ -23,7 +23,11 @@ def test_create_app_lifespan_startup_and_shutdown(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.get("/healthz")
         assert response.status_code == 200
-        assert response.json()["status"] == "ok"
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["profile"] == "dev"
+        assert isinstance(payload["time_ms"], int)
+        assert payload["db_ok"] is True
 
         container = app.state.container
         assert isinstance(container, AppContainer)

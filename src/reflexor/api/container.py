@@ -10,12 +10,15 @@ Clean Architecture:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from reflexor.api.metrics import ApiMetrics
 from reflexor.application.approvals_service import ApprovalCommandService
 from reflexor.application.services import (
     ApprovalsService,
@@ -25,6 +28,7 @@ from reflexor.application.services import (
     TaskQueryService,
 )
 from reflexor.config import ReflexorSettings, get_settings
+from reflexor.domain.enums import ApprovalStatus
 from reflexor.executor.approval_store import DbApprovalStore
 from reflexor.infra.db.engine import (
     AsyncSessionFactory,
@@ -92,6 +96,7 @@ class AppContainer:
     """Application container stored on `app.state.container`."""
 
     settings: ReflexorSettings
+    metrics: ApiMetrics
     engine: AsyncEngine
     session_factory: AsyncSessionFactory
     uow_factory: Callable[[], UnitOfWork]
@@ -118,6 +123,29 @@ class AppContainer:
 
         self.orchestrator_engine.start()
 
+    async def ping_db(self, *, timeout_s: float = 1.0) -> bool:
+        async def _ping() -> None:
+            async with self.engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+
+        try:
+            await asyncio.wait_for(_ping(), timeout=timeout_s)
+        except Exception:
+            return False
+        return True
+
+    async def count_pending_approvals(self, *, timeout_s: float = 1.0) -> int | None:
+        async def _count() -> int:
+            uow = self.uow_factory()
+            async with uow:
+                repo = self.repos.approval_repo(uow.session)
+                return await repo.count(status=ApprovalStatus.PENDING)
+
+        try:
+            return int(await asyncio.wait_for(_count(), timeout=timeout_s))
+        except Exception:
+            return None
+
     async def aclose(self) -> None:
         """Close resources owned by this container."""
 
@@ -134,6 +162,7 @@ class AppContainer:
         cls,
         *,
         settings: ReflexorSettings | None = None,
+        metrics: ApiMetrics | None = None,
         engine: AsyncEngine | None = None,
         session_factory: AsyncSessionFactory | None = None,
         queue: Queue | None = None,
@@ -144,6 +173,7 @@ class AppContainer:
         run_sink: RunPacketSink | None = None,
     ) -> AppContainer:
         effective_settings = get_settings() if settings is None else settings
+        effective_metrics = ApiMetrics.build() if metrics is None else metrics
 
         owns_engine = engine is None
         effective_engine = engine or create_async_engine(
@@ -253,6 +283,7 @@ class AppContainer:
 
         return cls(
             settings=effective_settings,
+            metrics=effective_metrics,
             engine=effective_engine,
             session_factory=effective_session_factory,
             uow_factory=uow_factory,
