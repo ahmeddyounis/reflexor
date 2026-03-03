@@ -42,7 +42,7 @@ def test_admin_endpoints_denied_without_key_in_prod(tmp_path: Path) -> None:
 def test_events_public_by_default_even_when_admin_key_set(tmp_path: Path) -> None:
     app = create_app(settings=_settings(tmp_path, profile="dev", admin_api_key="secret"))
     with TestClient(app) as client:
-        response = client.post("/v1/events", json={"type": "t", "source": "s", "payload": {}})
+        response = client.get("/v1/events")
         assert response.status_code == 501
 
 
@@ -53,12 +53,8 @@ def test_events_can_be_protected_when_configured(tmp_path: Path) -> None:
         )
     )
     with TestClient(app) as client:
-        response = client.post("/v1/events", json={"type": "t", "source": "s", "payload": {}})
+        response = client.get("/v1/events")
         assert response.status_code == 401
 
-        response = client.post(
-            "/v1/events",
-            json={"type": "t", "source": "s", "payload": {}},
-            headers={"X-API-Key": "secret"},
-        )
+        response = client.get("/v1/events", headers={"X-API-Key": "secret"})
         assert response.status_code == 501

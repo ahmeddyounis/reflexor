@@ -14,8 +14,15 @@ from reflexor.domain.models import Approval, Task
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.orchestrator.engine import OrchestratorEngine
-from reflexor.storage.ports import ApprovalRepo, RunPacketRepo, TaskRepo
+from reflexor.storage.ports import ApprovalRepo, EventRepo, RunPacketRepo, TaskRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitEventOutcome:
+    event_id: str
+    run_id: str | None
+    duplicate: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +30,39 @@ class EventSubmissionService:
     """Submit events into the orchestrator."""
 
     orchestrator: OrchestratorEngine
+    uow_factory: Callable[[], UnitOfWork]
+    event_repo: Callable[[DatabaseSession], EventRepo]
+    run_packet_repo: Callable[[DatabaseSession], RunPacketRepo]
 
-    async def submit(self, event: Event) -> str:
-        return await self.orchestrator.handle_event(event)
+    async def submit_event(self, event: Event) -> SubmitEventOutcome:
+        if event.dedupe_key is not None:
+            uow = self.uow_factory()
+            async with uow:
+                repo = self.event_repo(uow.session)
+                existing = await repo.get_by_dedupe(
+                    source=event.source, dedupe_key=event.dedupe_key
+                )
+                if existing is not None:
+                    packets = self.run_packet_repo(uow.session)
+                    run_id = await packets.get_run_id_for_event(existing.event_id)
+                    return SubmitEventOutcome(
+                        event_id=existing.event_id,
+                        run_id=run_id,
+                        duplicate=True,
+                    )
+
+        run_id = await self.orchestrator.handle_event(event)
+        event_id = event.event_id
+
+        if event.dedupe_key is not None:
+            uow = self.uow_factory()
+            async with uow:
+                repo = self.event_repo(uow.session)
+                stored = await repo.get_by_dedupe(source=event.source, dedupe_key=event.dedupe_key)
+                if stored is not None:
+                    event_id = stored.event_id
+
+        return SubmitEventOutcome(event_id=event_id, run_id=run_id, duplicate=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,4 +140,5 @@ __all__ = [
     "ApprovalsService",
     "EventSubmissionService",
     "QueryService",
+    "SubmitEventOutcome",
 ]

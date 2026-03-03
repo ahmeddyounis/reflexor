@@ -57,8 +57,10 @@ class SubmitEventRequest(BaseModel):
 class SubmitEventResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    ok: bool = True
     event_id: str
-    run_id: str
+    run_id: str | None
+    duplicate: bool = False
 
 
 class RunSummary(BaseModel):

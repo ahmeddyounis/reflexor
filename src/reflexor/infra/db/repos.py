@@ -118,6 +118,27 @@ class SqlAlchemyEventRepo:
         await self._session.flush()
         return event.model_copy(deep=True)
 
+    async def get_by_dedupe(self, *, source: str, dedupe_key: str) -> Event | None:
+        normalized_source = _normalize_optional_str(source)
+        if normalized_source is None:
+            raise ValueError("source must be non-empty")
+
+        normalized_key = _normalize_optional_str(dedupe_key)
+        if normalized_key is None:
+            raise ValueError("dedupe_key must be non-empty")
+
+        stmt: Select[tuple[EventRow]] = (
+            select(EventRow)
+            .where(EventRow.source == normalized_source, EventRow.dedupe_key == normalized_key)
+            .order_by(EventRow.received_at_ms, EventRow.event_id)
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        row = result.scalars().one_or_none()
+        if row is None:
+            return None
+        return event_from_orm(row)
+
     async def create_or_get_by_dedupe(
         self,
         *,
@@ -953,6 +974,20 @@ class SqlAlchemyRunPacketRepo:
             sanitized_packet["packet_version"] = int(row.packet_version)
             packets.append(RunPacket.model_validate(sanitized_packet))
         return packets
+
+    async def get_run_id_for_event(self, event_id: str) -> str | None:
+        normalized = event_id.strip()
+        if not normalized:
+            raise ValueError("event_id must be non-empty")
+
+        stmt = (
+            select(RunPacketRow.run_id)
+            .where(RunPacketRow.packet["event"]["event_id"].as_string() == normalized)
+            .order_by(RunPacketRow.created_at_ms, RunPacketRow.run_id)
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
 
 class SqlAlchemyIdempotencyLedger:

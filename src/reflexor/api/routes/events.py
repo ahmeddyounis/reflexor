@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from reflexor.api.auth import require_events_access
-from reflexor.api.deps import EventSubmitterDep, QueryServiceDep
+from reflexor.api.deps import ContainerDep, EventSubmitterDep, QueryServiceDep
 from reflexor.api.schemas import ErrorResponse, SubmitEventRequest, SubmitEventResponse
+from reflexor.domain.models_event import Event
 
 router = APIRouter(
     prefix="/v1/events", tags=["events"], dependencies=[Depends(require_events_access)]
@@ -15,12 +16,38 @@ router = APIRouter(
     "",
     response_model=SubmitEventResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    responses={400: {"model": ErrorResponse}},
+    responses={400: {"model": ErrorResponse}, 413: {"model": ErrorResponse}},
 )
 async def submit_event(
-    _submitter: EventSubmitterDep, _request: SubmitEventRequest
+    submitter: EventSubmitterDep,
+    container: ContainerDep,
+    request: SubmitEventRequest,
+    response: Response,
 ) -> SubmitEventResponse:
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="not implemented")
+    received_at_ms = request.received_at_ms
+    if received_at_ms is None:
+        received_at_ms = int(container.orchestrator_engine.clock.now_ms())
+
+    event = Event.model_validate(
+        {
+            "type": request.type,
+            "source": request.source,
+            "received_at_ms": received_at_ms,
+            "payload": request.payload,
+            "dedupe_key": request.dedupe_key,
+        },
+        context={"max_payload_bytes": int(container.settings.max_event_payload_bytes)},
+    )
+
+    outcome = await submitter.submit_event(event)
+    if outcome.duplicate:
+        response.status_code = status.HTTP_200_OK
+
+    return SubmitEventResponse(
+        event_id=outcome.event_id,
+        run_id=outcome.run_id,
+        duplicate=outcome.duplicate,
+    )
 
 
 @router.get("")

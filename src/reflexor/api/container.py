@@ -218,7 +218,12 @@ class AppContainer:
             planner_interval_s=float(effective_settings.planner_interval_s),
         )
 
-        submit_events = EventSubmissionService(orchestrator=orchestrator_engine)
+        submit_events = EventSubmissionService(
+            orchestrator=orchestrator_engine,
+            uow_factory=uow_factory,
+            event_repo=repos.event_repo,
+            run_packet_repo=repos.run_packet_repo,
+        )
         approvals = ApprovalsService(uow_factory=uow_factory, approval_repo=repos.approval_repo)
         queries = QueryService(
             uow_factory=uow_factory,

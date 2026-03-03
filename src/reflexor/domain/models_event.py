@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 DEFAULT_MAX_PAYLOAD_KEYS = 200
 DEFAULT_MAX_PAYLOAD_BYTES = 64_000
@@ -76,21 +76,26 @@ class Event(BaseModel):
 
     @field_validator("payload")
     @classmethod
-    def _validate_payload(cls, value: dict[str, object]) -> dict[str, object]:
+    def _validate_payload(cls, value: dict[str, object], info: ValidationInfo) -> dict[str, object]:
         key_count = _count_payload_keys(value)
         if key_count > DEFAULT_MAX_PAYLOAD_KEYS:
             raise ValueError(
                 f"payload has too many keys ({key_count}); max is {DEFAULT_MAX_PAYLOAD_KEYS}"
             )
 
+        max_bytes = DEFAULT_MAX_PAYLOAD_BYTES
+        if info.context is not None and "max_payload_bytes" in info.context:
+            raw_max = info.context["max_payload_bytes"]
+            max_bytes = int(raw_max)
+            if max_bytes <= 0:  # pragma: no cover
+                raise ValueError("max_payload_bytes must be > 0")
+
         try:
             size_bytes = _payload_bytes(value)
         except TypeError as exc:
             raise ValueError("payload must be JSON-serializable") from exc
 
-        if size_bytes > DEFAULT_MAX_PAYLOAD_BYTES:
-            raise ValueError(
-                f"payload is too large ({size_bytes} bytes); max is {DEFAULT_MAX_PAYLOAD_BYTES}"
-            )
+        if size_bytes > max_bytes:
+            raise ValueError(f"payload is too large ({size_bytes} bytes); max is {max_bytes}")
 
         return value
