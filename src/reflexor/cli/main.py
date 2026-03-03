@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import typer
 
-from reflexor.version import __version__
+from reflexor.cli.commands import api as api_command
+from reflexor.cli.commands import version as version_command
+from reflexor.cli.container import CliContainer
 
 app = typer.Typer(
     help="Reflexor CLI.",
@@ -10,31 +12,13 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-
-@app.command()
-def version() -> None:
-    """Print Reflexor version."""
-
-    typer.echo(__version__)
+@app.callback()
+def _main(ctx: typer.Context) -> None:
+    ctx.obj = CliContainer.build()
 
 
-@app.command()
-def api(
-    host: str = typer.Option("127.0.0.1", help="Bind host."),
-    port: int = typer.Option(8000, help="Bind port."),
-    reload: bool = typer.Option(True, help="Enable auto-reload (dev only)."),
-) -> None:
-    """Run the Reflexor API server."""
-
-    import uvicorn
-
-    uvicorn.run(
-        "reflexor.api.app:create_app",
-        factory=True,
-        host=host,
-        port=port,
-        reload=reload,
-    )
+api_command.register(app)
+version_command.register(app)
 
 
 __all__ = ["app"]
