@@ -40,6 +40,7 @@ class WorkerRunner:
     dequeue_wait_s: float | None = _DEFAULT_DEQUEUE_WAIT_S
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     install_signal_handlers: bool = True
+    close_queue_on_exit: bool = True
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger(__name__))
 
     async def run(self) -> None:
@@ -73,7 +74,8 @@ class WorkerRunner:
             except asyncio.CancelledError:
                 pass
 
-            await self.queue.aclose()
+            if self.close_queue_on_exit:
+                await self.queue.aclose()
 
     def request_stop(self) -> None:
         self.stop_event.set()
