@@ -6,8 +6,10 @@ from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
 from reflexor.security.policy.context import PolicyContext, tool_spec_from_catalog
-from reflexor.tools.impl import EchoTool
+from reflexor.tools.fs_tool import FsReadTextTool
+from reflexor.tools.http_tool import HttpTool
 from reflexor.tools.registry import ToolRegistry
+from reflexor.tools.webhook_tool import WebhookEmitTool
 
 
 def test_policy_context_from_settings(tmp_path: Path) -> None:
@@ -40,9 +42,22 @@ def test_policy_context_from_settings(tmp_path: Path) -> None:
 
 def test_tool_spec_can_be_built_from_registry() -> None:
     registry = ToolRegistry()
-    registry.register(EchoTool())
+    registry.register(FsReadTextTool())
 
-    spec = tool_spec_from_catalog(registry, tool_name="debug.echo")
-    assert spec.tool_name == "debug.echo"
-    assert spec.manifest.name == "debug.echo"
+    spec = tool_spec_from_catalog(registry, tool_name="fs.read_text")
+    assert spec.tool_name == "fs.read_text"
+    assert spec.manifest.name == "fs.read_text"
     assert issubclass(spec.args_model, BaseModel)
+
+
+def test_tool_spec_can_be_built_for_builtin_tools() -> None:
+    registry = ToolRegistry()
+    registry.register(FsReadTextTool())
+    registry.register(HttpTool())
+    registry.register(WebhookEmitTool())
+
+    for tool_name in ("fs.read_text", "net.http", "webhook.emit"):
+        spec = tool_spec_from_catalog(registry, tool_name=tool_name)
+        assert spec.tool_name == tool_name
+        assert spec.manifest.name == tool_name
+        assert issubclass(spec.args_model, BaseModel)
