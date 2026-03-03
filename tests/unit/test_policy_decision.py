@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 
 from reflexor.security.policy.decision import (
+    REASON_APPROVAL_DENIED,
     REASON_APPROVAL_REQUIRED,
+    REASON_APPROVED_OVERRIDE,
     REASON_ARGS_INVALID,
     REASON_DOMAIN_NOT_ALLOWLISTED,
     REASON_OK,
@@ -31,6 +33,8 @@ def test_reason_codes_are_stable() -> None:
     assert REASON_DOMAIN_NOT_ALLOWLISTED == "domain_not_allowlisted"
     assert REASON_WORKSPACE_VIOLATION == "workspace_violation"
     assert REASON_APPROVAL_REQUIRED == "approval_required"
+    assert REASON_APPROVED_OVERRIDE == "approved_override"
+    assert REASON_APPROVAL_DENIED == "approval_denied"
     assert REASON_PROFILE_GUARDRAIL == "profile_guardrail"
     assert REASON_SSRF_BLOCKED == "ssrf_blocked"
 

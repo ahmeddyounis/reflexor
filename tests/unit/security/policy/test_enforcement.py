@@ -11,6 +11,8 @@ from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
 from reflexor.security.policy.approvals import InMemoryApprovalStore
 from reflexor.security.policy.decision import (
+    REASON_APPROVAL_DENIED,
+    REASON_APPROVED_OVERRIDE,
     REASON_SCOPE_DISABLED,
     PolicyAction,
 )
@@ -151,6 +153,8 @@ async def test_approval_decision_controls_execution(tmp_path: Path) -> None:
     allowed = await enforced.execute_tool_call(tool_call, ctx=ctx)
     assert allowed.result.ok is True
     assert len(tool.invocations) == 1
+    assert allowed.decision.action == PolicyAction.ALLOW
+    assert allowed.decision.reason_code == REASON_APPROVED_OVERRIDE
 
     tool.reset()
     tool_call_2 = _tool_call(tool_call_id=str(uuid4()), scope="fs.read")
@@ -166,6 +170,8 @@ async def test_approval_decision_controls_execution(tmp_path: Path) -> None:
     assert blocked.result.ok is False
     assert blocked.result.error_code == POLICY_DENIED_ERROR_CODE
     assert tool.invocations == []
+    assert blocked.decision.action == PolicyAction.DENY
+    assert blocked.decision.reason_code == REASON_APPROVAL_DENIED
 
 
 @pytest.mark.asyncio

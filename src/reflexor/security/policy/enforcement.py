@@ -21,6 +21,8 @@ from reflexor.domain.models import ToolCall
 from reflexor.security.policy.approvals import ApprovalBuilder, ApprovalStore
 from reflexor.security.policy.context import tool_spec_from_tool
 from reflexor.security.policy.decision import (
+    REASON_APPROVAL_DENIED,
+    REASON_APPROVED_OVERRIDE,
     REASON_ARGS_INVALID,
     REASON_TOOL_UNKNOWN,
     PolicyAction,
@@ -189,6 +191,17 @@ class PolicyEnforcedToolRunner:
                     )
 
                 if existing.status == ApprovalStatus.APPROVED:
+                    override = PolicyDecision.allow(
+                        reason_code=REASON_APPROVED_OVERRIDE,
+                        message="approval approved",
+                        rule_id="policy_enforced_runner",
+                        metadata={
+                            **decision.metadata,
+                            "approval_id": existing.approval_id,
+                            "required_reason_code": decision.reason_code,
+                            "required_rule_id": decision.rule_id,
+                        },
+                    )
                     result = await self._runner.run_tool(
                         tool_call.tool_name,
                         tool_call.args,
@@ -197,13 +210,24 @@ class PolicyEnforcedToolRunner:
                     return ToolExecutionOutcome(
                         tool_call_id=tool_call.tool_call_id,
                         tool_name=tool_call.tool_name,
-                        decision=decision,
+                        decision=override,
                         result=result,
                         approval_id=existing.approval_id,
                         approval_status=existing.status,
                     )
 
                 if existing.status == ApprovalStatus.DENIED:
+                    override = PolicyDecision.deny(
+                        reason_code=REASON_APPROVAL_DENIED,
+                        message="approval denied",
+                        rule_id="policy_enforced_runner",
+                        metadata={
+                            **decision.metadata,
+                            "approval_id": existing.approval_id,
+                            "required_reason_code": decision.reason_code,
+                            "required_rule_id": decision.rule_id,
+                        },
+                    )
                     result = ToolResult(
                         ok=False,
                         error_code=POLICY_DENIED_ERROR_CODE,
@@ -213,7 +237,7 @@ class PolicyEnforcedToolRunner:
                     return ToolExecutionOutcome(
                         tool_call_id=tool_call.tool_call_id,
                         tool_name=tool_call.tool_name,
-                        decision=decision,
+                        decision=override,
                         result=result,
                         approval_id=existing.approval_id,
                         approval_status=existing.status,
@@ -249,17 +273,39 @@ class PolicyEnforcedToolRunner:
             )
 
             if created.status == ApprovalStatus.APPROVED:
+                override = PolicyDecision.allow(
+                    reason_code=REASON_APPROVED_OVERRIDE,
+                    message="approval approved",
+                    rule_id="policy_enforced_runner",
+                    metadata={
+                        **decision.metadata,
+                        "approval_id": created.approval_id,
+                        "required_reason_code": decision.reason_code,
+                        "required_rule_id": decision.rule_id,
+                    },
+                )
                 result = await self._runner.run_tool(tool_call.tool_name, tool_call.args, ctx=ctx)
                 return ToolExecutionOutcome(
                     tool_call_id=tool_call.tool_call_id,
                     tool_name=tool_call.tool_name,
-                    decision=decision,
+                    decision=override,
                     result=result,
                     approval_id=created.approval_id,
                     approval_status=created.status,
                 )
 
             if created.status == ApprovalStatus.DENIED:
+                override = PolicyDecision.deny(
+                    reason_code=REASON_APPROVAL_DENIED,
+                    message="approval denied",
+                    rule_id="policy_enforced_runner",
+                    metadata={
+                        **decision.metadata,
+                        "approval_id": created.approval_id,
+                        "required_reason_code": decision.reason_code,
+                        "required_rule_id": decision.rule_id,
+                    },
+                )
                 result = ToolResult(
                     ok=False,
                     error_code=POLICY_DENIED_ERROR_CODE,
@@ -269,7 +315,7 @@ class PolicyEnforcedToolRunner:
                 return ToolExecutionOutcome(
                     tool_call_id=tool_call.tool_call_id,
                     tool_name=tool_call.tool_name,
-                    decision=decision,
+                    decision=override,
                     result=result,
                     approval_id=created.approval_id,
                     approval_status=created.status,

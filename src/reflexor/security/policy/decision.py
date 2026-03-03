@@ -33,6 +33,8 @@ REASON_ARGS_INVALID = "args_invalid"
 REASON_DOMAIN_NOT_ALLOWLISTED = "domain_not_allowlisted"
 REASON_WORKSPACE_VIOLATION = "workspace_violation"
 REASON_APPROVAL_REQUIRED = "approval_required"
+REASON_APPROVED_OVERRIDE = "approved_override"
+REASON_APPROVAL_DENIED = "approval_denied"
 REASON_PROFILE_GUARDRAIL = "profile_guardrail"
 REASON_SSRF_BLOCKED = "ssrf_blocked"
 
