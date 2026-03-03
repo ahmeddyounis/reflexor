@@ -16,6 +16,7 @@ from reflexor.application.services import (
     EventSubmissionService,
     QueryService,
     RunQueryService,
+    TaskQueryService,
 )
 
 
@@ -57,11 +58,19 @@ def get_run_query_service(container: ContainerDep) -> RunQueryService:
 RunQueryServiceDep = Annotated[RunQueryService, Depends(get_run_query_service)]
 
 
+def get_task_query_service(container: ContainerDep) -> TaskQueryService:
+    return container.task_queries
+
+
+TaskQueryServiceDep = Annotated[TaskQueryService, Depends(get_task_query_service)]
+
+
 __all__ = [
     "ApprovalsServiceDep",
     "ContainerDep",
     "EventSubmitterDep",
     "QueryServiceDep",
     "RunQueryServiceDep",
+    "TaskQueryServiceDep",
     "get_container",
 ]

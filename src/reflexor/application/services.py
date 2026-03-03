@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from reflexor.domain.enums import ApprovalStatus, RunStatus
+from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus
 from reflexor.domain.models import Approval, Task
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
@@ -21,6 +21,7 @@ from reflexor.storage.ports import (
     RunRepo,
     RunSummary,
     TaskRepo,
+    TaskSummary,
 )
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 
@@ -184,10 +185,39 @@ class RunQueryService:
             return await repo.get(run_id)
 
 
+@dataclass(frozen=True, slots=True)
+class TaskQueryService:
+    """Read-path task queries for admin/API interfaces."""
+
+    uow_factory: Callable[[], UnitOfWork]
+    task_repo: Callable[[DatabaseSession], TaskRepo]
+
+    async def list_tasks(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        run_id: str | None = None,
+        status: TaskStatus | None = None,
+    ) -> tuple[list[TaskSummary], int]:
+        uow = self.uow_factory()
+        async with uow:
+            repo = self.task_repo(uow.session)
+            total = await repo.count_summaries(run_id=run_id, status=status)
+            items = await repo.list_summaries(
+                limit=limit,
+                offset=offset,
+                run_id=run_id,
+                status=status,
+            )
+            return items, total
+
+
 __all__ = [
     "ApprovalsService",
     "EventSubmissionService",
     "QueryService",
     "RunQueryService",
+    "TaskQueryService",
     "SubmitEventOutcome",
 ]

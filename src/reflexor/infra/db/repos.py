@@ -33,7 +33,7 @@ from reflexor.infra.db.models import (
     ToolCallRow,
 )
 from reflexor.observability.audit_sanitize import sanitize_for_audit, sanitize_tool_output
-from reflexor.storage.ports import RunRecord, RunSummary
+from reflexor.storage.ports import RunRecord, RunSummary, TaskSummary
 from reflexor.tools.sdk import ToolResult
 
 RUN_PACKET_VERSION = 1
@@ -846,6 +846,94 @@ class SqlAlchemyTaskRepo:
         if task_row.tool_call_id is not None:
             tool_call_row = await self._session.get(ToolCallRow, task_row.tool_call_id)
         return _task_from_rows(task_row, tool_call_row)
+
+    async def list_summaries(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        run_id: str | None = None,
+        status: TaskStatus | None = None,
+    ) -> list[TaskSummary]:
+        limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)
+        if limit_int == 0:
+            return []
+
+        stmt = cast(
+            Select[tuple[TaskRow, ToolCallRow | None]],
+            select(TaskRow, ToolCallRow).outerjoin(
+                ToolCallRow, TaskRow.tool_call_id == ToolCallRow.tool_call_id
+            ),
+        )
+        if run_id is not None:
+            normalized = _normalize_optional_str(run_id)
+            if normalized is None:
+                raise ValueError("run_id must be non-empty when provided")
+            stmt = stmt.where(TaskRow.run_id == normalized)
+        if status is not None:
+            stmt = stmt.where(TaskRow.status == status.value)
+
+        stmt = (
+            stmt.order_by(TaskRow.created_at_ms.desc(), TaskRow.task_id.desc())
+            .limit(limit_int)
+            .offset(offset_int)
+        )
+        result = await self._session.execute(stmt)
+        rows = result.all()
+
+        summaries: list[TaskSummary] = []
+        for task_row, tool_call_row in rows:
+            tool_call_status = None
+            tool_call_id = None
+            tool_name = None
+            permission_scope = None
+            idempotency_key = None
+
+            if tool_call_row is not None:
+                tool_call_id = tool_call_row.tool_call_id
+                tool_name = tool_call_row.tool_name
+                permission_scope = tool_call_row.permission_scope
+                idempotency_key = tool_call_row.idempotency_key
+                tool_call_status = ToolCallStatus(str(tool_call_row.status))
+
+            summaries.append(
+                TaskSummary(
+                    task_id=task_row.task_id,
+                    run_id=task_row.run_id,
+                    name=task_row.name,
+                    status=TaskStatus(str(task_row.status)),
+                    attempts=int(task_row.attempts),
+                    max_attempts=int(task_row.max_attempts),
+                    timeout_s=int(task_row.timeout_s),
+                    depends_on=list(task_row.depends_on),
+                    created_at_ms=int(task_row.created_at_ms),
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    permission_scope=permission_scope,
+                    idempotency_key=idempotency_key,
+                    tool_call_status=tool_call_status,
+                )
+            )
+
+        return summaries
+
+    async def count_summaries(
+        self,
+        *,
+        run_id: str | None = None,
+        status: TaskStatus | None = None,
+    ) -> int:
+        stmt = select(func.count(TaskRow.task_id)).select_from(TaskRow)
+        if run_id is not None:
+            normalized = _normalize_optional_str(run_id)
+            if normalized is None:
+                raise ValueError("run_id must be non-empty when provided")
+            stmt = stmt.where(TaskRow.run_id == normalized)
+        if status is not None:
+            stmt = stmt.where(TaskRow.status == status.value)
+
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
 
     async def list(
         self,

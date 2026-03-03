@@ -99,6 +99,7 @@ def create_app(
     app.include_router(runs.router)
     app.include_router(runs.compat_router)
     app.include_router(tasks.router)
+    app.include_router(tasks.compat_router)
     app.include_router(approvals.router)
     return app
 

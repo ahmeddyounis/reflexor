@@ -42,6 +42,27 @@ class RunSummary:
     approvals_pending: int
 
 
+@dataclass(frozen=True, slots=True)
+class TaskSummary:
+    """Minimal task summary for admin/API read paths."""
+
+    task_id: str
+    run_id: str
+    name: str
+    status: TaskStatus
+    attempts: int
+    max_attempts: int
+    timeout_s: int
+    depends_on: list[str]
+    created_at_ms: int
+
+    tool_call_id: str | None
+    tool_name: str | None
+    permission_scope: str | None
+    idempotency_key: str | None
+    tool_call_status: ToolCallStatus | None
+
+
 class EventRepo(Protocol):
     """Event persistence port (domain -> storage boundary)."""
 
@@ -113,6 +134,22 @@ class TaskRepo(Protocol):
     async def update_status(self, task_id: str, status: TaskStatus) -> Task: ...
 
     async def update(self, task: Task) -> Task: ...
+
+    async def list_summaries(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        run_id: str | None = None,
+        status: TaskStatus | None = None,
+    ) -> list[TaskSummary]: ...
+
+    async def count_summaries(
+        self,
+        *,
+        run_id: str | None = None,
+        status: TaskStatus | None = None,
+    ) -> int: ...
 
     async def list(
         self,
