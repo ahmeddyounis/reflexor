@@ -155,6 +155,8 @@ class ReflexorSettings(BaseSettings):
     allow_side_effects_in_prod: bool = False
     allow_wildcards: bool = False
 
+    log_level: str = "INFO"
+
     admin_api_key: str | None = None
     events_require_admin: bool = False
     api_url: str | None = None
@@ -212,6 +214,19 @@ class ReflexorSettings(BaseSettings):
         trimmed = str(value).strip()
         if not trimmed:
             return None
+        return trimmed
+
+    @field_validator("log_level")
+    @classmethod
+    def _normalize_log_level(cls, value: str) -> str:
+        trimmed = str(value).strip().upper()
+        if trimmed == "WARN":
+            trimmed = "WARNING"
+        if trimmed == "FATAL":
+            trimmed = "CRITICAL"
+
+        if trimmed not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("log_level must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL")
         return trimmed
 
     @field_validator(

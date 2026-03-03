@@ -113,7 +113,7 @@ async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) ->
     from reflexor.storage.uow import DatabaseSession
     from reflexor.worker.runner import WorkerRunner
 
-    configure_logging()
+    configure_logging(settings)
     logger = logging.getLogger("reflexor.cli.worker")
 
     effective_concurrency = int(settings.executor_max_concurrency)

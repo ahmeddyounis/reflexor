@@ -7,6 +7,7 @@ import logging
 
 import pytest
 
+from reflexor.config import ReflexorSettings
 from reflexor.observability.context import (
     correlation_context,
     get_correlation_ids,
@@ -67,7 +68,7 @@ async def test_context_is_isolated_across_concurrent_tasks() -> None:
 
 def test_logging_output_includes_correlation_ids_when_set() -> None:
     stream = io.StringIO()
-    handler = build_json_handler(stream=stream)
+    handler = build_json_handler(settings=ReflexorSettings(), stream=stream)
 
     logger = logging.getLogger("reflexor.tests.unit.logging")
     logger.handlers = [handler]

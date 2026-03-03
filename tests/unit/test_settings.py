@@ -30,6 +30,7 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.dry_run is True
     assert settings.allow_side_effects_in_prod is False
     assert settings.allow_wildcards is False
+    assert settings.log_level == "INFO"
     assert settings.enabled_scopes == []
     assert settings.approval_required_scopes == []
     assert settings.http_allowed_domains == []

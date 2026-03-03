@@ -10,6 +10,7 @@ _event_id_var: ContextVar[str | None] = ContextVar("reflexor_event_id", default=
 _run_id_var: ContextVar[str | None] = ContextVar("reflexor_run_id", default=None)
 _task_id_var: ContextVar[str | None] = ContextVar("reflexor_task_id", default=None)
 _tool_call_id_var: ContextVar[str | None] = ContextVar("reflexor_tool_call_id", default=None)
+_request_id_var: ContextVar[str | None] = ContextVar("reflexor_request_id", default=None)
 
 
 def _normalize_optional_str(value: object) -> str | None:
@@ -52,6 +53,34 @@ def get_correlation_ids() -> dict[str, str | None]:
         "task_id": _task_id_var.get(),
         "tool_call_id": _tool_call_id_var.get(),
     }
+
+
+def set_request_id(request_id: str | None | object = _MISSING) -> None:
+    """Set request_id for the current context (API only)."""
+
+    if request_id is not _MISSING:
+        _request_id_var.set(_normalize_optional_str(request_id))
+
+
+def get_request_id() -> str | None:
+    """Return the current request_id (if set)."""
+
+    return _request_id_var.get()
+
+
+@contextmanager
+def request_id_context(request_id: str | None | object = _MISSING) -> Iterator[None]:
+    """Temporarily set request_id, restoring the previous value on exit."""
+
+    if request_id is _MISSING:
+        yield
+        return
+
+    token = _request_id_var.set(_normalize_optional_str(request_id))
+    try:
+        yield
+    finally:
+        _request_id_var.reset(token)
 
 
 @contextmanager
