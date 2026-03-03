@@ -17,6 +17,12 @@ from reflexor.security.policy.decision import (
 )
 
 
+def test_policy_action_values_are_stable() -> None:
+    assert PolicyAction.ALLOW.value == "allow"
+    assert PolicyAction.DENY.value == "deny"
+    assert PolicyAction.REQUIRE_APPROVAL.value == "require_approval"
+
+
 def test_reason_codes_are_stable() -> None:
     assert REASON_OK == "ok"
     assert REASON_SCOPE_DISABLED == "scope_disabled"
