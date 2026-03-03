@@ -6,14 +6,16 @@ implement real functionality.
 
 ## Layering (Clean Architecture)
 
-Reflexor is organized into four conceptual layers. Dependencies should point **inward**.
+Reflexor is organized into four conceptual layers plus an outer runtime/drivers layer. Dependencies
+should point **inward**.
 
 | Layer | Package | Purpose | Can depend on |
 | --- | --- | --- | --- |
 | Domain | `reflexor.domain` | Pure business rules and core types | stdlib (and optionally `pydantic`) |
-| Application | `reflexor.application` | Use-cases/workflows that orchestrate domain behavior | `domain` |
+| Application | `reflexor.executor`, `reflexor.orchestrator` | Use-cases/workflows that orchestrate domain behavior | `domain`, boundary interfaces |
 | Interfaces | `reflexor.interfaces` | Ports/adapters, DTOs, boundary interfaces | `application`, `domain` |
-| Infrastructure | `reflexor.infra` | Concrete implementations (I/O, DB, HTTP, LLM clients, CLIs) | `interfaces`, `application`, `domain` |
+| Infrastructure | `reflexor.infra` | Concrete implementations (I/O, DB, HTTP clients, etc.) | `interfaces`, `application`, `domain` |
+| Runtime (drivers) | `reflexor.worker`, `reflexor.cli` | Process entrypoints and long-running loops | `infrastructure`, `interfaces`, `application`, `domain` |
 
 ### Application boundaries (ports)
 
@@ -23,6 +25,11 @@ Some subsystems define explicit boundary interfaces ("ports") that infrastructur
   - Infrastructure adapters live in `reflexor.infra.queue.*`.
   - Wiring is done via `reflexor.infra.queue.factory.build_queue(settings)`.
   - The domain layer must not import the queue boundary.
+- **Executor/Worker**: `reflexor.executor` executes tasks through policy + tools; `reflexor.worker`
+  hosts the long-running dequeue loop.
+  - Executor depends on boundary contracts (queue, storage ports/UoW, tool registry, policy).
+  - Worker depends on the queue interface + executor service (composition roots provide adapters).
+  - See `docs/executor.md`.
 
 ### Rules of thumb
 
