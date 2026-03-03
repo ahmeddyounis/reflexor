@@ -82,3 +82,38 @@ def test_orchestrator_queue_interface_does_not_import_backend_modules() -> None:
     assert not offenders, (
         f"Queue interface modules must not import infrastructure backends. Offenders: {offenders}"
     )
+
+
+def test_outer_layers_do_not_import_queue_backends() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    src_root = repo_root / "src"
+
+    forbidden_prefixes = {
+        "reflexor.infra.queue",
+    }
+
+    outer_roots = [
+        src_root / "reflexor" / "cli",
+        src_root / "reflexor" / "executor",
+        src_root / "reflexor" / "orchestrator",
+        src_root / "reflexor" / "worker",
+    ]
+
+    offenders: dict[str, list[str]] = {}
+    for root in outer_roots:
+        if not root.exists():
+            continue
+        for path in _iter_python_files(root):
+            imported = _iter_imported_modules(path, src_root=src_root)
+            forbidden = sorted(
+                module
+                for module in imported
+                if any(_matches_prefix(module, prefix) for prefix in forbidden_prefixes)
+            )
+            if forbidden:
+                offenders[str(path.relative_to(repo_root))] = forbidden
+
+    assert not offenders, (
+        "Queue infrastructure backends must not be imported by application/entrypoint layers. "
+        f"Offenders: {offenders}"
+    )
