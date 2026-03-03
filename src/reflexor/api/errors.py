@@ -4,20 +4,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
 
-
-class ErrorPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    code: str
-    message: str
-
-
-class ErrorResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    error: ErrorPayload
+from reflexor.api.schemas import ErrorPayload, ErrorResponse
 
 
 def install_error_handlers(app: FastAPI) -> None:
