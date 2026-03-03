@@ -55,6 +55,8 @@ class CliContainer:
     """Dependencies used by CLI commands."""
 
     settings: ReflexorSettings
+    output_json: bool = False
+    output_pretty: bool = False
     _client: CliClient | None = field(default=None, init=False, repr=False)
     _client_factory: Callable[[ReflexorSettings], CliClient] = field(
         default=build_cli_client, repr=False
