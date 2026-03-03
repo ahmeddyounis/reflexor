@@ -22,17 +22,13 @@ MAX_PAGE_LIMIT = 200
 DEFAULT_PAGE_LIMIT = 50
 
 
-class ErrorPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    code: str
-    message: str
-
-
 class ErrorResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    error: ErrorPayload
+    error_code: str
+    message: str
+    request_id: str
+    details: dict[str, object] | None = None
 
 
 class Page(BaseModel, Generic[T]):
@@ -152,7 +148,6 @@ __all__ = [
     "ApprovalDecisionResponse",
     "ApprovalSummary",
     "DEFAULT_PAGE_LIMIT",
-    "ErrorPayload",
     "ErrorResponse",
     "MAX_PAGE_LIMIT",
     "Page",

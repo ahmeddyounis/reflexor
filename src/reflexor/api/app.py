@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from reflexor.api.container import AppContainer
 from reflexor.api.errors import install_error_handlers
 from reflexor.api.routes import approvals, events, health, metrics, runs, tasks
-from reflexor.api.schemas import ErrorPayload, ErrorResponse
+from reflexor.api.schemas import ErrorResponse
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.version import __version__
 
@@ -50,6 +50,7 @@ def create_app(
     @app.middleware("http")
     async def _request_id_and_event_body_cap(request: Request, call_next):  # type: ignore[no-untyped-def]
         request_id = request.headers.get("X-Request-ID") or str(uuid4())
+        request.state.request_id = request_id
 
         response = None
         if request.method.upper() == "POST" and request.url.path in {"/v1/events", "/events"}:
@@ -64,10 +65,9 @@ def create_app(
                     try:
                         if int(content_length) > max_bytes_int:
                             payload = ErrorResponse(
-                                error=ErrorPayload(
-                                    code="payload_too_large",
-                                    message="request body too large",
-                                )
+                                error_code="payload_too_large",
+                                message="request body too large",
+                                request_id=request_id,
                             )
                             response = JSONResponse(
                                 status_code=413, content=payload.model_dump(mode="json")
@@ -81,9 +81,9 @@ def create_app(
                     body = await request.body()
                     if len(body) > max_bytes_int:
                         payload = ErrorResponse(
-                            error=ErrorPayload(
-                                code="payload_too_large", message="request body too large"
-                            )
+                            error_code="payload_too_large",
+                            message="request body too large",
+                            request_id=request_id,
                         )
                         response = JSONResponse(
                             status_code=413, content=payload.model_dump(mode="json")

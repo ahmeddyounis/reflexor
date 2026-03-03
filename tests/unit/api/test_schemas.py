@@ -12,7 +12,6 @@ from reflexor.api.schemas import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalSummary,
-    ErrorPayload,
     ErrorResponse,
     Page,
     RunDetail,
@@ -93,7 +92,7 @@ def test_schema_round_trip_and_json_serializable() -> None:
     json.dumps(decision_req.model_dump(mode="json"))
     json.dumps(decision_resp.model_dump(mode="json"))
 
-    error = ErrorResponse(error=ErrorPayload(code="example_error", message="boom"))
+    error = ErrorResponse(error_code="example_error", message="boom", request_id="req_1")
     json.dumps(error.model_dump(mode="json"))
 
 
