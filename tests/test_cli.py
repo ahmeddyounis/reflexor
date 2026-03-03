@@ -17,3 +17,4 @@ def test_cli_help_shows_commands() -> None:
     assert "Commands" in result.output
     assert "version" in result.output
     assert "api" in result.output
+    assert "run" in result.output

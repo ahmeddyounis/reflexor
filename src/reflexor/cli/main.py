@@ -7,6 +7,7 @@ import typer
 from reflexor.cli import output
 from reflexor.cli.commands import api as api_command
 from reflexor.cli.commands import approvals as approvals_command
+from reflexor.cli.commands import run as run_command
 from reflexor.cli.commands import runs as runs_command
 from reflexor.cli.commands import tasks as tasks_command
 from reflexor.cli.commands import tools as tools_command
@@ -65,6 +66,7 @@ def _main(
 
 api_command.register(app)
 approvals_command.register(app)
+run_command.register(app)
 runs_command.register(app)
 tasks_command.register(app)
 tools_command.register(app)
