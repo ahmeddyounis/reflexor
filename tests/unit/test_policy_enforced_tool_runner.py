@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus
-from reflexor.domain.models import ToolCall
-from reflexor.security.policy.approvals import InMemoryApprovalStore
+from reflexor.domain.models import Approval, ToolCall
+from reflexor.security.policy.approvals import ApprovalBuilder, InMemoryApprovalStore
 from reflexor.security.policy.decision import (
     REASON_ARGS_INVALID,
     REASON_SCOPE_DISABLED,
@@ -213,3 +214,60 @@ async def test_policy_allow_invokes_tool_exactly_once(tmp_path: Path) -> None:
     assert counter[0] == 1
     assert outcome.decision.action == PolicyAction.ALLOW
     assert outcome.result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_approval_payload_hash_mismatch_is_denied(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["fs.read"],
+        approval_required_scopes=["fs.read"],
+    )
+    counter = [0]
+
+    registry = ToolRegistry()
+    registry.register(CountingTool(counter))
+    runner = ToolRunner(registry=registry, settings=settings)
+    gate = PolicyGate(rules=[ScopeEnabledRule(), ApprovalRequiredRule()], settings=settings)
+    approvals = InMemoryApprovalStore()
+    builder = ApprovalBuilder(settings=settings)
+    enforced = PolicyEnforcedToolRunner(
+        registry=registry,
+        runner=runner,
+        gate=gate,
+        approvals=approvals,
+        approval_builder=builder,
+    )
+
+    tool_call_id = str(uuid4())
+    payload_hash, _ = builder.build_payload_hash_for_args(args={"count": 1})
+    created = await approvals.create_pending(
+        Approval(
+            run_id=str(uuid4()),
+            task_id=str(uuid4()),
+            tool_call_id=tool_call_id,
+            payload_hash=payload_hash,
+        )
+    )
+
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=1.0)
+    outcome = await enforced.execute_tool_call(
+        ToolCall(
+            tool_call_id=tool_call_id,
+            tool_name="tests.counting",
+            permission_scope="fs.read",
+            idempotency_key="k",
+            args={"count": 2},
+        ),
+        ctx=ctx,
+    )
+
+    assert counter[0] == 0
+    assert outcome.decision.action == PolicyAction.DENY
+    assert outcome.decision.reason_code == REASON_ARGS_INVALID
+    assert outcome.result.ok is False
+    assert outcome.result.error_code == POLICY_DENIED_ERROR_CODE
+    assert outcome.approval_id == created.approval_id
+    assert outcome.approval_status == ApprovalStatus.PENDING
+    assert isinstance(outcome.result.data, dict)
+    assert outcome.result.data["approval_id"] == created.approval_id
