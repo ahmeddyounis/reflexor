@@ -146,6 +146,9 @@ def test_security_and_policy_layers_do_not_import_framework_or_outer_layers() ->
         "reflexor.worker",
         # Concrete tool implementations should not be imported by policy/security.
         "reflexor.tools.impl",
+        # Deprecated shims: policy/security must import from `reflexor.security.*` instead.
+        "reflexor.tools.fs_safety",
+        "reflexor.tools.net_safety",
     }
 
     _assert_no_forbidden_imports(
