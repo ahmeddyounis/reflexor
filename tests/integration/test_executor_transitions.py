@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,12 +9,14 @@ from typing import cast
 
 import pytest
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall
+from reflexor.executor.approval_store import DbApprovalStore
 from reflexor.executor.concurrency import ConcurrencyLimiter
 from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
@@ -39,7 +41,6 @@ from reflexor.infra.db.repos import (
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
-from reflexor.security.policy.approvals import InMemoryApprovalStore
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
@@ -143,11 +144,17 @@ async def _sqlite_file_session_factory(
 
 
 def _policy_runner(
-    *, registry: ToolRegistry, settings: ReflexorSettings
+    *,
+    registry: ToolRegistry,
+    settings: ReflexorSettings,
+    uow_factory: Callable[[], SqlAlchemyUnitOfWork],
 ) -> PolicyEnforcedToolRunner:
     runner = ToolRunner(registry=registry, settings=settings)
     gate = PolicyGate(rules=[ScopeEnabledRule(), ApprovalRequiredRule()], settings=settings)
-    approvals = InMemoryApprovalStore()
+    approvals = DbApprovalStore(
+        uow_factory=uow_factory,
+        approval_repo=lambda session: SqlAlchemyApprovalRepo(cast(AsyncSession, session)),
+    )
     return PolicyEnforcedToolRunner(
         registry=registry, runner=runner, gate=gate, approvals=approvals
     )
@@ -179,7 +186,7 @@ def _executor_service(
         uow_factory=uow_factory,
         repos=repos,
         queue=_NoopQueue(),
-        policy_runner=_policy_runner(registry=registry, settings=settings),
+        policy_runner=_policy_runner(registry=registry, settings=settings, uow_factory=uow_factory),
         tool_registry=registry,
         idempotency_ledger=ledger_factory,
         retry_policy=RetryPolicy(max_attempts=3, base_delay_s=1.0, max_delay_s=10.0, jitter=0.0),
@@ -356,3 +363,92 @@ async def test_executor_persists_waiting_approval_without_start_timestamps(tmp_p
             approval_row = await session.get(ApprovalRow, report.approval_id)
             assert approval_row is not None
             assert approval_row.status == ApprovalStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_executor_creates_single_approval_per_tool_call_id(tmp_path: Path) -> None:
+    clock = _MutableClock(now=1_000)
+    tool = _AdvancingTool(clock=clock)
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["fs.read"],
+        approval_required_scopes=["fs.read"],
+    )
+
+    async with _sqlite_file_session_factory(tmp_path) as (session_factory, _db_path):
+        run_id = _uuid()
+        tool_call_id = _uuid()
+        task1_id = _uuid()
+        task2_id = _uuid()
+
+        run = RunRecord(
+            run_id=run_id,
+            parent_run_id=None,
+            created_at_ms=0,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        tool_call = ToolCall(
+            tool_call_id=tool_call_id,
+            tool_name=tool.manifest.name,
+            args={"text": "hello"},
+            permission_scope="fs.read",
+            idempotency_key="k-approval",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=0,
+        )
+        task1 = Task(
+            task_id=task1_id,
+            run_id=run_id,
+            name="needs-approval-1",
+            status=TaskStatus.QUEUED,
+            tool_call=tool_call,
+            max_attempts=3,
+            timeout_s=60,
+            created_at_ms=0,
+        )
+        task2 = Task(
+            task_id=task2_id,
+            run_id=run_id,
+            name="needs-approval-2",
+            status=TaskStatus.QUEUED,
+            tool_call=tool_call,
+            max_attempts=3,
+            timeout_s=60,
+            created_at_ms=0,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            await SqlAlchemyRunRepo(session).create(run)
+            await SqlAlchemyTaskRepo(session).create(task1)
+            await SqlAlchemyTaskRepo(session).create(task2)
+
+        service = _executor_service(
+            session_factory,
+            settings=settings,
+            registry=registry,
+            clock=clock,
+        )
+
+        report1 = await service.execute_task(task1_id)
+        assert report1.disposition == ExecutionDisposition.WAITING_APPROVAL
+        assert report1.approval_id is not None
+        assert tool.calls == 0
+
+        report2 = await service.execute_task(task2_id)
+        assert report2.disposition == ExecutionDisposition.WAITING_APPROVAL
+        assert report2.approval_id == report1.approval_id
+        assert tool.calls == 0
+
+        uow2 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow2:
+            session = cast(AsyncSession, uow2.session)
+            stmt = select(ApprovalRow).where(ApprovalRow.tool_call_id == tool_call_id)
+            result = await session.execute(stmt)
+            approvals = result.scalars().all()
+            assert len(approvals) == 1

@@ -608,22 +608,15 @@ class ExecutorService:
         await ledger.record_failure(tool_call.idempotency_key, outcome, transient=transient)
 
     async def _persist_approval(self, *, approval_id: str, approval_repo: ApprovalRepo) -> None:
+        existing = await approval_repo.get(approval_id)
+        if existing is not None:
+            return
+
         approval = await self._policy_runner.approvals.get(approval_id)
         if approval is None:
             raise ApprovalPersistError(f"approval not found in store: {approval_id!r}")
 
-        existing = await approval_repo.get(approval.approval_id)
-        if existing is None:
-            await approval_repo.create(approval)
-            return
-
-        if existing.status != approval.status:
-            await approval_repo.update_status(
-                approval.approval_id,
-                approval.status,
-                decided_at_ms=approval.decided_at_ms,
-                decided_by=approval.decided_by,
-            )
+        await approval_repo.create(approval)
 
     async def _load_approval_status(
         self, tool_call_id: str

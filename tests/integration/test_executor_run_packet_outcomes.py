@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall
+from reflexor.executor.approval_store import DbApprovalStore
 from reflexor.executor.concurrency import ConcurrencyLimiter
 from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
@@ -33,7 +34,6 @@ from reflexor.infra.db.repos import (
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
-from reflexor.security.policy.approvals import InMemoryApprovalStore
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
@@ -144,11 +144,17 @@ async def _sqlite_file_session_factory(
 
 
 def _policy_runner(
-    *, registry: ToolRegistry, settings: ReflexorSettings
+    *,
+    registry: ToolRegistry,
+    settings: ReflexorSettings,
+    uow_factory: Callable[[], SqlAlchemyUnitOfWork],
 ) -> PolicyEnforcedToolRunner:
     runner = ToolRunner(registry=registry, settings=settings)
     gate = PolicyGate(rules=[ScopeEnabledRule(), ApprovalRequiredRule()], settings=settings)
-    approvals = InMemoryApprovalStore()
+    approvals = DbApprovalStore(
+        uow_factory=uow_factory,
+        approval_repo=lambda session: SqlAlchemyApprovalRepo(cast(AsyncSession, session)),
+    )
     return PolicyEnforcedToolRunner(
         registry=registry, runner=runner, gate=gate, approvals=approvals
     )
@@ -180,7 +186,7 @@ def _executor_service(
         uow_factory=uow_factory,
         repos=repos,
         queue=_NoopQueue(),
-        policy_runner=_policy_runner(registry=registry, settings=settings),
+        policy_runner=_policy_runner(registry=registry, settings=settings, uow_factory=uow_factory),
         tool_registry=registry,
         idempotency_ledger=ledger_factory,
         retry_policy=RetryPolicy(max_attempts=3, base_delay_s=1.0, max_delay_s=10.0, jitter=0.0),
