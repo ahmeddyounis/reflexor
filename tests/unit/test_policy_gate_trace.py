@@ -10,6 +10,7 @@ from reflexor.domain.models import ToolCall
 from reflexor.security.policy.context import PolicyContext, ToolSpec
 from reflexor.security.policy.decision import (
     REASON_APPROVAL_REQUIRED,
+    REASON_OK,
     REASON_SCOPE_DISABLED,
     PolicyAction,
     PolicyDecision,
@@ -203,3 +204,29 @@ def test_policy_gate_is_deterministic(tmp_path: Path) -> None:
         policy_trace=True,
     )
     assert first == second
+
+
+def test_policy_gate_defaults_to_allow_with_ok_reason(tmp_path: Path) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"])
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.tool",
+        version="0.1.0",
+        description="tool",
+        permission_scope="fs.read",
+        idempotent=True,
+    )
+    tool_spec = _tool_spec(manifest=manifest)
+    tool_call = _tool_call(tool_name=manifest.name, scope=manifest.permission_scope)
+
+    gate = PolicyGate(rules=[], settings=settings)
+    decision = gate.evaluate(
+        tool_call=tool_call,
+        tool_spec=tool_spec,
+        parsed_args=DummyArgs(),
+        ctx=ctx,
+    )
+
+    assert decision.action == PolicyAction.ALLOW
+    assert decision.reason_code == REASON_OK
