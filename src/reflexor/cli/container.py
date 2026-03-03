@@ -31,6 +31,7 @@ def build_local_client(settings: ReflexorSettings) -> LocalClient:
 
     app = AppContainer.build(settings=settings)
     return LocalClient(
+        settings=settings,
         submitter=app.submit_events,
         run_queries=app.run_queries,
         task_queries=app.task_queries,

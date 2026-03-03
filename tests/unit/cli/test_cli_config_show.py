@@ -33,4 +33,3 @@ def test_config_show_redacts_secrets_and_is_json_safe() -> None:
     assert payload["enabled_scopes"] == ["fs.read"]
     assert payload["admin_api_key"] == "<redacted>"
     assert "<redacted>" in payload["database_url"]
-

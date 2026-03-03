@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from typing import cast
 
 import typer
 
 from reflexor.cli import output
-from reflexor.cli.client import CliClient
+from reflexor.cli.client import CliClient, ReplayModeStr
 from reflexor.cli.container import CliContainer
 from reflexor.domain.enums import RunStatus
 
@@ -18,6 +20,18 @@ LIMIT_OPT = typer.Option(50, min=0, max=MAX_PAGE_LIMIT)
 OFFSET_OPT = typer.Option(0, min=0)
 STATUS_OPT = typer.Option(None, "--status", help="Filter by status.")
 SINCE_MS_OPT = typer.Option(None, "--since-ms", min=0, help="Filter by created_at >= since_ms.")
+OUT_PATH_OPT = typer.Option(..., "--out", help="Output JSON file.")
+REPLAY_MODE_OPT = typer.Option(
+    "mock_tools_recorded",
+    "--mode",
+    help="Replay mode: dry_run_no_tools | mock_tools_recorded | mock_tools_success.",
+)
+
+REPLAY_MODES = (
+    "dry_run_no_tools",
+    "mock_tools_recorded",
+    "mock_tools_success",
+)
 
 
 def _run_packet_summary(run_packet: object) -> dict[str, object]:
@@ -75,6 +89,31 @@ async def _build_run_show_payload(client: CliClient, run_id: str) -> dict[str, o
         "tasks": tasks,
         "task_status_counts": _task_status_counts(tasks),
     }
+
+
+def _require_prod_replay_confirmation(
+    container: CliContainer,
+    *,
+    json_enabled: bool,
+    pretty_enabled: bool,
+) -> None:
+    if container.settings.profile != "prod":
+        return
+    if container.assume_yes:
+        return
+
+    message = "replay in prod requires --yes"
+    if json_enabled:
+        output.print_json(
+            {
+                "ok": False,
+                "error_code": "confirmation_required",
+                "message": message,
+            },
+            pretty=pretty_enabled,
+        )
+        raise typer.Exit(2) from None
+    output.abort(message, exit_code=2)
 
 
 def register(app: typer.Typer) -> None:
@@ -155,6 +194,146 @@ def register(app: typer.Typer) -> None:
         """Alias for `runs show`."""
 
         show_run(ctx, run_id, json_output=json_output, pretty=pretty)
+
+    @runs_app.command("export")
+    def export_run(
+        ctx: typer.Context,
+        run_id: str,
+        out_path: Path = OUT_PATH_OPT,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
+    ) -> None:
+        """Export a run packet to a sanitized JSON file."""
+
+        container = ctx.obj
+        if not isinstance(container, CliContainer):
+            output.abort("internal error: invalid CLI context object")
+
+        client = container.get_client()
+        try:
+            result = asyncio.run(client.export_run_packet(run_id, out_path))
+        except NotImplementedError:
+            pretty_enabled = bool(container.output_pretty or pretty)
+            json_enabled = bool(container.output_json or json_output or pretty_enabled)
+            if json_enabled:
+                output.print_json(
+                    {
+                        "ok": False,
+                        "error_code": "not_supported",
+                        "message": "run export is not supported by this client",
+                    },
+                    pretty=pretty_enabled,
+                )
+                raise typer.Exit(2) from None
+            output.abort("run export is not supported by this client", exit_code=2)
+
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
+            output.print_json(result, pretty=pretty_enabled)
+            return
+
+        output.echo(str(result.get("out_path", out_path)))
+
+    @runs_app.command("import")
+    def import_run(
+        ctx: typer.Context,
+        file_path: Path,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
+    ) -> None:
+        """Import a previously exported run packet JSON file."""
+
+        container = ctx.obj
+        if not isinstance(container, CliContainer):
+            output.abort("internal error: invalid CLI context object")
+
+        client = container.get_client()
+        try:
+            result = asyncio.run(client.import_run_packet(file_path))
+        except NotImplementedError:
+            pretty_enabled = bool(container.output_pretty or pretty)
+            json_enabled = bool(container.output_json or json_output or pretty_enabled)
+            if json_enabled:
+                output.print_json(
+                    {
+                        "ok": False,
+                        "error_code": "not_supported",
+                        "message": "run import is not supported by this client",
+                    },
+                    pretty=pretty_enabled,
+                )
+                raise typer.Exit(2) from None
+            output.abort("run import is not supported by this client", exit_code=2)
+
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
+            output.print_json(result, pretty=pretty_enabled)
+            return
+
+        run_id_obj = result.get("run_id")
+        output.echo(str(run_id_obj) if run_id_obj is not None else "")
+
+    @runs_app.command("replay")
+    def replay_run(
+        ctx: typer.Context,
+        file_path: Path,
+        mode: str = REPLAY_MODE_OPT,
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
+    ) -> None:
+        """Replay an exported run packet locally (forces dry-run)."""
+
+        container = ctx.obj
+        if not isinstance(container, CliContainer):
+            output.abort("internal error: invalid CLI context object")
+
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        _require_prod_replay_confirmation(
+            container,
+            json_enabled=json_enabled,
+            pretty_enabled=pretty_enabled,
+        )
+
+        normalized_mode = mode.strip()
+        if normalized_mode not in REPLAY_MODES:
+            message = f"invalid --mode {mode!r}; expected one of: {', '.join(REPLAY_MODES)}"
+            if json_enabled:
+                output.print_json(
+                    {
+                        "ok": False,
+                        "error_code": "invalid_input",
+                        "message": message,
+                    },
+                    pretty=pretty_enabled,
+                )
+                raise typer.Exit(2) from None
+            output.abort(message, exit_code=2)
+
+        client = container.get_client()
+        replay_mode = cast(ReplayModeStr, normalized_mode)
+        try:
+            result = asyncio.run(client.replay_run_packet(file_path, mode=replay_mode))
+        except NotImplementedError:
+            if json_enabled:
+                output.print_json(
+                    {
+                        "ok": False,
+                        "error_code": "not_supported",
+                        "message": "run replay is not supported by this client",
+                    },
+                    pretty=pretty_enabled,
+                )
+                raise typer.Exit(2) from None
+            output.abort("run replay is not supported by this client", exit_code=2)
+
+        if json_enabled:
+            output.print_json(result, pretty=pretty_enabled)
+            return
+
+        output.print_json(result, pretty=True)
 
 
 __all__ = ["register"]

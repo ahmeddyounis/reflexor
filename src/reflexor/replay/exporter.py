@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from reflexor.config import get_settings
+from reflexor.config import ReflexorSettings, get_settings
 from reflexor.infra.db.engine import (
     async_session_scope,
     create_async_engine,
@@ -76,6 +76,7 @@ async def export_run_packet(
     out_path: str | Path,
     *,
     include_tasks: bool = True,
+    settings: ReflexorSettings | None = None,
 ) -> Path:
     """Export a sanitized run packet to a JSON file.
 
@@ -88,13 +89,16 @@ async def export_run_packet(
         raise ValueError("run_id must be non-empty")
 
     path = Path(out_path)
-    settings = get_settings()
+    resolved_settings = get_settings() if settings is None else settings
 
-    engine = create_async_engine(settings.database_url, echo=bool(settings.db_echo))
+    engine = create_async_engine(
+        resolved_settings.database_url,
+        echo=bool(resolved_settings.db_echo),
+    )
     session_factory = create_async_session_factory(engine)
     try:
         async with async_session_scope(session_factory) as session:
-            repo = SqlAlchemyRunPacketRepo(session, settings=settings)
+            repo = SqlAlchemyRunPacketRepo(session, settings=resolved_settings)
             packet = await repo.get(normalized_run_id)
             if packet is None:
                 raise KeyError(f"unknown run_id: {normalized_run_id!r}")
@@ -103,7 +107,7 @@ async def export_run_packet(
             if not include_tasks:
                 packet_dict.pop("tasks", None)
 
-            sanitized_packet = sanitize_for_audit(packet_dict, settings=settings)
+            sanitized_packet = sanitize_for_audit(packet_dict, settings=resolved_settings)
     finally:
         await engine.dispose()
 
@@ -113,7 +117,10 @@ async def export_run_packet(
         "packet": sanitized_packet,
     }
 
-    bounded = _bounded_export_object(export_obj, max_bytes=int(settings.max_run_packet_bytes))
+    bounded = _bounded_export_object(
+        export_obj,
+        max_bytes=int(resolved_settings.max_run_packet_bytes),
+    )
     payload = _json_dumps(bounded)
 
     await asyncio.to_thread(_write_export, path, payload)

@@ -324,9 +324,7 @@ class OrchestratorEngine:
                             enqueued_set = set(enqueued_task_ids)
                             tasks = [
                                 (
-                                    task.model_copy(
-                                        update={"status": TaskStatus.QUEUED}, deep=True
-                                    )
+                                    task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
                                     if task.task_id in enqueued_set
                                     else task
                                 )

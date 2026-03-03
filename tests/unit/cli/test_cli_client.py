@@ -99,6 +99,7 @@ async def test_local_client_uses_injected_services() -> None:
             raise AssertionError("not used")
 
     client = LocalClient(
+        settings=ReflexorSettings(),
         submitter=FakeSubmitter(),  # type: ignore[arg-type]
         run_queries=FakeRuns(),  # type: ignore[arg-type]
         task_queries=FakeTasks(),  # type: ignore[arg-type]
@@ -111,4 +112,3 @@ async def test_local_client_uses_injected_services() -> None:
 
     assert events == [event]
     assert result == {"ok": True, "event_id": "e1", "run_id": "r1", "duplicate": False}
-

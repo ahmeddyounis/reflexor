@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from reflexor.config import get_settings
+from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.infra.db.engine import (
     async_session_scope,
@@ -67,14 +67,19 @@ def _rewrite_task_run_ids(tasks_obj: object, *, run_id: str) -> object:
     return rewritten
 
 
-async def import_run_packet(path: str | Path, *, parent_run_id: str | None = None) -> str:
+async def import_run_packet(
+    path: str | Path,
+    *,
+    parent_run_id: str | None = None,
+    settings: ReflexorSettings | None = None,
+) -> str:
     """Import an exported run packet JSON file into the database as a replay artifact.
 
     Returns the new `run_id` created for the imported packet.
     """
 
-    settings = get_settings()
-    max_bytes = int(settings.max_run_packet_bytes)
+    resolved_settings = get_settings() if settings is None else settings
+    max_bytes = int(resolved_settings.max_run_packet_bytes)
 
     file_path = Path(path)
     raw = await asyncio.to_thread(_read_export_file, file_path, max_bytes=max_bytes)
@@ -128,13 +133,16 @@ async def import_run_packet(path: str | Path, *, parent_run_id: str | None = Non
         completed_at_ms=packet.completed_at_ms,
     )
 
-    engine = create_async_engine(settings.database_url, echo=bool(settings.db_echo))
+    engine = create_async_engine(
+        resolved_settings.database_url,
+        echo=bool(resolved_settings.db_echo),
+    )
     session_factory = create_async_session_factory(engine)
     try:
         async with async_session_scope(session_factory) as session:
             async with session.begin():
                 await SqlAlchemyRunRepo(session).create(run_record)
-                await SqlAlchemyRunPacketRepo(session, settings=settings).create(packet)
+                await SqlAlchemyRunPacketRepo(session, settings=resolved_settings).create(packet)
     finally:
         await engine.dispose()
 

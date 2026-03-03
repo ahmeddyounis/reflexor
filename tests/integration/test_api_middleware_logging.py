@@ -112,4 +112,3 @@ def test_middleware_rejects_oversized_events_without_traceback(tmp_path: Path) -
     last = end_logs[-1]
     assert last.get("status_code") == 413
     assert isinstance(last.get("elapsed_ms"), int)
-

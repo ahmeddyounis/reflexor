@@ -86,6 +86,7 @@ def _build_local_client(
     task_queries = TaskQueryService(uow_factory=uow_factory, task_repo=task_repo)  # type: ignore[arg-type]
 
     return LocalClient(
+        settings=settings,
         submitter=FakeSubmitter(),  # type: ignore[arg-type]
         run_queries=run_queries,
         task_queries=task_queries,

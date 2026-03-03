@@ -335,9 +335,7 @@ class PolicyEnforcedToolRunner:
                 parsed_args=parsed_args,
                 decision=decision,
             )
-            created = await self._approvals.create_pending(
-                attempted
-            )
+            created = await self._approvals.create_pending(attempted)
             if (
                 self._metrics is not None
                 and created.approval_id == attempted.approval_id

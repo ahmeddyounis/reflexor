@@ -100,4 +100,3 @@ def test_tasks_list_text_output_includes_run_id_and_tool_name() -> None:
     assert "TASK_ID" in result.output
     assert "RUN_ID" in result.output
     assert "mock.echo" in result.output
-

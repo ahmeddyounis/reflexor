@@ -54,6 +54,7 @@ def _local_client(events: list[Event]) -> LocalClient:
             raise AssertionError("not used")
 
     return LocalClient(
+        settings=ReflexorSettings(),
         submitter=FakeSubmitter(),  # type: ignore[arg-type]
         run_queries=FakeRuns(),  # type: ignore[arg-type]
         task_queries=FakeTasks(),  # type: ignore[arg-type]

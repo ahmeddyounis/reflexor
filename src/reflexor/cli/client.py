@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from pathlib import Path
+from typing import Literal, Protocol, TypeAlias, cast
 
 import httpx
 
@@ -22,11 +23,18 @@ from reflexor.application.services import (
     SubmitEventOutcome,
     TaskQueryService,
 )
+from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus
 from reflexor.domain.models_event import Event
 from reflexor.storage.ports import RunSummary as StoredRunSummary
 from reflexor.storage.ports import TaskSummary as StoredTaskSummary
 from reflexor.tools.registry import ToolRegistry
+
+ReplayModeStr: TypeAlias = Literal[
+    "dry_run_no_tools",
+    "mock_tools_recorded",
+    "mock_tools_success",
+]
 
 
 class CliClient(Protocol):
@@ -72,6 +80,28 @@ class CliClient(Protocol):
     async def list_tools(self) -> list[dict[str, object]]: ...
 
     async def health(self) -> dict[str, object]: ...
+
+    async def export_run_packet(
+        self,
+        run_id: str,
+        out_path: str | Path,
+        *,
+        include_tasks: bool = True,
+    ) -> dict[str, object]: ...
+
+    async def import_run_packet(
+        self,
+        path: str | Path,
+        *,
+        parent_run_id: str | None = None,
+    ) -> dict[str, object]: ...
+
+    async def replay_run_packet(
+        self,
+        path: str | Path,
+        *,
+        mode: ReplayModeStr,
+    ) -> dict[str, object]: ...
 
 
 def _page(
@@ -143,6 +173,7 @@ def _submit_outcome_to_dict(outcome: SubmitEventOutcome) -> dict[str, object]:
 class LocalClient:
     """In-process CLI client powered by application services."""
 
+    settings: ReflexorSettings
     submitter: EventSubmissionService
     run_queries: RunQueryService
     task_queries: TaskQueryService
@@ -234,6 +265,59 @@ class LocalClient:
 
     async def health(self) -> dict[str, object]:
         return {"ok": True}
+
+    async def export_run_packet(
+        self,
+        run_id: str,
+        out_path: str | Path,
+        *,
+        include_tasks: bool = True,
+    ) -> dict[str, object]:
+        from reflexor.replay.exporter import export_run_packet as export_run_packet_file
+
+        normalized_run_id = run_id.strip()
+        exported_path = await export_run_packet_file(
+            normalized_run_id,
+            out_path,
+            include_tasks=include_tasks,
+            settings=self.settings,
+        )
+        return {
+            "ok": True,
+            "run_id": normalized_run_id,
+            "out_path": str(exported_path),
+        }
+
+    async def import_run_packet(
+        self,
+        path: str | Path,
+        *,
+        parent_run_id: str | None = None,
+    ) -> dict[str, object]:
+        from reflexor.replay.importer import import_run_packet as import_run_packet_file
+
+        new_run_id = await import_run_packet_file(
+            path,
+            parent_run_id=parent_run_id,
+            settings=self.settings,
+        )
+        return {
+            "ok": True,
+            "run_id": new_run_id,
+        }
+
+    async def replay_run_packet(
+        self,
+        path: str | Path,
+        *,
+        mode: ReplayModeStr,
+    ) -> dict[str, object]:
+        from reflexor.replay.runner import ReplayMode, ReplayRunner
+
+        runner = ReplayRunner(settings=self.settings)
+        outcome = await runner.replay_from_file(path, ReplayMode(mode))
+        payload = cast(dict[str, object], outcome.model_dump(mode="json"))
+        return {"ok": True, **payload}
 
 
 @dataclass(slots=True)
@@ -376,9 +460,37 @@ class ApiClient:
         data = await self._request_json("GET", "/healthz")
         return cast(dict[str, object], data)
 
+    async def export_run_packet(
+        self,
+        run_id: str,
+        out_path: str | Path,
+        *,
+        include_tasks: bool = True,
+    ) -> dict[str, object]:
+        _ = (run_id, out_path, include_tasks)
+        raise NotImplementedError("run export is not exposed via the API yet")
+
+    async def import_run_packet(
+        self,
+        path: str | Path,
+        *,
+        parent_run_id: str | None = None,
+    ) -> dict[str, object]:
+        _ = (path, parent_run_id)
+        raise NotImplementedError("run import is not exposed via the API yet")
+
+    async def replay_run_packet(
+        self,
+        path: str | Path,
+        *,
+        mode: ReplayModeStr,
+    ) -> dict[str, object]:
+        _ = (path, mode)
+        raise NotImplementedError("run replay is not exposed via the API yet")
+
     async def aclose(self) -> None:
         if self._owns_http and self.http is not None:
             await self.http.aclose()
 
 
-__all__ = ["ApiClient", "CliClient", "LocalClient"]
+__all__ = ["ApiClient", "CliClient", "LocalClient", "ReplayModeStr"]

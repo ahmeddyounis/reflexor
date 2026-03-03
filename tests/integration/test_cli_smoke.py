@@ -118,6 +118,7 @@ def test_cli_smoke_local_submit_event_and_approval_flow(tmp_path: Path) -> None:
 
     try:
         local_client = LocalClient(
+            settings=settings,
             submitter=container.submit_events,
             run_queries=container.run_queries,
             task_queries=container.task_queries,

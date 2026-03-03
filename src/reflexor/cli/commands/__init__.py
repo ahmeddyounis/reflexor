@@ -8,4 +8,3 @@ abstraction provided by the CLI container.
 from __future__ import annotations
 
 __all__ = []
-

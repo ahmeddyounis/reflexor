@@ -93,7 +93,8 @@ class _FakeApprovalsClient:
 def test_approvals_approve_and_deny_call_client_and_return_json_status() -> None:
     client = _FakeApprovalsClient()
     container = CliContainer.build(
-        settings=ReflexorSettings(profile="dev"), client=client  # type: ignore[arg-type]
+        settings=ReflexorSettings(profile="dev"),
+        client=client,  # type: ignore[arg-type]
     )
 
     runner = CliRunner()
@@ -148,7 +149,8 @@ def test_approvals_approve_proceeds_with_yes_in_prod() -> None:
 def test_approvals_list_filters_pending_only_and_scope() -> None:
     client = _FakeApprovalsClient()
     container = CliContainer.build(
-        settings=ReflexorSettings(profile="dev"), client=client  # type: ignore[arg-type]
+        settings=ReflexorSettings(profile="dev"),
+        client=client,  # type: ignore[arg-type]
     )
 
     runner = CliRunner()

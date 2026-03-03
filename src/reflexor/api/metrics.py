@@ -9,4 +9,3 @@ from __future__ import annotations
 from reflexor.observability.metrics import ReflexorMetrics as ApiMetrics
 
 __all__ = ["ApiMetrics"]
-

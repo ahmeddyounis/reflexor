@@ -12,4 +12,3 @@ def test_run_worker_help_works() -> None:
     assert result.exit_code == 0
     assert "Start the Reflexor worker runner" in result.output
     assert "--concurrency" in result.output
-

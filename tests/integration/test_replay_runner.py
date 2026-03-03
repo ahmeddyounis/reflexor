@@ -181,4 +181,3 @@ async def test_replay_runner_mock_tools_recorded_creates_child_run_and_executes(
 
             dumped = json.dumps(replay_packet.model_dump(mode="json"), ensure_ascii=False)
             assert "sk-captured-secret-1234567890" not in dumped
-

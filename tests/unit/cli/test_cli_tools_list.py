@@ -24,6 +24,7 @@ def test_tools_list_local_outputs_registered_tool_manifests() -> None:
     registry.register(HttpTool())
 
     client = LocalClient(
+        settings=ReflexorSettings(),
         submitter=object(),  # type: ignore[arg-type]
         run_queries=object(),  # type: ignore[arg-type]
         task_queries=object(),  # type: ignore[arg-type]
@@ -67,4 +68,3 @@ def test_tools_list_remote_not_supported_returns_json_error() -> None:
     payload = json.loads(result.output)
     assert payload["ok"] is False
     assert payload["error_code"] == "not_supported"
-

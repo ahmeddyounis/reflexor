@@ -7,4 +7,3 @@ reproducible issue reports.
 from __future__ import annotations
 
 __all__ = []
-

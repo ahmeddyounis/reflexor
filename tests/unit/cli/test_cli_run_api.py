@@ -13,4 +13,3 @@ def test_run_api_help_works() -> None:
     assert "Start the Reflexor API server" in result.output
     assert "--host" in result.output
     assert "--port" in result.output
-
