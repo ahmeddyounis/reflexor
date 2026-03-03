@@ -458,6 +458,89 @@ class SqlAlchemyRunRepo:
 
         return summaries
 
+    async def count_summaries(
+        self,
+        *,
+        status: RunStatus | None = None,
+        created_after_ms: int | None = None,
+        created_before_ms: int | None = None,
+    ) -> int:
+        task_agg = (
+            select(
+                TaskRow.run_id.label("run_id"),
+                func.count(TaskRow.task_id).label("tasks_total"),
+                func.sum(case((TaskRow.status == TaskStatus.PENDING.value, 1), else_=0)).label(
+                    "tasks_pending"
+                ),
+                func.sum(case((TaskRow.status == TaskStatus.QUEUED.value, 1), else_=0)).label(
+                    "tasks_queued"
+                ),
+                func.sum(case((TaskRow.status == TaskStatus.RUNNING.value, 1), else_=0)).label(
+                    "tasks_running"
+                ),
+                func.sum(case((TaskRow.status == TaskStatus.SUCCEEDED.value, 1), else_=0)).label(
+                    "tasks_succeeded"
+                ),
+                func.sum(case((TaskRow.status == TaskStatus.FAILED.value, 1), else_=0)).label(
+                    "tasks_failed"
+                ),
+                func.sum(case((TaskRow.status == TaskStatus.CANCELED.value, 1), else_=0)).label(
+                    "tasks_canceled"
+                ),
+            )
+            .group_by(TaskRow.run_id)
+            .subquery()
+        )
+
+        approvals_agg = (
+            select(
+                ApprovalRow.run_id.label("run_id"),
+                func.count(ApprovalRow.approval_id).label("approvals_total"),
+                func.sum(
+                    case((ApprovalRow.status == ApprovalStatus.PENDING.value, 1), else_=0)
+                ).label("approvals_pending"),
+            )
+            .group_by(ApprovalRow.run_id)
+            .subquery()
+        )
+
+        tasks_total = func.coalesce(task_agg.c.tasks_total, 0)
+        tasks_pending = func.coalesce(task_agg.c.tasks_pending, 0)
+        tasks_queued = func.coalesce(task_agg.c.tasks_queued, 0)
+        tasks_running = func.coalesce(task_agg.c.tasks_running, 0)
+        tasks_succeeded = func.coalesce(task_agg.c.tasks_succeeded, 0)
+        tasks_failed = func.coalesce(task_agg.c.tasks_failed, 0)
+        tasks_canceled = func.coalesce(task_agg.c.tasks_canceled, 0)
+        pending_like = tasks_pending + tasks_queued
+
+        computed_status = case(
+            (tasks_total == 0, literal(RunStatus.SUCCEEDED.value)),
+            (tasks_failed > 0, literal(RunStatus.FAILED.value)),
+            (tasks_canceled > 0, literal(RunStatus.CANCELED.value)),
+            (tasks_running > 0, literal(RunStatus.RUNNING.value)),
+            (tasks_succeeded == tasks_total, literal(RunStatus.SUCCEEDED.value)),
+            (tasks_succeeded > 0, literal(RunStatus.RUNNING.value)),
+            (pending_like > 0, literal(RunStatus.CREATED.value)),
+            else_=literal(RunStatus.RUNNING.value),
+        )
+
+        stmt = (
+            select(func.count(RunRow.run_id))
+            .select_from(RunRow)
+            .outerjoin(task_agg, task_agg.c.run_id == RunRow.run_id)
+            .outerjoin(approvals_agg, approvals_agg.c.run_id == RunRow.run_id)
+        )
+
+        if status is not None:
+            stmt = stmt.where(computed_status == status.value)
+        if created_after_ms is not None:
+            stmt = stmt.where(RunRow.created_at_ms >= int(created_after_ms))
+        if created_before_ms is not None:
+            stmt = stmt.where(RunRow.created_at_ms <= int(created_before_ms))
+
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
+
     async def get_summary(self, run_id: str) -> RunSummary | None:
         normalized = run_id.strip()
         if not normalized:

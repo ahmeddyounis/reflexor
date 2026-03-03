@@ -11,7 +11,12 @@ from typing import Annotated, cast
 from fastapi import Depends, Request
 
 from reflexor.api.container import AppContainer
-from reflexor.application.services import ApprovalsService, EventSubmissionService, QueryService
+from reflexor.application.services import (
+    ApprovalsService,
+    EventSubmissionService,
+    QueryService,
+    RunQueryService,
+)
 
 
 def get_container(request: Request) -> AppContainer:
@@ -45,10 +50,18 @@ def get_query_service(container: ContainerDep) -> QueryService:
 QueryServiceDep = Annotated[QueryService, Depends(get_query_service)]
 
 
+def get_run_query_service(container: ContainerDep) -> RunQueryService:
+    return container.run_queries
+
+
+RunQueryServiceDep = Annotated[RunQueryService, Depends(get_run_query_service)]
+
+
 __all__ = [
     "ApprovalsServiceDep",
     "ContainerDep",
     "EventSubmitterDep",
     "QueryServiceDep",
+    "RunQueryServiceDep",
     "get_container",
 ]

@@ -92,6 +92,14 @@ class RunRepo(Protocol):
         created_before_ms: int | None = None,
     ) -> list[RunSummary]: ...
 
+    async def count_summaries(
+        self,
+        *,
+        status: RunStatus | None = None,
+        created_after_ms: int | None = None,
+        created_before_ms: int | None = None,
+    ) -> int: ...
+
     async def get_summary(self, run_id: str) -> RunSummary | None: ...
 
 

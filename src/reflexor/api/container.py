@@ -20,6 +20,7 @@ from reflexor.application.services import (
     ApprovalsService,
     EventSubmissionService,
     QueryService,
+    RunQueryService,
 )
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.executor.approval_store import DbApprovalStore
@@ -103,6 +104,7 @@ class AppContainer:
     submit_events: EventSubmissionService
     approvals: ApprovalsService
     queries: QueryService
+    run_queries: RunQueryService
 
     _owns_engine: bool = True
     _owns_queue: bool = True
@@ -230,6 +232,11 @@ class AppContainer:
             task_repo=repos.task_repo,
             run_packet_repo=repos.run_packet_repo,
         )
+        run_queries = RunQueryService(
+            uow_factory=uow_factory,
+            run_repo=repos.run_repo,
+            run_packet_repo=repos.run_packet_repo,
+        )
 
         return cls(
             settings=effective_settings,
@@ -246,6 +253,7 @@ class AppContainer:
             submit_events=submit_events,
             approvals=approvals,
             queries=queries,
+            run_queries=run_queries,
             _owns_engine=owns_engine,
             _owns_queue=owns_queue,
         )
