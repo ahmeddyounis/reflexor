@@ -141,3 +141,45 @@ def test_build_pending_creates_approval_with_hash_and_preview() -> None:
     assert approval.tool_call_id == tool_call.tool_call_id
     assert approval.payload_hash is not None
     assert approval.preview is not None
+
+
+def test_preview_never_includes_raw_authorization_header_values() -> None:
+    builder = ApprovalBuilder()
+
+    manifest = ToolManifest(
+        name="tests.http",
+        version="0.1.0",
+        description="http",
+        permission_scope="net.http",
+        idempotent=True,
+    )
+    tool_spec = _tool_spec(manifest=manifest)
+    tool_call = ToolCall(
+        tool_name=manifest.name,
+        permission_scope=manifest.permission_scope,
+        idempotency_key="k",
+        args={
+            "url": "https://example.com/path",
+            "headers": {
+                "Authorization": "Bearer SUPERSECRET12345",
+                "X-Api-Key": "sk-super-secret-token",
+            },
+        },
+    )
+    parsed = HttpArgs(
+        url="https://example.com/path",
+        headers={
+            "Authorization": "Bearer SUPERSECRET12345",
+            "X-Api-Key": "sk-super-secret-token",
+        },
+        body="",
+    )
+    decision = PolicyDecision.require_approval(rule_id="tests.rule")
+
+    preview = builder.build_preview(
+        tool_call=tool_call, tool_spec=tool_spec, parsed_args=parsed, decision=decision
+    )
+
+    assert "Bearer" not in preview
+    assert "SUPERSECRET12345" not in preview
+    assert "sk-super-secret-token" not in preview
