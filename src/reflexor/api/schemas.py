@@ -41,7 +41,21 @@ class Page(BaseModel, Generic[T]):
 
 
 class SubmitEventRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "type": "webhook",
+                    "source": "github",
+                    "payload": {"url": "https://example.com/hook", "action": "opened"},
+                    "dedupe_key": "github:delivery:123",
+                    "received_at_ms": 1710000000000,
+                }
+            ]
+        },
+    )
 
     type: str
     source: str
@@ -51,7 +65,20 @@ class SubmitEventRequest(BaseModel):
 
 
 class SubmitEventResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "ok": True,
+                    "event_id": "b7c3d0d4-7b9b-4c61-90f8-6c7df7b60d7a",
+                    "run_id": "8f5b84d8-6d0c-4f4a-8a5b-5f4e2c1d7c6a",
+                    "duplicate": False,
+                }
+            ]
+        },
+    )
 
     ok: bool = True
     event_id: str
@@ -124,20 +151,54 @@ class ApprovalSummary(BaseModel):
 
 
 class ApprovalDecisionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={
+            "examples": [
+                {"decision": "approved", "decided_by": "operator@example.com"},
+                {"decision": "denied", "decided_by": "operator@example.com"},
+            ]
+        },
+    )
 
     decision: Literal["approved", "denied"]
     decided_by: str | None = None
 
 
 class ApprovalActionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={"examples": [{"decided_by": "operator@example.com"}]},
+    )
 
     decided_by: str | None = None
 
 
 class ApprovalDecisionResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "approval": {
+                        "approval_id": "1f7a19c4-67c0-4d24-b5fb-1d16b5a803dd",
+                        "run_id": "8f5b84d8-6d0c-4f4a-8a5b-5f4e2c1d7c6a",
+                        "task_id": "bc2b5f2b-0f7a-4e1d-9d9d-2d1c3f7eaa11",
+                        "tool_call_id": "4ad2c97a-6ac5-4b72-a7c6-7c8c0b81c3ad",
+                        "status": "approved",
+                        "created_at_ms": 1710000000000,
+                        "decided_at_ms": 1710000001000,
+                        "decided_by": "operator@example.com",
+                        "payload_hash": "sha256:deadbeef...",
+                        "preview": "redacted preview",
+                    }
+                }
+            ]
+        },
+    )
 
     approval: ApprovalSummary
 

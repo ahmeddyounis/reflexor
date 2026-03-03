@@ -67,6 +67,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 ## Operator docs
 
 - [Configuration & Profiles](docs/configuration.md)
+- [API](docs/api.md)
 - [Policy & Approvals](docs/policy.md)
 - [Tools](docs/tools.md)
 - [Queue](docs/queue.md)
@@ -81,6 +82,24 @@ Using `make`:
 make venv
 make ci
 ```
+
+Run the API locally:
+
+```sh
+uvicorn reflexor.api.app:create_app --factory --reload
+```
+
+Send an event:
+
+```sh
+curl -X POST http://localhost:8000/v1/events \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"webhook","source":"demo","payload":{},"dedupe_key":"demo:1"}'
+```
+
+Note: the default queue backend is `inmemory`, which is single-process only. Running the API and a
+worker/executor in separate processes will not share the queue; a durable queue backend is needed
+for multi-process deployments (not implemented yet).
 
 Or directly with pip:
 

@@ -44,7 +44,26 @@ def create_app(
         finally:
             await effective_container.aclose()
 
-    app = FastAPI(title="Reflexor", version=__version__, lifespan=lifespan)
+    openapi_tags = [
+        {"name": "health", "description": "Service health and readiness checks."},
+        {"name": "metrics", "description": "Prometheus metrics (text format)."},
+        {"name": "events", "description": "Event ingestion (idempotent via dedupe_key)."},
+        {"name": "runs", "description": "Run and run-packet read API (admin)."},
+        {"name": "tasks", "description": "Task read API (admin)."},
+        {"name": "approvals", "description": "Human-in-the-loop approvals (admin)."},
+    ]
+
+    app = FastAPI(
+        title="Reflexor",
+        version=__version__,
+        description=(
+            "Reflexor is an early-stage, policy-controlled workflow runtime. "
+            "This API provides event ingestion and operator/admin read paths for runs, tasks, "
+            "and approvals."
+        ),
+        openapi_tags=openapi_tags,
+        lifespan=lifespan,
+    )
     install_error_handlers(app)
 
     @app.middleware("http")
