@@ -13,6 +13,19 @@ from reflexor.executor.retries import (
 from reflexor.tools.sdk import ToolResult
 
 
+class _SequenceRng:
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+        self._idx = 0
+
+    def random(self) -> float:
+        if self._idx >= len(self._values):
+            raise AssertionError("rng exhausted")
+        value = self._values[self._idx]
+        self._idx += 1
+        return float(value)
+
+
 def test_backoff_strategy_progression_without_jitter_and_with_cap() -> None:
     policy = RetryPolicy(max_attempts=10, base_delay_s=1.0, max_delay_s=5.0, jitter=0.0)
     strategy = BackoffStrategy(policy=policy, rng=Random(0))
@@ -45,9 +58,39 @@ def test_backoff_strategy_jitter_is_deterministic_with_seed() -> None:
         assert lower <= delay <= upper
 
 
+def test_backoff_strategy_jitter_is_deterministic_with_injected_rng_and_clamped() -> None:
+    policy = RetryPolicy(base_delay_s=2.0, max_delay_s=10.0, jitter=0.5)
+    strategy = BackoffStrategy(policy=policy, rng=_SequenceRng([0.0, 0.5, 1.0]))
+
+    # factor = 1 + ((2*r)-1)*jitter
+    # r=0.0 => factor=0.5  => delay=1.0
+    # r=0.5 => factor=1.0  => delay=4.0
+    # r=1.0 => factor=1.5  => delay=12.0, clamped to max_delay_s=10.0
+    assert strategy.next_delay(1) == 1.0
+    assert strategy.next_delay(2) == 4.0
+    assert strategy.next_delay(3) == 10.0
+
+
 def test_error_classifier_approval_required_is_distinct() -> None:
     classifier = ErrorClassifier()
     result = ToolResult(ok=False, error_code="approval_required", error_message="needs approval")
+    assert classifier.classify(result) == RetryDisposition.APPROVAL_REQUIRED
+
+
+def test_error_classifier_prefers_approval_required_over_transient_signals() -> None:
+    policy = RetryPolicy(
+        retryable_error_codes=frozenset({"TIMEOUT"}),
+        retryable_http_statuses=frozenset({503}),
+    )
+    classifier = ErrorClassifier(policy=policy)
+
+    result = ToolResult(
+        ok=False,
+        error_code="approval_required",
+        error_message="needs approval",
+        data={"status_code": 503},
+    )
+
     assert classifier.classify(result) == RetryDisposition.APPROVAL_REQUIRED
 
 
@@ -81,3 +124,30 @@ def test_error_classifier_transient_by_http_status() -> None:
 
     assert classifier.classify(result_503) == RetryDisposition.TRANSIENT
     assert classifier.classify(result_400) == RetryDisposition.PERMANENT
+
+
+@pytest.mark.parametrize(
+    ("data", "debug", "expected"),
+    [
+        ({"http_status": 503}, None, RetryDisposition.TRANSIENT),
+        ({"status": 503}, None, RetryDisposition.TRANSIENT),
+        (None, {"status_code": 503}, RetryDisposition.TRANSIENT),
+        ({"status_code": "503"}, None, RetryDisposition.PERMANENT),
+    ],
+)
+def test_error_classifier_http_status_extraction_variants(
+    data: dict[str, object] | None,
+    debug: dict[str, object] | None,
+    expected: RetryDisposition,
+) -> None:
+    policy = RetryPolicy(retryable_http_statuses=frozenset({503}))
+    classifier = ErrorClassifier(policy=policy)
+
+    result = ToolResult(
+        ok=False,
+        error_code="http_error",
+        error_message="failed",
+        data=data,
+        debug=debug,
+    )
+    assert classifier.classify(result) == expected
