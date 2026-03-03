@@ -45,6 +45,11 @@ from reflexor.infra.db.repos import (
 )
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.infra.queue.factory import build_queue
+from reflexor.observability.queue_observers import (
+    CompositeQueueObserver,
+    LoggingQueueObserver,
+    PrometheusQueueObserver,
+)
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.engine import OrchestratorEngine
@@ -199,7 +204,13 @@ class AppContainer:
         )
 
         owns_queue = queue is None
-        effective_queue = queue or build_queue(effective_settings)
+        queue_observer = CompositeQueueObserver(
+            observers=[
+                PrometheusQueueObserver(metrics=effective_metrics),
+                LoggingQueueObserver(),
+            ]
+        )
+        effective_queue = queue or build_queue(effective_settings, observer=queue_observer)
 
         registry = tool_registry or _build_default_tool_registry(effective_settings)
         tool_runner = ToolRunner(registry=registry, settings=effective_settings)

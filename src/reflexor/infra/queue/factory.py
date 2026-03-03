@@ -5,12 +5,14 @@ from collections.abc import Callable
 from reflexor.config import ReflexorSettings
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
 from reflexor.orchestrator.queue import Queue
+from reflexor.orchestrator.queue.observer import QueueObserver
 
 
 def build_queue(
     settings: ReflexorSettings,
     *,
     now_ms: Callable[[], int] | None = None,
+    observer: QueueObserver | None = None,
 ) -> Queue:
     """Build a `Queue` implementation from settings.
 
@@ -19,6 +21,6 @@ def build_queue(
     """
 
     if settings.queue_backend == "inmemory":
-        return InMemoryQueue.from_settings(settings, now_ms=now_ms)
+        return InMemoryQueue.from_settings(settings, now_ms=now_ms, observer=observer)
 
     raise ValueError(f"unknown queue backend: {settings.queue_backend!r}")

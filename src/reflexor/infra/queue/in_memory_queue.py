@@ -131,6 +131,7 @@ class InMemoryQueue:
                 envelope=envelope,
                 correlation_ids=build_queue_correlation_ids(envelope),
                 now_ms=now,
+                queue_depth=len(self._states),
             )
 
         for observation in redeliver:
@@ -163,6 +164,7 @@ class InMemoryQueue:
             redeliver: list[QueueRedeliverObservation]
             lease: Lease | None
             now: int
+            queue_depth: int
             async with self._lock:
                 if self._closed:
                     raise QueueClosed("queue is closed")
@@ -172,6 +174,7 @@ class InMemoryQueue:
                 self._promote_delayed(now=now)
 
                 lease = self._try_dequeue(now=now, visibility_timeout_s=visibility_timeout_s)
+                queue_depth = len(self._states)
                 if lease is None:
                     self._ready_event.clear()
 
@@ -184,13 +187,16 @@ class InMemoryQueue:
                         lease=lease,
                         correlation_ids=build_queue_correlation_ids(lease.envelope),
                         now_ms=now,
+                        queue_depth=queue_depth,
                     )
                 )
                 return lease
 
             if wait_s is not None and float(wait_s) == 0.0:
                 self._observer.on_dequeue(
-                    QueueDequeueObservation(lease=None, correlation_ids=None, now_ms=now)
+                    QueueDequeueObservation(
+                        lease=None, correlation_ids=None, now_ms=now, queue_depth=queue_depth
+                    )
                 )
                 return None
 
@@ -198,7 +204,9 @@ class InMemoryQueue:
                 remaining_s = deadline - asyncio.get_running_loop().time()
                 if remaining_s <= 0:
                     self._observer.on_dequeue(
-                        QueueDequeueObservation(lease=None, correlation_ids=None, now_ms=now)
+                        QueueDequeueObservation(
+                            lease=None, correlation_ids=None, now_ms=now, queue_depth=queue_depth
+                        )
                     )
                     return None
             else:
@@ -211,7 +219,9 @@ class InMemoryQueue:
                     await asyncio.wait_for(self._ready_event.wait(), timeout=remaining_s)
             except TimeoutError:
                 self._observer.on_dequeue(
-                    QueueDequeueObservation(lease=None, correlation_ids=None, now_ms=now)
+                    QueueDequeueObservation(
+                        lease=None, correlation_ids=None, now_ms=now, queue_depth=queue_depth
+                    )
                 )
                 return None
 
@@ -238,6 +248,7 @@ class InMemoryQueue:
                         lease=lease,
                         correlation_ids=build_queue_correlation_ids(lease.envelope),
                         now_ms=now,
+                        queue_depth=len(self._states),
                     )
 
         for observation in redeliver:
@@ -288,6 +299,7 @@ class InMemoryQueue:
                         delay_s=delay,
                         reason=reason,
                         now_ms=now,
+                        queue_depth=len(self._states),
                     )
 
         for observation in redeliver:
@@ -383,6 +395,7 @@ class InMemoryQueue:
                     deadline_ms=inflight.deadline_ms,
                     visibility_timeout_s=inflight.visibility_timeout_s,
                     now_ms=now,
+                    queue_depth=len(self._states),
                 )
             )
 

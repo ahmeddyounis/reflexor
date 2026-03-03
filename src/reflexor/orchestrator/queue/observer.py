@@ -22,6 +22,7 @@ class QueueEnqueueObservation:
     envelope: TaskEnvelope
     correlation_ids: dict[str, str | None]
     now_ms: int
+    queue_depth: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,7 @@ class QueueDequeueObservation:
     lease: Lease | None
     correlation_ids: dict[str, str | None] | None
     now_ms: int
+    queue_depth: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,7 @@ class QueueAckObservation:
     lease: Lease
     correlation_ids: dict[str, str | None]
     now_ms: int
+    queue_depth: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +48,7 @@ class QueueNackObservation:
     delay_s: float
     reason: str | None
     now_ms: int
+    queue_depth: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +64,7 @@ class QueueRedeliverObservation:
     visibility_timeout_s: float
 
     now_ms: int
+    queue_depth: int
 
 
 class QueueObserver(Protocol):
