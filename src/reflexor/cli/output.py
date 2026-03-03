@@ -138,6 +138,7 @@ def print_tasks_table(page: dict[str, object]) -> None:
         rows,
         columns=[
             TableColumn("task_id", "TASK_ID", max_width=36),
+            TableColumn("run_id", "RUN_ID", max_width=36),
             TableColumn("status", "STATUS"),
             TableColumn("name", "NAME", max_width=32),
             TableColumn("attempts", "ATTEMPTS", align="right"),
