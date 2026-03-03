@@ -6,8 +6,6 @@ import sys
 import time
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
@@ -19,35 +17,8 @@ from reflexor.orchestrator.engine import OrchestratorEngine  # noqa: E402
 from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask  # noqa: E402
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter  # noqa: E402
 from reflexor.orchestrator.sinks import InMemoryRunPacketSink  # noqa: E402
+from reflexor.tools.mock_tool import MockTool  # noqa: E402
 from reflexor.tools.registry import ToolRegistry  # noqa: E402
-from reflexor.tools.sdk.contracts import ToolManifest, ToolResult  # noqa: E402
-from reflexor.tools.sdk.tool import ToolContext  # noqa: E402
-
-
-class MockEchoArgs(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    message: str = Field(min_length=1)
-    event_type: str = Field(min_length=1)
-
-
-class MockEchoTool:
-    manifest = ToolManifest(
-        name="mock.echo",
-        version="0.0.0",
-        description="In-process mock tool used by examples (no side effects).",
-        permission_scope="debug.echo",
-        side_effects=False,
-        idempotent=True,
-        default_timeout_s=5,
-        max_output_bytes=2_048,
-        tags=["example", "mock"],
-    )
-    ArgsModel = MockEchoArgs
-
-    async def run(self, args: MockEchoArgs, ctx: ToolContext) -> ToolResult:
-        _ = ctx
-        return ToolResult(ok=True, data={"echo": args.message, "event_type": args.event_type})
 
 
 class ExamplePlanner:
@@ -84,7 +55,7 @@ async def _drain_envelopes(queue: InMemoryQueue) -> list[dict[str, object]]:
 
 async def main() -> None:
     registry = ToolRegistry()
-    registry.register(MockEchoTool())
+    registry.register(MockTool(tool_name="mock.echo", permission_scope="fs.read"))
 
     router = RuleBasedReflexRouter.from_raw_rules(
         [
@@ -141,6 +112,9 @@ async def main() -> None:
     envelopes = await _drain_envelopes(queue)
     packets = await sink.list_recent(limit=10)
 
+    print("== In-process Orchestrator Demo ==")
+    print("Note: OrchestratorEngine only validates and enqueues tasks (no tools are executed).")
+    print()
     print("== Queued Envelopes ==")
     print(json.dumps(envelopes, indent=2, sort_keys=True))
     print()

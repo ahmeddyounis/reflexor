@@ -142,7 +142,7 @@ Rules:
 
 See `examples/inprocess_orchestrator.py` for a runnable, side-effect-free in-process demo that:
 
-- registers a mock tool in `ToolRegistry`
+- registers a mock tool (`reflexor.tools.mock_tool.MockTool`) in `ToolRegistry`
 - routes an event through reflex rules and enqueues a task
 - adds a second event to the planning backlog and runs one planning cycle
 - prints queued envelopes and recorded run packets
@@ -152,4 +152,3 @@ Run it after installing dev dependencies (e.g. `make venv`), then:
 ```bash
 python examples/inprocess_orchestrator.py
 ```
-
