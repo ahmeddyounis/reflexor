@@ -261,6 +261,7 @@ class AppContainer:
             persistence=persistence,
             limits=limits,
             clock=effective_clock,
+            metrics=effective_metrics,
             planner_debounce_s=float(effective_settings.planner_debounce_s),
             planner_interval_s=float(effective_settings.planner_interval_s),
         )

@@ -6,11 +6,13 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from prometheus_client import generate_latest
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings, clear_settings_cache
 from reflexor.domain.models_event import Event
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
@@ -119,6 +121,7 @@ async def test_planning_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_pat
     clock = _FixedClock()
     queue = InMemoryQueue(now_ms=clock.now_ms)
     sink = InMemoryRunPacketSink(settings=settings)
+    metrics = ReflexorMetrics.build()
 
     planner = _TaskListPlanner(
         tasks=[
@@ -139,6 +142,7 @@ async def test_planning_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_pat
             max_events_per_planning_cycle=10,
         ),
         clock=clock,
+        metrics=metrics,
     )
 
     await engine.handle_event(_event("11111111-1111-4111-8111-111111111111"))
@@ -158,6 +162,9 @@ async def test_planning_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_pat
     assert stored["policy_decisions"][0]["type"] == "budget_exceeded"
     assert stored["policy_decisions"][0]["context"]["budget"] == "max_tasks_per_run"
 
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert 'orchestrator_rejections_total{reason="budget"} 1.0' in metrics_text
+
 
 async def test_reflex_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_path: Path) -> None:
     settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=50_000)
@@ -168,6 +175,7 @@ async def test_reflex_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_path:
     clock = _FixedClock()
     queue = InMemoryQueue(now_ms=clock.now_ms)
     sink = InMemoryRunPacketSink(settings=settings)
+    metrics = ReflexorMetrics.build()
 
     engine = OrchestratorEngine(
         reflex_router=_TwoTaskRouter(),
@@ -180,6 +188,7 @@ async def test_reflex_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_path:
             max_tool_calls_per_run=10,
         ),
         clock=clock,
+        metrics=metrics,
     )
 
     run_id = await engine.handle_event(_event("22222222-2222-4222-8222-222222222222"))
@@ -198,6 +207,9 @@ async def test_reflex_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_path:
     assert stored["policy_decisions"][0]["type"] == "budget_exceeded"
     assert stored["policy_decisions"][0]["context"]["budget"] == "max_tasks_per_run"
 
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert 'orchestrator_rejections_total{reason="budget"} 1.0' in metrics_text
+
 
 async def test_reflex_invalid_args_records_validation_error_and_does_not_enqueue(
     tmp_path: Path,
@@ -210,6 +222,7 @@ async def test_reflex_invalid_args_records_validation_error_and_does_not_enqueue
     clock = _FixedClock()
     queue = InMemoryQueue(now_ms=clock.now_ms)
     sink = InMemoryRunPacketSink(settings=settings)
+    metrics = ReflexorMetrics.build()
 
     engine = OrchestratorEngine(
         reflex_router=_InvalidArgsRouter(),
@@ -219,6 +232,7 @@ async def test_reflex_invalid_args_records_validation_error_and_does_not_enqueue
         run_sink=sink,
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
+        metrics=metrics,
     )
 
     run_id = await engine.handle_event(_event("33333333-3333-4333-8333-333333333333"))
@@ -236,6 +250,9 @@ async def test_reflex_invalid_args_records_validation_error_and_does_not_enqueue
     assert stored["reflex_decision"]["reason"] == "invalid_args"
     assert stored["policy_decisions"][0]["type"] == "plan_validation_error"
     assert "invalid tool args" in stored["policy_decisions"][0]["message"]
+
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert 'orchestrator_rejections_total{reason="validation"} 1.0' in metrics_text
 
 
 @pytest.mark.parametrize(
@@ -270,6 +287,7 @@ async def test_planning_validation_failure_is_recorded_and_backlog_is_retained(
     sink = InMemoryRunPacketSink(settings=settings)
 
     planner = _TaskListPlanner(tasks=tasks)
+    metrics = ReflexorMetrics.build()
 
     engine = OrchestratorEngine(
         reflex_router=NeedsPlanningRouter(),
@@ -279,6 +297,7 @@ async def test_planning_validation_failure_is_recorded_and_backlog_is_retained(
         run_sink=sink,
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
+        metrics=metrics,
     )
 
     await engine.handle_event(_event("44444444-4444-4444-8444-444444444444"))
@@ -303,3 +322,6 @@ async def test_planning_validation_failure_is_recorded_and_backlog_is_retained(
     assert stored["tasks"] == []
     assert stored["policy_decisions"][0]["type"] == "plan_validation_error"
     assert expected_message_substring in stored["policy_decisions"][0]["message"]
+
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert 'orchestrator_rejections_total{reason="validation"} 1.0' in metrics_text

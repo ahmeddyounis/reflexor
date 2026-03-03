@@ -13,6 +13,7 @@ Clean Architecture:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from reflexor.domain.models import Task
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.observability.context import correlation_context, get_correlation_ids
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.budgets import BudgetLimits, BudgetTracker, budget_exceeded_to_audit_dict
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.interfaces import Planner, ReflexRouter
@@ -55,6 +57,7 @@ class OrchestratorEngine:
     persistence: OrchestratorPersistence | None = None
     limits: BudgetLimits = field(default_factory=BudgetLimits)
     clock: Clock = SystemClock()
+    metrics: ReflexorMetrics | None = None
     planner_debounce_s: float = 0.25
     planner_interval_s: float = 30.0
 
@@ -106,6 +109,7 @@ class OrchestratorEngine:
     async def handle_event(self, event: Event) -> str:
         """Handle a single event and return the created `run_id`."""
 
+        started_perf_s = time.perf_counter()
         run_id = str(uuid4())
         created_at_ms = int(self.clock.now_ms())
         persisted_event = event
@@ -131,6 +135,8 @@ class OrchestratorEngine:
         enqueued_task_ids: list[str] = []
 
         with correlation_context(event_id=persisted_event.event_id, run_id=run_id):
+            if self.metrics is not None:
+                self.metrics.events_received_total.inc()
             try:
                 planning_input = PlanningInput(
                     trigger="event", events=[persisted_event], now_ms=self.clock.now_ms()
@@ -157,6 +163,7 @@ class OrchestratorEngine:
                         reason=decision.reason,
                         source="reflex",
                         trigger="event",
+                        first_enqueue_started_s=started_perf_s,
                     )
                     enqueued_task_ids = [task.task_id for task in tasks]
                     if enqueued_task_ids:
@@ -174,12 +181,18 @@ class OrchestratorEngine:
                     if self._planning_debouncer is not None:
                         self._planning_debouncer.trigger()
                 elif decision.action == "drop":
+                    if self.metrics is not None:
+                        self.metrics.orchestrator_rejections_total.labels(reason="drop").inc()
                     pass
                 else:  # pragma: no cover
                     raise AssertionError(f"unknown reflex decision action: {decision.action!r}")
             except BudgetExceeded as exc:
+                if self.metrics is not None:
+                    self.metrics.orchestrator_rejections_total.labels(reason="budget").inc()
                 policy_decisions.append(budget_exceeded_to_audit_dict(exc))
             except PlanValidationError as exc:
+                if self.metrics is not None:
+                    self.metrics.orchestrator_rejections_total.labels(reason="validation").inc()
                 policy_decisions.append(
                     {
                         "type": "plan_validation_error",
@@ -215,6 +228,7 @@ class OrchestratorEngine:
         plan validation and queueing.
         """
 
+        started_perf_s = time.perf_counter()
         planning_run_id = str(uuid4())
         tracker = BudgetTracker(limits=self.limits, clock=self.clock)
         validator = PlanValidator(registry=self.tool_registry)
@@ -224,136 +238,148 @@ class OrchestratorEngine:
         policy_decisions: list[dict[str, object]] = []
         enqueued_task_ids: list[str] = []
 
-        async with self._planning_lock:
-            async with self._backlog_lock:
-                backlog_before = len(self._backlog)
-                max_events = self.limits.max_events_per_planning_cycle
-                if max_events is None:
-                    max_events = backlog_before
-                else:
-                    max_events = min(int(max_events), backlog_before)
+        try:
+            async with self._planning_lock:
+                async with self._backlog_lock:
+                    backlog_before = len(self._backlog)
+                    max_events = self.limits.max_events_per_planning_cycle
+                    if max_events is None:
+                        max_events = backlog_before
+                    else:
+                        max_events = min(int(max_events), backlog_before)
 
-                selected_events: list[Event] = []
-                for idx, item in enumerate(self._backlog):
-                    if idx >= max_events:
-                        break
-                    selected_events.append(item)
+                    selected_events: list[Event] = []
+                    for idx, item in enumerate(self._backlog):
+                        if idx >= max_events:
+                            break
+                        selected_events.append(item)
 
-            now_ms = int(self.clock.now_ms())
-            synthetic_event = Event(
-                type="planning_cycle",
-                source="orchestrator",
-                received_at_ms=now_ms,
-                payload={
-                    "trigger": trigger,
-                    "selected_events": len(selected_events),
-                    "backlog_before": backlog_before,
-                },
-            )
-            persisted_event = synthetic_event
-
-            if self.persistence is not None:
-                persisted_event = await self.persistence.persist_event_and_run(
-                    event=synthetic_event,
-                    run_record=RunRecord(
-                        run_id=planning_run_id,
-                        parent_run_id=None,
-                        created_at_ms=now_ms,
-                        started_at_ms=None,
-                        completed_at_ms=None,
-                    ),
+                now_ms = int(self.clock.now_ms())
+                synthetic_event = Event(
+                    type="planning_cycle",
+                    source="orchestrator",
+                    received_at_ms=now_ms,
+                    payload={
+                        "trigger": trigger,
+                        "selected_events": len(selected_events),
+                        "backlog_before": backlog_before,
+                    },
                 )
+                persisted_event = synthetic_event
 
-            with correlation_context(event_id=persisted_event.event_id, run_id=planning_run_id):
-                try:
-                    effective_trigger: PlanningTrigger = trigger
-                    if effective_trigger == "event" and not selected_events:
-                        effective_trigger = "tick"
-
-                    planning_input = PlanningInput(
-                        trigger=effective_trigger,
-                        events=selected_events,
-                        limits=LimitsSnapshot(
-                            max_tasks=self.limits.max_tasks_per_run,
-                            max_tool_calls=self.limits.max_tool_calls_per_run,
-                            max_runtime_s=self.limits.max_wall_time_s,
-                        ),
-                        now_ms=now_ms,
-                    )
-                    plan = await self.planner.plan(planning_input)
-                    plan_dict = plan.model_dump(mode="json")
-
-                    proposed_tasks = list(plan.tasks)
-                    if selected_events:
-                        tracker.observe_planning_events(len(selected_events), source="planner")
-                    if proposed_tasks:
-                        tracker.accept_tasks(len(proposed_tasks), source="planner")
-                        tracker.accept_tool_calls(len(proposed_tasks), source="planner")
-
-                    tasks = validator.build_tasks(
-                        proposed_tasks,
-                        run_id=planning_run_id,
-                        seed_source="planning",
-                    )
-                    if self.persistence is not None:
-                        await self.persistence.persist_tasks_and_tool_calls(tasks)
-
-                    await self._enqueue_tasks(
-                        tasks,
-                        reason=plan.summary,
-                        source="planner",
-                        trigger=effective_trigger,
-                    )
-                    enqueued_task_ids = [task.task_id for task in tasks]
-                    if enqueued_task_ids:
-                        enqueued_set = set(enqueued_task_ids)
-                        tasks = [
-                            (
-                                task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
-                                if task.task_id in enqueued_set
-                                else task
-                            )
-                            for task in tasks
-                        ]
-
-                    if selected_events:
-                        async with self._backlog_lock:
-                            for _ in range(len(selected_events)):
-                                if not self._backlog:
-                                    break
-                                self._backlog.popleft()
-                except BudgetExceeded as exc:
-                    policy_decisions.append(budget_exceeded_to_audit_dict(exc))
-                except PlanValidationError as exc:
-                    policy_decisions.append(
-                        {
-                            "type": "plan_validation_error",
-                            "message": str(exc),
-                        }
-                    )
-                except Exception as exc:  # pragma: no cover
-                    policy_decisions.append(
-                        {
-                            "type": "planning_error",
-                            "message": str(exc),
-                        }
-                    )
-
-                run_packet = RunPacket(
-                    run_id=planning_run_id,
-                    event=persisted_event,
-                    plan=plan_dict,
-                    tasks=tasks,
-                    policy_decisions=policy_decisions,
-                    created_at_ms=now_ms,
-                )
-                await self.run_sink.emit(run_packet)
                 if self.persistence is not None:
-                    await self.persistence.finalize_run(
-                        run_packet, enqueued_task_ids=enqueued_task_ids
+                    persisted_event = await self.persistence.persist_event_and_run(
+                        event=synthetic_event,
+                        run_record=RunRecord(
+                            run_id=planning_run_id,
+                            parent_run_id=None,
+                            created_at_ms=now_ms,
+                            started_at_ms=None,
+                            completed_at_ms=None,
+                        ),
                     )
 
-        return planning_run_id
+                with correlation_context(event_id=persisted_event.event_id, run_id=planning_run_id):
+                    try:
+                        effective_trigger: PlanningTrigger = trigger
+                        if effective_trigger == "event" and not selected_events:
+                            effective_trigger = "tick"
+
+                        planning_input = PlanningInput(
+                            trigger=effective_trigger,
+                            events=selected_events,
+                            limits=LimitsSnapshot(
+                                max_tasks=self.limits.max_tasks_per_run,
+                                max_tool_calls=self.limits.max_tool_calls_per_run,
+                                max_runtime_s=self.limits.max_wall_time_s,
+                            ),
+                            now_ms=now_ms,
+                        )
+                        plan = await self.planner.plan(planning_input)
+                        plan_dict = plan.model_dump(mode="json")
+
+                        proposed_tasks = list(plan.tasks)
+                        if selected_events:
+                            tracker.observe_planning_events(len(selected_events), source="planner")
+                        if proposed_tasks:
+                            tracker.accept_tasks(len(proposed_tasks), source="planner")
+                            tracker.accept_tool_calls(len(proposed_tasks), source="planner")
+
+                        tasks = validator.build_tasks(
+                            proposed_tasks,
+                            run_id=planning_run_id,
+                            seed_source="planning",
+                        )
+                        if self.persistence is not None:
+                            await self.persistence.persist_tasks_and_tool_calls(tasks)
+
+                        await self._enqueue_tasks(
+                            tasks,
+                            reason=plan.summary,
+                            source="planner",
+                            trigger=effective_trigger,
+                        )
+                        enqueued_task_ids = [task.task_id for task in tasks]
+                        if enqueued_task_ids:
+                            enqueued_set = set(enqueued_task_ids)
+                            tasks = [
+                                (
+                                    task.model_copy(
+                                        update={"status": TaskStatus.QUEUED}, deep=True
+                                    )
+                                    if task.task_id in enqueued_set
+                                    else task
+                                )
+                                for task in tasks
+                            ]
+
+                        if selected_events:
+                            async with self._backlog_lock:
+                                for _ in range(len(selected_events)):
+                                    if not self._backlog:
+                                        break
+                                    self._backlog.popleft()
+                    except BudgetExceeded as exc:
+                        if self.metrics is not None:
+                            self.metrics.orchestrator_rejections_total.labels(reason="budget").inc()
+                        policy_decisions.append(budget_exceeded_to_audit_dict(exc))
+                    except PlanValidationError as exc:
+                        if self.metrics is not None:
+                            self.metrics.orchestrator_rejections_total.labels(
+                                reason="validation"
+                            ).inc()
+                        policy_decisions.append(
+                            {
+                                "type": "plan_validation_error",
+                                "message": str(exc),
+                            }
+                        )
+                    except Exception as exc:  # pragma: no cover
+                        policy_decisions.append(
+                            {
+                                "type": "planning_error",
+                                "message": str(exc),
+                            }
+                        )
+
+                    run_packet = RunPacket(
+                        run_id=planning_run_id,
+                        event=persisted_event,
+                        plan=plan_dict,
+                        tasks=tasks,
+                        policy_decisions=policy_decisions,
+                        created_at_ms=now_ms,
+                    )
+                    await self.run_sink.emit(run_packet)
+                    if self.persistence is not None:
+                        await self.persistence.finalize_run(
+                            run_packet, enqueued_task_ids=enqueued_task_ids
+                        )
+
+            return planning_run_id
+        finally:
+            if self.metrics is not None:
+                self.metrics.planner_latency_seconds.observe(time.perf_counter() - started_perf_s)
 
     async def _enqueue_tasks(
         self,
@@ -362,9 +388,10 @@ class OrchestratorEngine:
         reason: str,
         source: str,
         trigger: PlanningTrigger | None = None,
+        first_enqueue_started_s: float | None = None,
     ) -> None:
         now_ms = int(self.clock.now_ms())
-        for task in tasks:
+        for idx, task in enumerate(tasks):
             tool_call = task.tool_call
             if tool_call is None:
                 raise PlanValidationError("task.tool_call is required for queueing")
@@ -386,6 +413,16 @@ class OrchestratorEngine:
                     },
                 )
                 await self.queue.enqueue(envelope)
+                if (
+                    idx == 0
+                    and first_enqueue_started_s is not None
+                    and self.metrics is not None
+                    and source == "reflex"
+                ):
+                    self.metrics.event_to_enqueue_seconds.observe(
+                        time.perf_counter() - first_enqueue_started_s
+                    )
+                    first_enqueue_started_s = None
 
     async def _enqueue_backlog_event(self, event: Event) -> None:
         async with self._backlog_lock:

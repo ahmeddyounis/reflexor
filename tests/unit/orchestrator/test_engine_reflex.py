@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+from prometheus_client import generate_latest
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
@@ -11,6 +12,7 @@ from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.domain.serialization import canonical_json, stable_sha256
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
@@ -118,6 +120,7 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
     queue = InMemoryQueue(now_ms=clock.now_ms)
     sink = InMemoryRunPacketSink(settings=settings)
     persistence = _RecordingPersistence()
+    metrics = ReflexorMetrics.build()
 
     engine = OrchestratorEngine(
         reflex_router=router,
@@ -128,6 +131,7 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
         persistence=persistence,
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
+        metrics=metrics,
         planner_debounce_s=settings.planner_debounce_s,
         planner_interval_s=settings.planner_interval_s,
     )
@@ -165,6 +169,10 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
     assert persistence.event_run_ids == [run_id]
     assert persistence.task_ids == [envelope.task_id]
     assert persistence.finalize_calls == [(run_id, [envelope.task_id])]
+
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert "events_received_total 1.0" in metrics_text
+    assert "event_to_enqueue_seconds_count 1.0" in metrics_text
 
     stored = await sink.get(run_id)
     assert stored is not None

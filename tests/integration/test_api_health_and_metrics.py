@@ -63,6 +63,7 @@ def test_healthz_and_metrics_endpoints(tmp_path: Path) -> None:
         assert "policy_decisions_total" in text_before
         assert "queue_depth" in text_before
         assert "queue_redeliver_total" in text_before
+        assert "orchestrator_rejections_total" in text_before
         assert "event_ingest_latency_seconds" in text_before
         assert "approvals_pending_total" in text_before
         assert "api_requests_total" in text_before

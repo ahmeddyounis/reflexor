@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+from prometheus_client import generate_latest
 from pydantic import BaseModel
 
 from reflexor.domain.models_event import Event
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
@@ -182,6 +184,7 @@ async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None
     sink = _InMemoryRunSink()
     clock = _ManualClock()
     planner = _SingleTaskPlanner()
+    metrics = ReflexorMetrics.build()
 
     engine = OrchestratorEngine(
         reflex_router=NeedsPlanningRouter(),
@@ -191,6 +194,7 @@ async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None
         limits=BudgetLimits(max_events_per_planning_cycle=10),
         clock=clock,
         run_sink=sink,
+        metrics=metrics,
         planner_debounce_s=1.0,
         planner_interval_s=10_000.0,
     )
@@ -210,6 +214,9 @@ async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None
         await clock.advance(seconds=0.1)
         await asyncio.wait_for(queue.enqueued.wait(), timeout=1.0)
         await sink.wait_for_count(count=2)
+
+        metrics_text = generate_latest(metrics.registry).decode()
+        assert "planner_latency_seconds_count 1.0" in metrics_text
 
         assert len(queue.envelopes) == 1
         envelope = queue.envelopes[0]

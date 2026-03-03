@@ -190,6 +190,7 @@ class ReflexorMetrics:
     policy_decisions_total: Counter
     queue_depth: Gauge
     queue_redeliver_total: Counter
+    orchestrator_rejections_total: Counter
 
     # API-facing metrics (still centralized here)
     event_ingest_latency_seconds: Histogram
@@ -243,6 +244,12 @@ class ReflexorMetrics:
                 "queue_redeliver",
                 registry=effective_registry,
                 description="Total redeliveries due to visibility timeout",
+            ),
+            orchestrator_rejections_total=counter(
+                "orchestrator_rejections",
+                labels=["reason"],
+                registry=effective_registry,
+                description="Orchestrator rejections by reason",
             ),
             event_ingest_latency_seconds=histogram(
                 "event_ingest_latency_seconds",

@@ -43,7 +43,6 @@ async def submit_event(
     if outcome.duplicate:
         response.status_code = status.HTTP_200_OK
 
-    container.metrics.events_received_total.inc()
     container.metrics.event_ingest_latency_seconds.observe(time.perf_counter() - start_s)
 
     return SubmitEventResponse(
