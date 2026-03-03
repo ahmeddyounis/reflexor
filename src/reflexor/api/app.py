@@ -51,7 +51,7 @@ def create_app(
     async def _request_id_and_event_body_cap(request: Request, call_next):  # type: ignore[no-untyped-def]
         request_id = request.headers.get("X-Request-ID") or str(uuid4())
 
-        if request.method.upper() == "POST" and request.url.path == "/v1/events":
+        if request.method.upper() == "POST" and request.url.path in {"/v1/events", "/events"}:
             container = getattr(request.app.state, "container", None)
             max_bytes = getattr(
                 getattr(container, "settings", None), "max_event_payload_bytes", None
@@ -95,6 +95,7 @@ def create_app(
 
     app.include_router(health.router)
     app.include_router(events.router)
+    app.include_router(events.compat_router)
     app.include_router(runs.router)
     app.include_router(tasks.router)
     app.include_router(approvals.router)

@@ -10,14 +10,11 @@ from reflexor.domain.models_event import Event
 router = APIRouter(
     prefix="/v1/events", tags=["events"], dependencies=[Depends(require_events_access)]
 )
-
-
-@router.post(
-    "",
-    response_model=SubmitEventResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    responses={400: {"model": ErrorResponse}, 413: {"model": ErrorResponse}},
+compat_router = APIRouter(
+    prefix="/events", tags=["events"], dependencies=[Depends(require_events_access)]
 )
+
+
 async def submit_event(
     submitter: EventSubmitterDep,
     container: ContainerDep,
@@ -50,9 +47,20 @@ async def submit_event(
     )
 
 
-@router.get("")
 async def list_events(_queries: QueryServiceDep) -> dict[str, object]:
     raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="not implemented")
 
 
-__all__ = ["router"]
+for _r in (router, compat_router):
+    _r.add_api_route(
+        "",
+        submit_event,
+        methods=["POST"],
+        response_model=SubmitEventResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        responses={400: {"model": ErrorResponse}, 413: {"model": ErrorResponse}},
+    )
+    _r.add_api_route("", list_events, methods=["GET"])
+
+
+__all__ = ["compat_router", "router"]
