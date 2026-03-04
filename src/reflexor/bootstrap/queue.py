@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from reflexor.config import ReflexorSettings
 from reflexor.infra.queue.factory import build_queue as build_queue_backend
-from reflexor.observability.metrics import ReflexorMetrics as ApiMetrics
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.observability.queue_observers import (
     CompositeQueueObserver,
     LoggingQueueObserver,
@@ -16,7 +16,7 @@ from reflexor.orchestrator.queue import Queue
 def build_queue(
     settings: ReflexorSettings,
     *,
-    metrics: ApiMetrics,
+    metrics: ReflexorMetrics,
     queue: Queue | None,
 ) -> tuple[Queue, bool]:
     owns_queue = queue is None

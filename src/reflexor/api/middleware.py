@@ -16,9 +16,9 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from reflexor.api.metrics import ApiMetrics
 from reflexor.api.schemas import ErrorResponse
 from reflexor.observability.context import correlation_context, request_id_context
+from reflexor.observability.metrics import ReflexorMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -100,11 +100,11 @@ def _extract_path_correlation_ids(request: Request) -> dict[str, str | None]:
     }
 
 
-def _get_metrics(request: Request) -> ApiMetrics | None:
+def _get_metrics(request: Request) -> ReflexorMetrics | None:
     state = getattr(getattr(request, "app", None), "state", None)
     container = getattr(state, "container", None)
     metrics = getattr(container, "metrics", None)
-    return metrics if isinstance(metrics, ApiMetrics) else None
+    return metrics if isinstance(metrics, ReflexorMetrics) else None
 
 
 def _event_ingest_path(path: str) -> bool:

@@ -10,7 +10,7 @@ from collections.abc import Callable
 
 from reflexor.bootstrap.repos import RepoProviders
 from reflexor.config import ReflexorSettings
-from reflexor.observability.metrics import ReflexorMetrics as ApiMetrics
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.engine import OrchestratorEngine
@@ -52,7 +52,7 @@ def resolve_reflex_router(
 def build_orchestrator_engine(
     settings: ReflexorSettings,
     *,
-    metrics: ApiMetrics,
+    metrics: ReflexorMetrics,
     uow_factory: Callable[[], UnitOfWork],
     repos: RepoProviders,
     queue: Queue,

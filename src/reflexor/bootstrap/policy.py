@@ -12,7 +12,7 @@ from reflexor.guards.defaults import (
     build_default_circuit_breaker,
     build_default_policy_guard_chain,
 )
-from reflexor.observability.metrics import ReflexorMetrics as ApiMetrics
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.defaults import build_default_policy_rules
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
@@ -24,7 +24,7 @@ from reflexor.tools.runner import ToolRunner
 def build_policy_gate(
     settings: ReflexorSettings,
     *,
-    metrics: ApiMetrics,
+    metrics: ReflexorMetrics,
 ) -> PolicyGate:
     return PolicyGate(
         rules=build_default_policy_rules(),
@@ -35,7 +35,7 @@ def build_policy_gate(
 
 def build_policy_runner(
     *,
-    metrics: ApiMetrics,
+    metrics: ReflexorMetrics,
     uow_factory: Callable[[], UnitOfWork],
     repos: RepoProviders,
     registry: ToolRegistry,

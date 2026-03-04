@@ -51,7 +51,7 @@ from reflexor.infra.db.engine import (
     create_async_session_factory,
 )
 from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger
-from reflexor.observability.metrics import ReflexorMetrics as ApiMetrics
+from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import Planner, ReflexRouter
@@ -72,7 +72,7 @@ class AppContainer:
     """Application container stored on `app.state.container`."""
 
     settings: ReflexorSettings
-    metrics: ApiMetrics
+    metrics: ReflexorMetrics
     engine: AsyncEngine
     session_factory: AsyncSessionFactory
     uow_factory: Callable[[], UnitOfWork]
@@ -256,7 +256,7 @@ class AppContainer:
         cls,
         *,
         settings: ReflexorSettings | None = None,
-        metrics: ApiMetrics | None = None,
+        metrics: ReflexorMetrics | None = None,
         engine: AsyncEngine | None = None,
         session_factory: AsyncSessionFactory | None = None,
         queue: Queue | None = None,
@@ -267,7 +267,7 @@ class AppContainer:
         run_sink: RunPacketSink | None = None,
     ) -> AppContainer:
         effective_settings = get_settings() if settings is None else settings
-        effective_metrics = ApiMetrics.build() if metrics is None else metrics
+        effective_metrics = ReflexorMetrics.build() if metrics is None else metrics
 
         owns_engine = engine is None
         effective_engine = engine or create_async_engine(effective_settings)
