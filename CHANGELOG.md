@@ -13,13 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FastAPI package.
 - Architecture guardrails for `reflexor.bootstrap` and `reflexor.infra`.
 - Architecture guardrails for `reflexor.config` and `reflexor.observability`.
+- Architecture guardrails for `reflexor.replay`.
 
 ### Changed
 
 - CLI/worker entrypoints now import `AppContainer` from `reflexor.bootstrap.container`.
 - `reflexor.bootstrap.container` wiring split into smaller modules under `reflexor.bootstrap.*`.
+- Executor wiring extracted to `reflexor.bootstrap.executor` (with `AppContainer.build_executor_service`
+  delegating to it).
 - `AppContainer` fields grouped into resource/policy/service structs (public API preserved via
   properties).
+- `ReflexorSettings` implementation split into modules under `reflexor.config.settings` (public API
+  preserved).
 - Internal code now uses `ReflexorMetrics` consistently (with `reflexor.api.metrics` remaining as a
   shim).
 - Tests/examples now prefer importing `AppContainer` from `reflexor.bootstrap.container`.
@@ -28,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reflexor.executor.state` remaining as a shim).
 - Idempotency caching port moved to `reflexor.storage.idempotency` (with `reflexor.executor.idempotency`
   remaining as a shim).
+- Executor service internals split into modules under `reflexor.executor.service` (public API
+  preserved).
 - Added architecture guardrails for `reflexor.application` and `reflexor.storage`.
 
 ### Deprecated
