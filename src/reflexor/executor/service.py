@@ -34,7 +34,6 @@ from reflexor.domain.models import Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.idempotency import IdempotencyLedger, OutcomeToCache
 from reflexor.executor.retries import (
     ErrorClassifier,
     RetryDisposition,
@@ -55,6 +54,7 @@ from reflexor.security.policy.enforcement import (
     PolicyEnforcedToolRunner,
     ToolExecutionOutcome,
 )
+from reflexor.storage.idempotency import IdempotencyLedger, OutcomeToCache
 from reflexor.storage.ports import ApprovalRepo, RunPacketRepo, TaskRepo, ToolCallRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.context import tool_context_from_settings

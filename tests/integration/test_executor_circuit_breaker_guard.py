@@ -19,7 +19,6 @@ from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall
 from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import ExecutionDisposition, ExecutorRepoFactory, ExecutorService
 from reflexor.guards import GuardChain, PolicyGuard
@@ -48,6 +47,7 @@ from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import NetworkAllowlistRule, ScopeEnabledRule
 from reflexor.security.scopes import Scope
+from reflexor.storage.idempotency import IdempotencyLedger
 from reflexor.storage.ports import RunRecord
 from reflexor.storage.uow import DatabaseSession
 from reflexor.tools.registry import ToolRegistry

@@ -20,12 +20,12 @@ from reflexor.bootstrap.container import AppContainer  # noqa: E402
 from reflexor.config import ReflexorSettings  # noqa: E402
 from reflexor.domain.enums import TaskStatus, ToolCallStatus  # noqa: E402
 from reflexor.executor.concurrency import ConcurrencyLimiter  # noqa: E402
-from reflexor.executor.idempotency import IdempotencyLedger  # noqa: E402
 from reflexor.executor.retries import RetryPolicy  # noqa: E402
 from reflexor.executor.service import ExecutorRepoFactory, ExecutorService  # noqa: E402
 from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger  # noqa: E402
 from reflexor.infra.queue.redis_streams import RedisStreamsQueue  # noqa: E402
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter  # noqa: E402
+from reflexor.storage.idempotency import IdempotencyLedger  # noqa: E402
 from reflexor.storage.uow import DatabaseSession  # noqa: E402
 from reflexor.tools.mock_tool import MockTool  # noqa: E402
 from reflexor.tools.registry import ToolRegistry  # noqa: E402

@@ -12,7 +12,6 @@ from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus, ToolCal
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
-from reflexor.executor.idempotency import CachedOutcome, LedgerStatus, OutcomeToCache
 from reflexor.infra.db.mappers import (
     approval_from_orm,
     approval_to_row_dict,
@@ -34,6 +33,7 @@ from reflexor.infra.db.models import (
     ToolCallRow,
 )
 from reflexor.observability.audit_sanitize import sanitize_for_audit, sanitize_tool_output
+from reflexor.storage.idempotency import CachedOutcome, LedgerStatus, OutcomeToCache
 from reflexor.storage.ports import EventSuppressionRecord, RunRecord, RunSummary, TaskSummary
 from reflexor.tools.sdk import ToolResult
 

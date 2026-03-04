@@ -22,6 +22,17 @@ def test_executor_state_shim_points_to_domain() -> None:
     assert complete_canceled_executor is complete_canceled_domain
 
 
+def test_executor_idempotency_shim_points_to_storage() -> None:
+    from reflexor.executor.idempotency import (
+        OutcomeToCache as ExecutorOutcomeToCache,
+    )
+    from reflexor.storage.idempotency import (
+        OutcomeToCache as StorageOutcomeToCache,
+    )
+
+    assert ExecutorOutcomeToCache is StorageOutcomeToCache
+
+
 def test_api_metrics_shim_points_to_observability() -> None:
     from reflexor.api.metrics import ApiMetrics
     from reflexor.observability.metrics import ReflexorMetrics

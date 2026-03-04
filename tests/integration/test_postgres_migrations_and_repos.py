@@ -17,7 +17,6 @@ from reflexor.config import ReflexorSettings
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
-from reflexor.executor.idempotency import OutcomeToCache
 from reflexor.infra.db.engine import create_async_engine, create_async_session_factory
 from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
@@ -29,6 +28,7 @@ from reflexor.infra.db.repos import (
     SqlAlchemyToolCallRepo,
 )
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
+from reflexor.storage.idempotency import OutcomeToCache
 from reflexor.storage.ports import RunRecord
 from reflexor.tools.sdk import ToolResult
 

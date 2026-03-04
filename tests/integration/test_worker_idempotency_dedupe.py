@@ -19,7 +19,6 @@ from reflexor.domain.enums import TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall
 from reflexor.executor.approval_store import DbApprovalStore
 from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
 from reflexor.infra.db.engine import AsyncSessionFactory, create_async_session_factory
@@ -47,6 +46,7 @@ from reflexor.orchestrator.queue.observer import (
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ScopeEnabledRule
+from reflexor.storage.idempotency import IdempotencyLedger
 from reflexor.storage.ports import RunRecord
 from reflexor.storage.uow import DatabaseSession
 from reflexor.tools.mock_tool import MockTool

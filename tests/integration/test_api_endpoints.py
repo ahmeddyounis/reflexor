@@ -12,13 +12,13 @@ from reflexor.api.app import create_app
 from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import ExecutionDisposition, ExecutorRepoFactory, ExecutorService
 from reflexor.infra.db.models import Base
 from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
+from reflexor.storage.idempotency import IdempotencyLedger
 from reflexor.storage.uow import DatabaseSession
 from reflexor.tools.mock_tool import MockTool
 from reflexor.tools.registry import ToolRegistry

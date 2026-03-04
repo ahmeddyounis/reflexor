@@ -9,10 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from reflexor.executor.idempotency import OutcomeToCache
 from reflexor.infra.db.engine import AsyncSessionFactory, create_async_session_factory
 from reflexor.infra.db.models import Base, IdempotencyLedgerRow
 from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger
+from reflexor.storage.idempotency import OutcomeToCache
 from reflexor.tools.sdk import ToolResult
 
 

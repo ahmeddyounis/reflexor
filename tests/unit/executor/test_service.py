@@ -15,12 +15,6 @@ from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.idempotency import (
-    CachedOutcome,
-    IdempotencyLedger,
-    LedgerStatus,
-    OutcomeToCache,
-)
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import (
     ExecutionDisposition,
@@ -34,6 +28,12 @@ from reflexor.security.policy.approvals import InMemoryApprovalStore
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
+from reflexor.storage.idempotency import (
+    CachedOutcome,
+    IdempotencyLedger,
+    LedgerStatus,
+    OutcomeToCache,
+)
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.mock_tool import MockTool
 from reflexor.tools.registry import ToolRegistry

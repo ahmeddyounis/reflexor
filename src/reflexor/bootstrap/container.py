@@ -41,7 +41,6 @@ from reflexor.bootstrap.uow import build_uow_factory
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
@@ -59,6 +58,7 @@ from reflexor.orchestrator.queue import Queue
 from reflexor.orchestrator.sinks import RunPacketSink
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
+from reflexor.storage.idempotency import IdempotencyLedger
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.builtin_registry import build_builtin_registry
 from reflexor.tools.registry import ToolRegistry
