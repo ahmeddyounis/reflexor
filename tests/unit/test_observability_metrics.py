@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from prometheus_client import CollectorRegistry, generate_latest
 
 from reflexor.observability.metrics import (
@@ -30,6 +31,18 @@ def test_metric_helpers_register_once_and_are_incrementable() -> None:
     text = generate_latest(registry).decode()
     assert 'unit_test_counter_total{k="v"} 3.0' in text
     assert "unit_test_hist_seconds_count 1.0" in text
+
+
+def test_metric_helpers_reject_label_mismatch_and_kind_conflicts() -> None:
+    registry = CollectorRegistry(auto_describe=True)
+
+    counter("unit_test_conflict", labels=["a"], registry=registry)
+    with pytest.raises(ValueError, match="labelnames mismatch"):
+        counter("unit_test_conflict", labels=["b"], registry=registry)
+
+    counter("unit_test_kind_conflict", labels=None, registry=registry)
+    with pytest.raises(ValueError, match="already registered as"):
+        histogram("unit_test_kind_conflict", registry=registry)
 
 
 async def test_async_timer_observes_histogram() -> None:

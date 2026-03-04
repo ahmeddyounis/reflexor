@@ -61,6 +61,10 @@ def counter(
         assert isinstance(metric, Counter)
         return metric
 
+    for (kind, cached_name), _cached in cache.items():
+        if cached_name == str(name):
+            raise ValueError(f"metric {name!r} already registered as {kind}")
+
     metric = Counter(
         str(name),
         str(description or name),
@@ -93,6 +97,10 @@ def gauge(
         metric = existing.metric
         assert isinstance(metric, Gauge)
         return metric
+
+    for (kind, cached_name), _cached in cache.items():
+        if cached_name == str(name):
+            raise ValueError(f"metric {name!r} already registered as {kind}")
 
     metric = Gauge(
         str(name),
@@ -130,6 +138,10 @@ def histogram(
         metric = existing.metric
         assert isinstance(metric, Histogram)
         return metric
+
+    for (kind, cached_name), _cached in cache.items():
+        if cached_name == str(name):
+            raise ValueError(f"metric {name!r} already registered as {kind}")
 
     if buckets_tuple is None:
         metric = Histogram(
