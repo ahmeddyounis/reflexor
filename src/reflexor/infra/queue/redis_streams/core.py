@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import importlib.util
-import json
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
 
 from reflexor.config import ReflexorSettings
+from reflexor.infra.queue.redis_streams.codec import (
+    _FIELD_ENVELOPE,
+    _canonical_envelope_json,
+    _decode_envelope,
+)
+from reflexor.infra.queue.redis_streams.lua import _ACK_AND_REQUEUE_LUA, _PROMOTE_DELAYED_LUA
+from reflexor.infra.queue.redis_streams.redis_helpers import (
+    _extract_autoclaim_response,
+    _extract_stream_entries,
+    _extract_times_delivered,
+    _import_redis_asyncio,
+    _is_unknown_command_error,
+)
 from reflexor.orchestrator.queue import Lease, QueueClosed, TaskEnvelope
 from reflexor.orchestrator.queue.interface import system_now_ms
 from reflexor.orchestrator.queue.observer import (
@@ -22,166 +31,6 @@ from reflexor.orchestrator.queue.observer import (
     QueueRedeliverObservation,
     build_queue_correlation_ids,
 )
-
-_FIELD_ENVELOPE = "envelope"
-
-_PROMOTE_DELAYED_LUA = """
-local delayed_key = KEYS[1]
-local stream_key = KEYS[2]
-
-local now_ms = tonumber(ARGV[1])
-local count = tonumber(ARGV[2])
-local field_name = ARGV[3]
-local maxlen = ARGV[4]
-
-local due = redis.call('ZRANGEBYSCORE', delayed_key, '-inf', now_ms, 'LIMIT', 0, count)
-
-local moved = 0
-for _, payload in ipairs(due) do
-  local removed = redis.call('ZREM', delayed_key, payload)
-  if removed == 1 then
-    if maxlen ~= '' then
-      redis.call('XADD', stream_key, 'MAXLEN', '~', tonumber(maxlen), '*', field_name, payload)
-    else
-      redis.call('XADD', stream_key, '*', field_name, payload)
-    end
-    moved = moved + 1
-  end
-end
-
-return moved
-"""
-
-_ACK_AND_REQUEUE_LUA = """
-local stream_key = KEYS[1]
-local delayed_key = KEYS[2]
-
-local group = ARGV[1]
-local message_id = ARGV[2]
-local payload = ARGV[3]
-local available_at_ms = tonumber(ARGV[4])
-local enqueue_immediate = ARGV[5]
-local field_name = ARGV[6]
-local maxlen = ARGV[7]
-
-local acked = redis.call('XACK', stream_key, group, message_id)
-if acked == 0 then
-  return ''
-end
-
-if enqueue_immediate == '1' then
-  if maxlen ~= '' then
-    return redis.call('XADD', stream_key, 'MAXLEN', '~', tonumber(maxlen), '*', field_name, payload)
-  else
-    return redis.call('XADD', stream_key, '*', field_name, payload)
-  end
-end
-
-redis.call('ZADD', delayed_key, available_at_ms, payload)
-return ''
-"""
-
-
-def _is_unknown_command_error(exc: Exception, *, command: str) -> bool:
-    message = str(exc).lower()
-    needle = command.lower()
-    return "unknown command" in message and needle in message
-
-
-def _import_redis_asyncio() -> Any:
-    if importlib.util.find_spec("redis") is None:
-        raise RuntimeError(
-            "Missing optional dependency redis.\n"
-            "- If working from the repo: pip install -e '.[redis]'\n"
-            "- If installing the package: pip install 'reflexor[redis]'"
-        )
-    return importlib.import_module("redis.asyncio")
-
-
-def _canonical_envelope_json(envelope: TaskEnvelope) -> str:
-    payload = envelope.model_dump(mode="json")
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
-
-
-def _decode_envelope(payload: str) -> TaskEnvelope:
-    data = json.loads(payload)
-    return TaskEnvelope.model_validate(data)
-
-
-def _extract_stream_entries(response: Any) -> list[tuple[str, dict[str, str]]]:
-    if not response:
-        return []
-
-    entries: list[tuple[str, dict[str, str]]] = []
-    for _stream_name, stream_entries in response:
-        for message_id, fields in stream_entries:
-            if not isinstance(message_id, str):
-                message_id = str(message_id)
-
-            normalized_fields: dict[str, str] = {}
-            for key, value in (fields or {}).items():
-                normalized_key = key if isinstance(key, str) else str(key)
-                normalized_value = value if isinstance(value, str) else str(value)
-                normalized_fields[normalized_key] = normalized_value
-
-            entries.append((message_id, normalized_fields))
-    return entries
-
-
-def _extract_autoclaim_response(response: Any) -> tuple[str, list[tuple[str, dict[str, str]]]]:
-    if not response:
-        return "0-0", []
-
-    if not isinstance(response, (list, tuple)) or len(response) < 2:
-        raise TypeError("unexpected XAUTOCLAIM response shape")
-
-    next_start = response[0]
-    messages = response[1]
-
-    next_start_id = next_start if isinstance(next_start, str) else str(next_start)
-
-    normalized: list[tuple[str, dict[str, str]]] = []
-    for message_id, fields in messages or []:
-        normalized_id = message_id if isinstance(message_id, str) else str(message_id)
-
-        normalized_fields: dict[str, str] = {}
-        for key, value in (fields or {}).items():
-            normalized_key = key if isinstance(key, str) else str(key)
-            normalized_value = value if isinstance(value, str) else str(value)
-            normalized_fields[normalized_key] = normalized_value
-
-        normalized.append((normalized_id, normalized_fields))
-
-    return next_start_id, normalized
-
-
-def _extract_times_delivered(pending_entries: Any, *, default: int = 1) -> int:
-    if not pending_entries:
-        return int(default)
-
-    entry = pending_entries[0]
-    if isinstance(entry, dict):
-        raw = entry.get("times_delivered", entry.get("deliveries", entry.get("delivery_count")))
-        return int(raw) if raw is not None else int(default)
-
-    times = getattr(entry, "times_delivered", None)
-    if times is not None:
-        return int(times)
-
-    deliveries = getattr(entry, "deliveries", None)
-    if deliveries is not None:
-        return int(deliveries)
-
-    if isinstance(entry, (list, tuple)) and len(entry) >= 4:
-        return int(entry[3])
-
-    return int(default)
 
 
 class RedisStreamsQueue:
