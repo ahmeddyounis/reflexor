@@ -70,6 +70,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [Configuration & Profiles](docs/configuration.md)
 - [API](docs/api.md)
 - [CLI](docs/cli.md)
+- [Observability](docs/observability.md)
 - [Policy & Approvals](docs/policy.md)
 - [Tools](docs/tools.md)
 - [Queue](docs/queue.md)
