@@ -63,6 +63,25 @@ class TaskSummary:
     tool_call_status: ToolCallStatus | None
 
 
+@dataclass(frozen=True, slots=True)
+class EventSuppressionRecord:
+    """Stored suppression state for an event signature (loop/cascade protection)."""
+
+    signature_hash: str
+    event_type: str
+    event_source: str
+    signature: dict[str, object]
+    window_start_ms: int
+    count: int
+    threshold: int
+    window_ms: int
+    suppressed_until_ms: int | None
+    resume_required: bool
+    created_at_ms: int
+    updated_at_ms: int
+    expires_at_ms: int
+
+
 class EventRepo(Protocol):
     """Event persistence port (domain -> storage boundary)."""
 
@@ -84,6 +103,26 @@ class EventRepo(Protocol):
         event_type: str | None = None,
         source: str | None = None,
     ) -> list[Event]: ...
+
+
+class EventSuppressionRepo(Protocol):
+    """Persistence port for event suppression state keyed by signature hash."""
+
+    async def get(self, signature_hash: str) -> EventSuppressionRecord | None: ...
+
+    async def upsert(self, record: EventSuppressionRecord) -> EventSuppressionRecord: ...
+
+    async def delete(self, signature_hash: str) -> None: ...
+
+    async def count_active(self, *, now_ms: int) -> int: ...
+
+    async def list_active(
+        self,
+        *,
+        now_ms: int,
+        limit: int,
+        offset: int,
+    ) -> list[EventSuppressionRecord]: ...
 
 
 class RunRepo(Protocol):
@@ -253,6 +292,8 @@ if TYPE_CHECKING:
 __all__ = [
     "ApprovalRepo",
     "EventRepo",
+    "EventSuppressionRecord",
+    "EventSuppressionRepo",
     "RunPacketRepo",
     "RunRecord",
     "RunRepo",

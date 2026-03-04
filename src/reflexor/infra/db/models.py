@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import JSON, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -93,6 +93,24 @@ class RunPacketRow(Base):
     packet: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
 
 
+class EventSuppressionRow(Base):
+    __tablename__ = "event_suppressions"
+
+    signature_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String, index=True)
+    event_source: Mapped[str] = mapped_column(String, index=True)
+    signature: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
+    window_start_ms: Mapped[int] = mapped_column(Integer)
+    count: Mapped[int] = mapped_column(Integer)
+    threshold: Mapped[int] = mapped_column(Integer)
+    window_ms: Mapped[int] = mapped_column(Integer)
+    suppressed_until_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    resume_required: Mapped[bool] = mapped_column(Boolean)
+    created_at_ms: Mapped[int] = mapped_column(Integer)
+    updated_at_ms: Mapped[int] = mapped_column(Integer)
+    expires_at_ms: Mapped[int] = mapped_column(Integer, index=True)
+
+
 class IdempotencyLedgerRow(Base):
     __tablename__ = "idempotency_ledger"
 
@@ -109,6 +127,7 @@ __all__ = [
     "ApprovalRow",
     "Base",
     "EventRow",
+    "EventSuppressionRow",
     "IdempotencyLedgerRow",
     "RunPacketRow",
     "RunRow",

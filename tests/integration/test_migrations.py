@@ -44,6 +44,7 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
             "approvals",
             "run_packets",
             "idempotency_ledger",
+            "event_suppressions",
         }
         tables = set(inspector.get_table_names())
         missing_tables = expected_tables - tables
@@ -111,6 +112,27 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
             f"Missing columns for idempotency_ledger: {sorted(missing_ledger_columns)}"
         )
 
+        expected_suppression_columns = {
+            "signature_hash",
+            "event_type",
+            "event_source",
+            "signature",
+            "window_start_ms",
+            "count",
+            "threshold",
+            "window_ms",
+            "suppressed_until_ms",
+            "resume_required",
+            "created_at_ms",
+            "updated_at_ms",
+            "expires_at_ms",
+        }
+        suppression_columns = _column_names(inspector, table="event_suppressions")
+        missing_suppression_columns = expected_suppression_columns - suppression_columns
+        assert not missing_suppression_columns, (
+            f"Missing columns for event_suppressions: {sorted(missing_suppression_columns)}"
+        )
+
         expected_indexes = {
             "events": {"ix_events_type", "ux_events_source_dedupe_key"},
             "runs": {"ix_runs_created_at_ms"},
@@ -122,6 +144,12 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
                 "ix_idempotency_ledger_status",
                 "ix_idempotency_ledger_tool_name",
                 "ix_idempotency_ledger_updated_at_ms",
+            },
+            "event_suppressions": {
+                "ix_event_suppressions_event_type",
+                "ix_event_suppressions_event_source",
+                "ix_event_suppressions_suppressed_until_ms",
+                "ix_event_suppressions_expires_at_ms",
             },
         }
         for table, expected in expected_indexes.items():

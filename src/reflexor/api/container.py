@@ -29,6 +29,7 @@ from reflexor.application.services import (
     RunQueryService,
     TaskQueryService,
 )
+from reflexor.application.suppressions_service import EventSuppressionQueryService
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.executor.approval_store import DbApprovalStore
@@ -50,6 +51,7 @@ from reflexor.infra.db.engine import (
 from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyEventRepo,
+    SqlAlchemyEventSuppressionRepo,
     SqlAlchemyRunPacketRepo,
     SqlAlchemyRunRepo,
     SqlAlchemyTaskRepo,
@@ -65,6 +67,7 @@ from reflexor.observability.queue_observers import (
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.engine import OrchestratorEngine
+from reflexor.orchestrator.event_suppression import DbEventSuppressor
 from reflexor.orchestrator.interfaces import (
     NeedsPlanningRouter,
     NoOpPlanner,
@@ -85,6 +88,7 @@ from reflexor.security.policy.rules import (
 from reflexor.storage.ports import (
     ApprovalRepo,
     EventRepo,
+    EventSuppressionRepo,
     RunPacketRepo,
     RunRepo,
     TaskRepo,
@@ -103,6 +107,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class RepoProviders:
     event_repo: Callable[[DatabaseSession], EventRepo]
+    event_suppression_repo: Callable[[DatabaseSession], EventSuppressionRepo]
     run_repo: Callable[[DatabaseSession], RunRepo]
     task_repo: Callable[[DatabaseSession], TaskRepo]
     tool_call_repo: Callable[[DatabaseSession], ToolCallRepo]
@@ -134,6 +139,7 @@ class AppContainer:
     queries: QueryService
     run_queries: RunQueryService
     task_queries: TaskQueryService
+    suppression_queries: EventSuppressionQueryService
 
     _owns_engine: bool = True
     _owns_queue: bool = True
@@ -240,6 +246,9 @@ class AppContainer:
 
         repos = RepoProviders(
             event_repo=lambda session: SqlAlchemyEventRepo(cast(AsyncSession, session)),
+            event_suppression_repo=lambda session: SqlAlchemyEventSuppressionRepo(
+                cast(AsyncSession, session)
+            ),
             run_repo=lambda session: SqlAlchemyRunRepo(cast(AsyncSession, session)),
             task_repo=lambda session: SqlAlchemyTaskRepo(cast(AsyncSession, session)),
             tool_call_repo=lambda session: SqlAlchemyToolCallRepo(cast(AsyncSession, session)),
@@ -334,6 +343,18 @@ class AppContainer:
                     ) from exc
             else:
                 effective_reflex_router = NeedsPlanningRouter()
+
+        event_suppressor = None
+        if effective_settings.event_suppression_enabled:
+            event_suppressor = DbEventSuppressor(
+                uow_factory=uow_factory,
+                repo=repos.event_suppression_repo,
+                clock=effective_clock,
+                signature_fields=tuple(effective_settings.event_suppression_signature_fields),
+                window_s=float(effective_settings.event_suppression_window_s),
+                threshold=int(effective_settings.event_suppression_threshold),
+                ttl_s=float(effective_settings.event_suppression_ttl_s),
+            )
         orchestrator_engine = OrchestratorEngine(
             reflex_router=effective_reflex_router,
             planner=NoOpPlanner() if planner is None else planner,
@@ -341,6 +362,7 @@ class AppContainer:
             queue=effective_queue,
             run_sink=NoopRunPacketSink() if run_sink is None else run_sink,
             persistence=persistence,
+            event_suppressor=event_suppressor,
             limits=limits,
             clock=effective_clock,
             metrics=effective_metrics,
@@ -374,6 +396,11 @@ class AppContainer:
             run_packet_repo=repos.run_packet_repo,
         )
         task_queries = TaskQueryService(uow_factory=uow_factory, task_repo=repos.task_repo)
+        suppression_queries = EventSuppressionQueryService(
+            uow_factory=uow_factory,
+            repo=repos.event_suppression_repo,
+            clock=effective_clock,
+        )
 
         return cls(
             settings=effective_settings,
@@ -395,6 +422,7 @@ class AppContainer:
             queries=queries,
             run_queries=run_queries,
             task_queries=task_queries,
+            suppression_queries=suppression_queries,
             _owns_engine=owns_engine,
             _owns_queue=owns_queue,
         )

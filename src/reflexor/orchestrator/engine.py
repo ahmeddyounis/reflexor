@@ -29,6 +29,7 @@ from reflexor.observability.context import correlation_context, get_correlation_
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.budgets import BudgetLimits, BudgetTracker, budget_exceeded_to_audit_dict
 from reflexor.orchestrator.clock import Clock, SystemClock
+from reflexor.orchestrator.event_suppression import EventSuppressor
 from reflexor.orchestrator.interfaces import Planner, ReflexRouter
 from reflexor.orchestrator.persistence import OrchestratorPersistence
 from reflexor.orchestrator.plans import LimitsSnapshot, PlanningInput
@@ -55,6 +56,7 @@ class OrchestratorEngine:
     queue: Queue
     run_sink: RunPacketSink = field(default_factory=NoopRunPacketSink)
     persistence: OrchestratorPersistence | None = None
+    event_suppressor: EventSuppressor | None = None
     limits: BudgetLimits = field(default_factory=BudgetLimits)
     clock: Clock = SystemClock()
     metrics: ReflexorMetrics | None = None
@@ -138,54 +140,133 @@ class OrchestratorEngine:
             if self.metrics is not None:
                 self.metrics.events_received_total.inc()
             try:
-                planning_input = PlanningInput(
-                    trigger="event", events=[persisted_event], now_ms=self.clock.now_ms()
-                )
-                decision = await self.reflex_router.route(persisted_event, planning_input)
-                reflex_decision_dict = decision.model_dump(mode="json")
+                if self.event_suppressor is not None:
+                    suppression = await self.event_suppressor.observe(persisted_event)
+                    if suppression.suppressed:
+                        if self.metrics is not None:
+                            self.metrics.orchestrator_rejections_total.labels(
+                                reason="suppressed"
+                            ).inc()
+                        record = suppression.record
+                        reflex_decision_dict = {
+                            "action": "suppressed",
+                            "reason": "event_suppression_threshold_exceeded",
+                            "suppression": {
+                                "signature_hash": record.signature_hash,
+                                "signature": record.signature,
+                                "count": record.count,
+                                "threshold": record.threshold,
+                                "window_ms": record.window_ms,
+                                "window_start_ms": record.window_start_ms,
+                                "suppressed_until_ms": record.suppressed_until_ms,
+                                "expires_at_ms": record.expires_at_ms,
+                                "resume_required": record.resume_required,
+                            },
+                        }
+                    else:
+                        planning_input = PlanningInput(
+                            trigger="event", events=[persisted_event], now_ms=self.clock.now_ms()
+                        )
+                        decision = await self.reflex_router.route(persisted_event, planning_input)
+                        reflex_decision_dict = decision.model_dump(mode="json")
 
-                if decision.action == "fast_tasks":
-                    proposed_tasks = list(decision.proposed_tasks)
-                    tracker.accept_tasks(len(proposed_tasks), source="reflex")
-                    tracker.accept_tool_calls(len(proposed_tasks), source="reflex")
+                        if decision.action == "fast_tasks":
+                            proposed_tasks = list(decision.proposed_tasks)
+                            tracker.accept_tasks(len(proposed_tasks), source="reflex")
+                            tracker.accept_tool_calls(len(proposed_tasks), source="reflex")
 
-                    tasks = validator.build_tasks(
-                        proposed_tasks,
-                        run_id=run_id,
-                        seed_source="reflex",
-                        event_id=persisted_event.event_id,
-                    )
-                    if self.persistence is not None:
-                        await self.persistence.persist_tasks_and_tool_calls(tasks)
-
-                    await self._enqueue_tasks(
-                        tasks,
-                        reason=decision.reason,
-                        source="reflex",
-                        trigger="event",
-                        first_enqueue_started_s=started_perf_s,
-                    )
-                    enqueued_task_ids = [task.task_id for task in tasks]
-                    if enqueued_task_ids:
-                        enqueued_set = set(enqueued_task_ids)
-                        tasks = [
-                            (
-                                task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
-                                if task.task_id in enqueued_set
-                                else task
+                            tasks = validator.build_tasks(
+                                proposed_tasks,
+                                run_id=run_id,
+                                seed_source="reflex",
+                                event_id=persisted_event.event_id,
                             )
-                            for task in tasks
-                        ]
-                elif decision.action == "needs_planning":
-                    await self._enqueue_backlog_event(persisted_event)
-                    if self._planning_debouncer is not None:
-                        self._planning_debouncer.trigger()
-                elif decision.action == "drop":
-                    if self.metrics is not None:
-                        self.metrics.orchestrator_rejections_total.labels(reason="drop").inc()
-                    pass
-                else:  # pragma: no cover
-                    raise AssertionError(f"unknown reflex decision action: {decision.action!r}")
+                            if self.persistence is not None:
+                                await self.persistence.persist_tasks_and_tool_calls(tasks)
+
+                            await self._enqueue_tasks(
+                                tasks,
+                                reason=decision.reason,
+                                source="reflex",
+                                trigger="event",
+                                first_enqueue_started_s=started_perf_s,
+                            )
+                            enqueued_task_ids = [task.task_id for task in tasks]
+                            if enqueued_task_ids:
+                                enqueued_set = set(enqueued_task_ids)
+                                tasks = [
+                                    (
+                                        task.model_copy(
+                                            update={"status": TaskStatus.QUEUED}, deep=True
+                                        )
+                                        if task.task_id in enqueued_set
+                                        else task
+                                    )
+                                    for task in tasks
+                                ]
+                        elif decision.action == "needs_planning":
+                            await self._enqueue_backlog_event(persisted_event)
+                            if self._planning_debouncer is not None:
+                                self._planning_debouncer.trigger()
+                        elif decision.action == "drop":
+                            if self.metrics is not None:
+                                self.metrics.orchestrator_rejections_total.labels(
+                                    reason="drop"
+                                ).inc()
+                            pass
+                        else:  # pragma: no cover
+                            raise AssertionError(
+                                f"unknown reflex decision action: {decision.action!r}"
+                            )
+                else:
+                    planning_input = PlanningInput(
+                        trigger="event", events=[persisted_event], now_ms=self.clock.now_ms()
+                    )
+                    decision = await self.reflex_router.route(persisted_event, planning_input)
+                    reflex_decision_dict = decision.model_dump(mode="json")
+
+                    if decision.action == "fast_tasks":
+                        proposed_tasks = list(decision.proposed_tasks)
+                        tracker.accept_tasks(len(proposed_tasks), source="reflex")
+                        tracker.accept_tool_calls(len(proposed_tasks), source="reflex")
+
+                        tasks = validator.build_tasks(
+                            proposed_tasks,
+                            run_id=run_id,
+                            seed_source="reflex",
+                            event_id=persisted_event.event_id,
+                        )
+                        if self.persistence is not None:
+                            await self.persistence.persist_tasks_and_tool_calls(tasks)
+
+                        await self._enqueue_tasks(
+                            tasks,
+                            reason=decision.reason,
+                            source="reflex",
+                            trigger="event",
+                            first_enqueue_started_s=started_perf_s,
+                        )
+                        enqueued_task_ids = [task.task_id for task in tasks]
+                        if enqueued_task_ids:
+                            enqueued_set = set(enqueued_task_ids)
+                            tasks = [
+                                (
+                                    task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
+                                    if task.task_id in enqueued_set
+                                    else task
+                                )
+                                for task in tasks
+                            ]
+                    elif decision.action == "needs_planning":
+                        await self._enqueue_backlog_event(persisted_event)
+                        if self._planning_debouncer is not None:
+                            self._planning_debouncer.trigger()
+                    elif decision.action == "drop":
+                        if self.metrics is not None:
+                            self.metrics.orchestrator_rejections_total.labels(reason="drop").inc()
+                        pass
+                    else:  # pragma: no cover
+                        raise AssertionError(f"unknown reflex decision action: {decision.action!r}")
             except BudgetExceeded as exc:
                 if self.metrics is not None:
                     self.metrics.orchestrator_rejections_total.labels(reason="budget").inc()

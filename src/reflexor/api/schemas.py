@@ -203,12 +203,34 @@ class ApprovalDecisionResponse(BaseModel):
     approval: ApprovalSummary
 
 
+class EventSuppressionSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    signature_hash: str
+    event_type: str
+    event_source: str
+    signature: dict[str, object]
+
+    count: int
+    threshold: int
+    window_ms: int
+    window_start_ms: int
+
+    suppressed_until_ms: int | None = None
+    expires_at_ms: int
+    resume_required: bool
+
+    created_at_ms: int
+    updated_at_ms: int
+
+
 __all__ = [
     "ApprovalActionRequest",
     "ApprovalDecisionRequest",
     "ApprovalDecisionResponse",
     "ApprovalSummary",
     "DEFAULT_PAGE_LIMIT",
+    "EventSuppressionSummary",
     "ErrorResponse",
     "MAX_PAGE_LIMIT",
     "Page",

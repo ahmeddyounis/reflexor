@@ -319,6 +319,13 @@ class ReflexorSettings(BaseSettings):
     max_tool_output_bytes: int = DEFAULT_MAX_TOOL_RESULT_BYTES
     max_run_packet_bytes: int = DEFAULT_MAX_PACKET_BYTES
 
+    # Event suppression (runaway loop protection). Disabled unless explicitly enabled.
+    event_suppression_enabled: bool = False
+    event_suppression_signature_fields: list[str] = Field(default_factory=list)
+    event_suppression_window_s: float = 60.0
+    event_suppression_threshold: int = 50
+    event_suppression_ttl_s: float = 300.0
+
     @field_validator("admin_api_key")
     @classmethod
     def _normalize_admin_api_key(cls, value: str | None) -> str | None:
@@ -384,6 +391,47 @@ class ReflexorSettings(BaseSettings):
         field_name = info.field_name
         assert field_name is not None
         return _parse_str_list(value, field_name=field_name)
+
+    @field_validator("event_suppression_signature_fields", mode="before")
+    @classmethod
+    def _parse_event_suppression_signature_fields(
+        cls, value: object, info: ValidationInfo
+    ) -> list[str]:
+        field_name = info.field_name
+        assert field_name is not None
+        return _parse_str_list(value, field_name=field_name)
+
+    @field_validator("event_suppression_signature_fields", mode="after")
+    @classmethod
+    def _validate_event_suppression_signature_fields(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            trimmed = raw.strip()
+            if not trimmed:
+                continue
+            if trimmed in seen:
+                continue
+            seen.add(trimmed)
+            normalized.append(trimmed)
+        return normalized
+
+    @field_validator("event_suppression_window_s", "event_suppression_ttl_s")
+    @classmethod
+    def _validate_positive_floats(cls, value: float, info: ValidationInfo) -> float:
+        field_name = info.field_name or "value"
+        parsed = float(value)
+        if parsed <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+        return parsed
+
+    @field_validator("event_suppression_threshold")
+    @classmethod
+    def _validate_event_suppression_threshold(cls, value: int) -> int:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("event_suppression_threshold must be > 0")
+        return parsed
 
     @field_validator("executor_per_tool_concurrency", mode="before")
     @classmethod

@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from reflexor.api.container import AppContainer
 from reflexor.api.errors import install_error_handlers
 from reflexor.api.middleware import install_middleware
-from reflexor.api.routes import approvals, events, health, metrics, runs, tasks
+from reflexor.api.routes import approvals, events, health, metrics, runs, suppressions, tasks
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.observability.logging import configure_logging
 from reflexor.version import __version__
@@ -51,6 +51,7 @@ def create_app(
         {"name": "runs", "description": "Run and run-packet read API (admin)."},
         {"name": "tasks", "description": "Task read API (admin)."},
         {"name": "approvals", "description": "Human-in-the-loop approvals (admin)."},
+        {"name": "suppressions", "description": "Event suppression state (admin)."},
     ]
 
     app = FastAPI(
@@ -77,6 +78,8 @@ def create_app(
     app.include_router(tasks.compat_router)
     app.include_router(approvals.router)
     app.include_router(approvals.compat_router)
+    app.include_router(suppressions.router)
+    app.include_router(suppressions.compat_router)
     return app
 
 
