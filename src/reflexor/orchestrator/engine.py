@@ -147,6 +147,7 @@ class OrchestratorEngine:
                             self.metrics.orchestrator_rejections_total.labels(
                                 reason="suppressed"
                             ).inc()
+                            self.metrics.suppressed_events_total.inc()
                         record = suppression.record
                         reflex_decision_dict = {
                             "action": "suppressed",

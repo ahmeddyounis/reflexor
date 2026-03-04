@@ -473,6 +473,11 @@ async def test_rate_limit_guard_delays_execution_and_eventually_succeeds(tmp_pat
             assert delayed.get("retry", {}).get("retry_after_s") == pytest.approx(
                 float(report_2a.retry_after_s)
             )
+            guard = delayed.get("guard_decision")
+            assert isinstance(guard, dict)
+            assert guard.get("action") == "delay"
+            assert guard.get("reason_code") == "rate_limited"
+            assert guard.get("guard_id") == "guard.rate_limit"
 
         assert await queue.dequeue(wait_s=0.0) is None
 

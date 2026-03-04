@@ -268,3 +268,67 @@ async def test_allow_path_runs_tool_and_sanitizes_result(tmp_path: Path) -> None
     assert data["authorization"] == "<redacted>"
     assert "abcdefghijklmnopqrstuvwxyz" not in data["text"]
     assert "<redacted>" in data["text"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_delay_increments_metrics_and_observes_retry_after(
+    tmp_path: Path,
+) -> None:
+    fixed_now_ms = 1_000
+
+    def now_ms() -> int:
+        return fixed_now_ms
+
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["fs.read"],
+        rate_limits_enabled=True,
+        rate_limit_default={"capacity": 1, "refill_rate_per_s": 1.0, "burst": 0.0},
+    )
+    tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
+    metrics = ReflexorMetrics.build()
+
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    runner = ToolRunner(registry=registry, settings=settings)
+    gate = _gate(settings=settings, metrics=metrics)
+    approvals = InMemoryApprovalStore()
+    enforced = PolicyEnforcedToolRunner(
+        registry=registry,
+        runner=runner,
+        gate=gate,
+        approvals=approvals,
+        metrics=metrics,
+        now_ms=now_ms,
+    )
+
+    tool_call = _tool_call(tool_call_id=str(uuid4()), scope="fs.read")
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=1.0)
+
+    first = await enforced.execute_tool_call(tool_call, ctx=ctx)
+    assert first.result.ok is True
+    assert len(tool.invocations) == 1
+
+    second = await enforced.execute_tool_call(tool_call, ctx=ctx)
+    assert second.result.ok is False
+    assert second.result.error_code == "execution_delayed"
+    assert len(tool.invocations) == 1
+
+    text = generate_latest(metrics.registry).decode()
+    assert (
+        _metric_value(
+            text,
+            name="rate_limited_total",
+            labels={"tool_name": "tests.recording"},
+        )
+        == 1.0
+    )
+    assert (
+        _metric_value(
+            text,
+            name="retry_after_seconds_count",
+            labels={"reason_code": "rate_limited", "tool_name": "tests.recording"},
+        )
+        == 1.0
+    )

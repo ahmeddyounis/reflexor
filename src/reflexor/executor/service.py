@@ -43,6 +43,7 @@ from reflexor.executor.state import (
 )
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
 from reflexor.guards.circuit_breaker.resolver import key_for_tool_call
+from reflexor.guards.decision import GuardDecision
 from reflexor.observability.audit_sanitize import sanitize_tool_output
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.observability.metrics import ReflexorMetrics
@@ -269,6 +270,7 @@ class ExecutorService:
                         will_retry=will_retry,
                         approval_id=outcome.approval_id,
                         approval_status=outcome.approval_status,
+                        guard_decision=outcome.guard_decision,
                     )
 
                 return ExecutionReport(
@@ -611,6 +613,7 @@ class ExecutorService:
                 will_retry=will_retry,
                 approval_id=outcome.approval_id,
                 approval_status=outcome.approval_status,
+                guard_decision=outcome.guard_decision,
             )
 
             did_attempt_tool_run = self._did_attempt_tool_run(outcome)
@@ -754,6 +757,7 @@ class ExecutorService:
         will_retry: bool,
         approval_id: str | None,
         approval_status: ApprovalStatus | None,
+        guard_decision: GuardDecision | None = None,
     ) -> None:
         now_ms = int(self._clock.now_ms())
         packet = await run_packet_repo.get(task.run_id)
@@ -791,6 +795,8 @@ class ExecutorService:
             "approval_status": None if approval_status is None else approval_status.value,
             "recorded_at_ms": now_ms,
         }
+        if guard_decision is not None:
+            tool_result_entry["guard_decision"] = guard_decision.model_dump(mode="json")
         decision_entry: dict[str, object] = {
             "task_id": task.task_id,
             "tool_call_id": tool_call.tool_call_id,

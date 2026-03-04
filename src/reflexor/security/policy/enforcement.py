@@ -59,6 +59,7 @@ class ToolExecutionOutcome(BaseModel):
     tool_name: str
     decision: PolicyDecision
     result: ToolResult
+    guard_decision: GuardDecision | None = None
     approval_id: str | None = None
     approval_status: ApprovalStatus | None = None
 
@@ -144,12 +145,59 @@ class PolicyEnforcedToolRunner:
             approval_status=approval_status,
             run_id=correlation_ids.get("run_id"),
         )
-        return await self._guard_chain.check(
+        decision = await self._guard_chain.check(
             tool_call=tool_call,
             tool_spec=tool_spec,
             parsed_args=parsed_args,
             ctx=ctx,
         )
+        self._emit_guard_metrics(tool_call=tool_call, decision=decision, emit_metrics=bool(emit_metrics))
+        return decision
+
+    def _emit_guard_metrics(
+        self,
+        *,
+        tool_call: ToolCall,
+        decision: GuardDecision,
+        emit_metrics: bool,
+    ) -> None:
+        if not emit_metrics or self._metrics is None:
+            return
+
+        if decision.action != GuardAction.DELAY:
+            return
+
+        delay_s: float | None = None
+        raw_delay_s = decision.metadata.get("delay_s")
+        if isinstance(raw_delay_s, (int, float, str)):
+            try:
+                parsed = float(raw_delay_s)
+            except (TypeError, ValueError):
+                parsed = 0.0
+            delay_s = max(0.0, parsed)
+
+        if delay_s is not None:
+            self._metrics.retry_after_seconds.labels(
+                reason_code=decision.reason_code,
+                tool_name=tool_call.tool_name,
+            ).observe(delay_s)
+
+        if decision.reason_code == "rate_limited":
+            self._metrics.rate_limited_total.labels(tool_name=tool_call.tool_name).inc()
+            return
+
+        if decision.reason_code == "circuit_open":
+            destination = ""
+            raw_key = decision.metadata.get("circuit_key")
+            if isinstance(raw_key, dict):
+                raw_destination = raw_key.get("destination")
+                if isinstance(raw_destination, str):
+                    destination = raw_destination
+            self._metrics.circuit_open_total.labels(
+                tool_name=tool_call.tool_name,
+                destination=destination,
+            ).inc()
+            return
 
     def _policy_decision_from_guard(self, guard_decision: GuardDecision) -> PolicyDecision:
         if guard_decision.action == GuardAction.ALLOW:
@@ -293,6 +341,7 @@ class PolicyEnforcedToolRunner:
                     metadata=dict(guard_decision.metadata),
                 ),
                 result=result,
+                guard_decision=guard_decision,
             )
 
         decision = self._policy_decision_from_guard(guard_decision)
@@ -308,6 +357,7 @@ class PolicyEnforcedToolRunner:
                 tool_name=tool_call.tool_name,
                 decision=decision,
                 result=result,
+                guard_decision=guard_decision,
             )
 
         if guard_decision.action == GuardAction.REQUIRE_APPROVAL:
@@ -346,6 +396,7 @@ class PolicyEnforcedToolRunner:
                         result=result,
                         approval_id=existing.approval_id,
                         approval_status=existing.status,
+                        guard_decision=guard_decision,
                     )
 
                 if existing.status == ApprovalStatus.APPROVED:
@@ -378,6 +429,7 @@ class PolicyEnforcedToolRunner:
                             result=result,
                             approval_id=existing.approval_id,
                             approval_status=existing.status,
+                            guard_decision=post_approval_guard,
                         )
                     if post_approval_guard.action == GuardAction.DELAY:
                         result = ToolResult(
@@ -399,6 +451,7 @@ class PolicyEnforcedToolRunner:
                             result=result,
                             approval_id=existing.approval_id,
                             approval_status=existing.status,
+                            guard_decision=post_approval_guard,
                         )
 
                     override = PolicyDecision.allow(
@@ -461,6 +514,7 @@ class PolicyEnforcedToolRunner:
                         result=result,
                         approval_id=existing.approval_id,
                         approval_status=existing.status,
+                        guard_decision=guard_decision,
                     )
 
                 result = ToolResult(
@@ -482,6 +536,7 @@ class PolicyEnforcedToolRunner:
                     result=result,
                     approval_id=existing.approval_id,
                     approval_status=existing.status,
+                    guard_decision=guard_decision,
                 )
 
             run_id = _coerce_uuid4_str(ctx.correlation_ids.get("run_id")) or str(uuid4())
@@ -533,6 +588,7 @@ class PolicyEnforcedToolRunner:
                         result=result,
                         approval_id=created.approval_id,
                         approval_status=created.status,
+                        guard_decision=post_approval_guard,
                     )
                 if post_approval_guard.action == GuardAction.DELAY:
                     result = ToolResult(
@@ -554,6 +610,7 @@ class PolicyEnforcedToolRunner:
                         result=result,
                         approval_id=created.approval_id,
                         approval_status=created.status,
+                        guard_decision=post_approval_guard,
                     )
 
                 override = PolicyDecision.allow(
@@ -612,6 +669,7 @@ class PolicyEnforcedToolRunner:
                     result=result,
                     approval_id=created.approval_id,
                     approval_status=created.status,
+                    guard_decision=guard_decision,
                 )
 
             result = ToolResult(
@@ -633,6 +691,7 @@ class PolicyEnforcedToolRunner:
                 result=result,
                 approval_id=created.approval_id,
                 approval_status=created.status,
+                guard_decision=guard_decision,
             )
 
         if on_before_execute is not None:

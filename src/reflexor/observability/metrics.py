@@ -203,6 +203,10 @@ class ReflexorMetrics:
     idempotency_cache_hits_total: Counter
     policy_decisions_total: Counter
     circuit_breaker_checks_total: Counter
+    rate_limited_total: Counter
+    circuit_open_total: Counter
+    suppressed_events_total: Counter
+    retry_after_seconds: Histogram
     queue_depth: Gauge
     queue_redeliver_total: Counter
     orchestrator_rejections_total: Counter
@@ -267,6 +271,29 @@ class ReflexorMetrics:
                 labels=["state", "allowed"],
                 registry=effective_registry,
                 description="Circuit breaker guard checks by state and allow/deny outcome",
+            ),
+            rate_limited_total=counter(
+                "rate_limited",
+                labels=["tool_name"],
+                registry=effective_registry,
+                description="Tool calls delayed due to rate limiting",
+            ),
+            circuit_open_total=counter(
+                "circuit_open",
+                labels=["tool_name", "destination"],
+                registry=effective_registry,
+                description="Tool calls delayed because the circuit breaker is OPEN",
+            ),
+            suppressed_events_total=counter(
+                "suppressed_events",
+                registry=effective_registry,
+                description="Events suppressed due to loop/cascade protection",
+            ),
+            retry_after_seconds=histogram(
+                "retry_after_seconds",
+                labels=["reason_code", "tool_name"],
+                registry=effective_registry,
+                description="Retry delay requested by guards (seconds)",
             ),
             queue_depth=gauge(
                 "queue_depth",

@@ -108,6 +108,10 @@ def test_event_suppression_blocks_task_enqueue_and_expires(tmp_path: Path) -> No
         assert suppressed_run.status_code == 200
         assert suppressed_run.json()["run_packet"]["reflex_decision"]["action"] == "suppressed"
 
+        metrics = client.get("/metrics")
+        assert metrics.status_code == 200
+        assert "suppressed_events_total 1.0" in metrics.text
+
         first_run = client.get(f"/v1/runs/{run_id_1}")
         assert first_run.status_code == 200
         assert first_run.json()["run_packet"]["reflex_decision"]["action"] in {

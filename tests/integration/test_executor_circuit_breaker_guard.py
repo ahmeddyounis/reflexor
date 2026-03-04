@@ -360,6 +360,12 @@ async def test_circuit_breaker_opens_fast_denies_and_recovers(tmp_path: Path) ->
                 entry.get("policy_decision", {}).get("reason_code") == "circuit_half_open"
                 for entry in delayed
             )
+            assert all(entry.get("guard_decision", {}).get("action") == "delay" for entry in delayed)
+            assert any(entry.get("guard_decision", {}).get("reason_code") == "circuit_open" for entry in delayed)
+            assert any(
+                entry.get("guard_decision", {}).get("reason_code") == "circuit_half_open"
+                for entry in delayed
+            )
 
         text = generate_latest(metrics.registry).decode()
         assert (
@@ -383,6 +389,22 @@ async def test_circuit_breaker_opens_fast_denies_and_recovers(tmp_path: Path) ->
                 text,
                 name="circuit_breaker_checks_total",
                 labels={"state": "half_open", "allowed": "false"},
+            )
+            == 1.0
+        )
+        assert (
+            _metric_value(
+                text,
+                name="circuit_open_total",
+                labels={"tool_name": "tests.circuit_breaker", "destination": "example.com"},
+            )
+            == 1.0
+        )
+        assert (
+            _metric_value(
+                text,
+                name="retry_after_seconds_count",
+                labels={"reason_code": "circuit_open", "tool_name": "tests.circuit_breaker"},
             )
             == 1.0
         )
