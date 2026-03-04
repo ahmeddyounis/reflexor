@@ -23,9 +23,14 @@ from reflexor.application.services import (
     SubmitEventOutcome,
     TaskQueryService,
 )
+from reflexor.application.suppressions_service import (
+    EventSuppressionCommandService,
+    EventSuppressionQueryService,
+)
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus
 from reflexor.domain.models_event import Event
+from reflexor.storage.ports import EventSuppressionRecord as StoredEventSuppressionRecord
 from reflexor.storage.ports import RunSummary as StoredRunSummary
 from reflexor.storage.ports import TaskSummary as StoredTaskSummary
 from reflexor.tools.registry import ToolRegistry
@@ -103,6 +108,12 @@ class CliClient(Protocol):
         mode: ReplayModeStr,
     ) -> dict[str, object]: ...
 
+    async def list_suppressions(self, *, limit: int, offset: int) -> dict[str, object]: ...
+
+    async def clear_suppression(
+        self, signature_hash: str, *, cleared_by: str | None = None
+    ) -> dict[str, object]: ...
+
 
 def _page(
     *,
@@ -169,6 +180,27 @@ def _submit_outcome_to_dict(outcome: SubmitEventOutcome) -> dict[str, object]:
     }
 
 
+def _suppression_to_dict(record: StoredEventSuppressionRecord) -> dict[str, object]:
+    return {
+        "signature_hash": record.signature_hash,
+        "event_type": record.event_type,
+        "event_source": record.event_source,
+        "signature": record.signature,
+        "count": int(record.count),
+        "threshold": int(record.threshold),
+        "window_ms": int(record.window_ms),
+        "window_start_ms": int(record.window_start_ms),
+        "suppressed_until_ms": record.suppressed_until_ms,
+        "expires_at_ms": int(record.expires_at_ms),
+        "resume_required": bool(record.resume_required),
+        "cleared_at_ms": record.cleared_at_ms,
+        "cleared_by": record.cleared_by,
+        "cleared_request_id": record.cleared_request_id,
+        "created_at_ms": int(record.created_at_ms),
+        "updated_at_ms": int(record.updated_at_ms),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class LocalClient:
     """In-process CLI client powered by application services."""
@@ -178,6 +210,8 @@ class LocalClient:
     run_queries: RunQueryService
     task_queries: TaskQueryService
     approval_commands: ApprovalCommandService
+    suppression_queries: EventSuppressionQueryService
+    suppression_commands: EventSuppressionCommandService
     tool_registry: ToolRegistry
 
     async def submit_event(self, event: Event) -> dict[str, object]:
@@ -318,6 +352,26 @@ class LocalClient:
         outcome = await runner.replay_from_file(path, ReplayMode(mode))
         payload = cast(dict[str, object], outcome.model_dump(mode="json"))
         return {"ok": True, **payload}
+
+    async def list_suppressions(self, *, limit: int, offset: int) -> dict[str, object]:
+        records, total = await self.suppression_queries.list_active(limit=limit, offset=offset)
+        items = [_suppression_to_dict(item) for item in records]
+        return _page(limit=limit, offset=offset, total=total, items=items)
+
+    async def clear_suppression(
+        self, signature_hash: str, *, cleared_by: str | None = None
+    ) -> dict[str, object]:
+        record = await self.suppression_commands.clear(
+            signature_hash,
+            cleared_by=cleared_by,
+            cleared_request_id=None,
+        )
+        return {
+            "ok": True,
+            "signature_hash": record.signature_hash,
+            "cleared_at_ms": record.cleared_at_ms,
+            "cleared_by": record.cleared_by,
+        }
 
 
 @dataclass(slots=True)
@@ -487,6 +541,25 @@ class ApiClient:
     ) -> dict[str, object]:
         _ = (path, mode)
         raise NotImplementedError("run replay is not exposed via the API yet")
+
+    async def list_suppressions(self, *, limit: int, offset: int) -> dict[str, object]:
+        params: dict[str, str | int | float | bool | None] = {
+            "limit": int(limit),
+            "offset": int(offset),
+        }
+        data = await self._request_json("GET", "/v1/suppressions", params=params)
+        return cast(dict[str, object], data)
+
+    async def clear_suppression(
+        self, signature_hash: str, *, cleared_by: str | None = None
+    ) -> dict[str, object]:
+        json_body = None if cleared_by is None else {"cleared_by": cleared_by}
+        data = await self._request_json(
+            "POST",
+            f"/v1/suppressions/{signature_hash}/clear",
+            json_body=json_body,
+        )
+        return cast(dict[str, object], data)
 
     async def aclose(self) -> None:
         if self._owns_http and self.http is not None:

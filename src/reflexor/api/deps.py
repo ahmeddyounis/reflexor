@@ -19,7 +19,10 @@ from reflexor.application.services import (
     RunQueryService,
     TaskQueryService,
 )
-from reflexor.application.suppressions_service import EventSuppressionQueryService
+from reflexor.application.suppressions_service import (
+    EventSuppressionCommandService,
+    EventSuppressionQueryService,
+)
 
 
 def get_container(request: Request) -> AppContainer:
@@ -83,6 +86,15 @@ SuppressionQueryServiceDep = Annotated[
 ]
 
 
+def get_suppression_command_service(container: ContainerDep) -> EventSuppressionCommandService:
+    return container.suppression_commands
+
+
+SuppressionCommandServiceDep = Annotated[
+    EventSuppressionCommandService, Depends(get_suppression_command_service)
+]
+
+
 __all__ = [
     "ApprovalCommandServiceDep",
     "ApprovalsServiceDep",
@@ -90,6 +102,7 @@ __all__ = [
     "EventSubmitterDep",
     "QueryServiceDep",
     "RunQueryServiceDep",
+    "SuppressionCommandServiceDep",
     "SuppressionQueryServiceDep",
     "TaskQueryServiceDep",
     "get_container",

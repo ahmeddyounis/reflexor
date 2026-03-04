@@ -247,6 +247,9 @@ def _event_suppression_from_row(row: EventSuppressionRow) -> EventSuppressionRec
         window_ms=row.window_ms,
         suppressed_until_ms=row.suppressed_until_ms,
         resume_required=bool(row.resume_required),
+        cleared_at_ms=row.cleared_at_ms,
+        cleared_by=row.cleared_by,
+        cleared_request_id=row.cleared_request_id,
         created_at_ms=row.created_at_ms,
         updated_at_ms=row.updated_at_ms,
         expires_at_ms=row.expires_at_ms,
@@ -293,6 +296,9 @@ class SqlAlchemyEventSuppressionRepo:
                 None if record.suppressed_until_ms is None else int(record.suppressed_until_ms)
             )
             row.resume_required = bool(record.resume_required)
+            row.cleared_at_ms = None if record.cleared_at_ms is None else int(record.cleared_at_ms)
+            row.cleared_by = record.cleared_by
+            row.cleared_request_id = record.cleared_request_id
             row.created_at_ms = int(record.created_at_ms)
             row.updated_at_ms = int(record.updated_at_ms)
             row.expires_at_ms = int(record.expires_at_ms)
@@ -313,6 +319,9 @@ class SqlAlchemyEventSuppressionRepo:
                     None if record.suppressed_until_ms is None else int(record.suppressed_until_ms)
                 ),
                 resume_required=bool(record.resume_required),
+                cleared_at_ms=(None if record.cleared_at_ms is None else int(record.cleared_at_ms)),
+                cleared_by=record.cleared_by,
+                cleared_request_id=record.cleared_request_id,
                 created_at_ms=int(record.created_at_ms),
                 updated_at_ms=int(record.updated_at_ms),
                 expires_at_ms=int(record.expires_at_ms),

@@ -91,6 +91,8 @@ def _build_local_client(
         run_queries=run_queries,
         task_queries=task_queries,
         approval_commands=FakeApprovals(),  # type: ignore[arg-type]
+        suppression_queries=object(),  # type: ignore[arg-type]
+        suppression_commands=object(),  # type: ignore[arg-type]
         tool_registry=ToolRegistry(),
     )
 

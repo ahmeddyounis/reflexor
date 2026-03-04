@@ -77,6 +77,9 @@ class EventSuppressionRecord:
     window_ms: int
     suppressed_until_ms: int | None
     resume_required: bool
+    cleared_at_ms: int | None
+    cleared_by: str | None
+    cleared_request_id: str | None
     created_at_ms: int
     updated_at_ms: int
     expires_at_ms: int

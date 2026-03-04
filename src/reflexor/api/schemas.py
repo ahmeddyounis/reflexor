@@ -224,11 +224,28 @@ class EventSuppressionSummary(BaseModel):
     updated_at_ms: int
 
 
+class ClearSuppressionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cleared_by: str | None = None
+
+
+class ClearSuppressionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ok: bool = True
+    signature_hash: str
+    cleared_at_ms: int
+    cleared_by: str | None = None
+
+
 __all__ = [
     "ApprovalActionRequest",
     "ApprovalDecisionRequest",
     "ApprovalDecisionResponse",
     "ApprovalSummary",
+    "ClearSuppressionRequest",
+    "ClearSuppressionResponse",
     "DEFAULT_PAGE_LIMIT",
     "EventSuppressionSummary",
     "ErrorResponse",

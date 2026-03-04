@@ -167,6 +167,25 @@ def print_approvals_table(page: dict[str, object]) -> None:
     )
 
 
+def print_suppressions_table(page: dict[str, object]) -> None:
+    items = page.get("items")
+    rows: list[dict[str, object]] = (
+        [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+    )
+    print_table(
+        rows,
+        columns=[
+            TableColumn("signature_hash", "SIGNATURE_HASH", max_width=20),
+            TableColumn("event_source", "SOURCE", max_width=24),
+            TableColumn("event_type", "TYPE", max_width=24),
+            TableColumn("count", "COUNT", align="right"),
+            TableColumn("threshold", "THRESHOLD", align="right"),
+            TableColumn("window_ms", "WINDOW_MS", align="right"),
+            TableColumn("suppressed_until_ms", "SUPPRESSED_UNTIL", align="right"),
+        ],
+    )
+
+
 __all__ = [
     "TableColumn",
     "abort",
@@ -174,6 +193,7 @@ __all__ = [
     "print_approvals_table",
     "print_json",
     "print_runs_table",
+    "print_suppressions_table",
     "print_table",
     "print_tasks_table",
     "render_table",

@@ -29,7 +29,10 @@ from reflexor.application.services import (
     RunQueryService,
     TaskQueryService,
 )
-from reflexor.application.suppressions_service import EventSuppressionQueryService
+from reflexor.application.suppressions_service import (
+    EventSuppressionCommandService,
+    EventSuppressionQueryService,
+)
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.executor.approval_store import DbApprovalStore
@@ -140,6 +143,7 @@ class AppContainer:
     run_queries: RunQueryService
     task_queries: TaskQueryService
     suppression_queries: EventSuppressionQueryService
+    suppression_commands: EventSuppressionCommandService
 
     _owns_engine: bool = True
     _owns_queue: bool = True
@@ -401,6 +405,11 @@ class AppContainer:
             repo=repos.event_suppression_repo,
             clock=effective_clock,
         )
+        suppression_commands = EventSuppressionCommandService(
+            uow_factory=uow_factory,
+            repo=repos.event_suppression_repo,
+            clock=effective_clock,
+        )
 
         return cls(
             settings=effective_settings,
@@ -423,6 +432,7 @@ class AppContainer:
             run_queries=run_queries,
             task_queries=task_queries,
             suppression_queries=suppression_queries,
+            suppression_commands=suppression_commands,
             _owns_engine=owns_engine,
             _owns_queue=owns_queue,
         )

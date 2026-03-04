@@ -36,6 +36,8 @@ def build_local_client(settings: ReflexorSettings) -> LocalClient:
         run_queries=app.run_queries,
         task_queries=app.task_queries,
         approval_commands=app.approval_commands,
+        suppression_queries=app.suppression_queries,
+        suppression_commands=app.suppression_commands,
         tool_registry=app.tool_registry,
     )
 

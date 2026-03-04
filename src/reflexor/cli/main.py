@@ -11,6 +11,7 @@ from reflexor.cli.commands import config as config_command
 from reflexor.cli.commands import events as events_command
 from reflexor.cli.commands import run as run_command
 from reflexor.cli.commands import runs as runs_command
+from reflexor.cli.commands import suppressions as suppressions_command
 from reflexor.cli.commands import tasks as tasks_command
 from reflexor.cli.commands import tools as tools_command
 from reflexor.cli.commands import version as version_command
@@ -72,6 +73,7 @@ config_command.register(app)
 events_command.register(app)
 run_command.register(app)
 runs_command.register(app)
+suppressions_command.register(app)
 tasks_command.register(app)
 tools_command.register(app)
 version_command.register(app)

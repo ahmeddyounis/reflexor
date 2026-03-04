@@ -104,6 +104,8 @@ async def test_local_client_uses_injected_services() -> None:
         run_queries=FakeRuns(),  # type: ignore[arg-type]
         task_queries=FakeTasks(),  # type: ignore[arg-type]
         approval_commands=FakeApprovals(),  # type: ignore[arg-type]
+        suppression_queries=object(),  # type: ignore[arg-type]
+        suppression_commands=object(),  # type: ignore[arg-type]
         tool_registry=ToolRegistry(),
     )
 

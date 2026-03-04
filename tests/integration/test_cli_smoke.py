@@ -123,6 +123,8 @@ def test_cli_smoke_local_submit_event_and_approval_flow(tmp_path: Path) -> None:
             run_queries=container.run_queries,
             task_queries=container.task_queries,
             approval_commands=container.approval_commands,
+            suppression_queries=container.suppression_queries,
+            suppression_commands=container.suppression_commands,
             tool_registry=container.tool_registry,
         )
         cli_container = CliContainer.build(settings=settings, client=local_client)

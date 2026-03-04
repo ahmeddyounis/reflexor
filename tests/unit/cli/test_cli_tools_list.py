@@ -29,6 +29,8 @@ def test_tools_list_local_outputs_registered_tool_manifests() -> None:
         run_queries=object(),  # type: ignore[arg-type]
         task_queries=object(),  # type: ignore[arg-type]
         approval_commands=object(),  # type: ignore[arg-type]
+        suppression_queries=object(),  # type: ignore[arg-type]
+        suppression_commands=object(),  # type: ignore[arg-type]
         tool_registry=registry,
     )
     container = CliContainer.build(settings=ReflexorSettings(), client=client)
