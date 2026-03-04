@@ -172,6 +172,8 @@ class ReflexorSettings(BaseSettings):
     webhook_allowed_targets: list[str] = Field(default_factory=list)
     workspace_root: Path = Field(default_factory=Path.cwd)
 
+    reflex_rules_path: Path | None = None
+
     database_url: str = "sqlite+aiosqlite:///./reflexor.db"
     db_echo: bool = False
     db_pool_size: int | None = None
@@ -257,6 +259,16 @@ class ReflexorSettings(BaseSettings):
         if trimmed not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("log_level must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL")
         return trimmed
+
+    @field_validator("reflex_rules_path", mode="before")
+    @classmethod
+    def _normalize_reflex_rules_path(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            trimmed = value.strip()
+            return None if not trimmed else trimmed
+        return value
 
     @field_validator(
         "enabled_scopes",

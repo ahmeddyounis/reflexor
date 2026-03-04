@@ -258,8 +258,24 @@ class AppContainer:
         )
 
         effective_clock = clock or SystemClock()
+        effective_reflex_router = reflex_router
+        if effective_reflex_router is None:
+            rules_path = getattr(effective_settings, "reflex_rules_path", None)
+            if rules_path is not None:
+                from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
+
+                try:
+                    effective_reflex_router = RuleBasedReflexRouter.from_json_file(rules_path)
+                except FileNotFoundError as exc:
+                    raise ValueError(f"reflex_rules_path not found: {rules_path}") from exc
+                except Exception as exc:  # pragma: no cover
+                    raise ValueError(
+                        f"failed to load reflex rules from {rules_path}: {exc}"
+                    ) from exc
+            else:
+                effective_reflex_router = NeedsPlanningRouter()
         orchestrator_engine = OrchestratorEngine(
-            reflex_router=NeedsPlanningRouter() if reflex_router is None else reflex_router,
+            reflex_router=effective_reflex_router,
             planner=NoOpPlanner() if planner is None else planner,
             tool_registry=registry,
             queue=effective_queue,

@@ -1,0 +1,125 @@
+name: reflexor
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: reflexor
+      POSTGRES_USER: reflexor
+      # Local-only convenience: avoid embedding secrets in compose. Not suitable for real production.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reflexor -d reflexor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor@postgres:5432/reflexor
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "scripts/db_upgrade.py"]
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      REFLEXOR_PROFILE: dev
+      REFLEXOR_DRY_RUN: "true"
+
+      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor@postgres:5432/reflexor
+
+      REFLEXOR_QUEUE_BACKEND: redis_streams
+      REFLEXOR_REDIS_URL: redis://redis:6379/0
+      REFLEXOR_REDIS_STREAM_KEY: reflexor:tasks
+      REFLEXOR_REDIS_CONSUMER_GROUP: reflexor
+      REFLEXOR_REDIS_DELAYED_ZSET_KEY: reflexor:tasks:delayed
+
+      REFLEXOR_ENABLED_SCOPES: fs.read
+      REFLEXOR_APPROVAL_REQUIRED_SCOPES: ""
+      REFLEXOR_HTTP_ALLOWED_DOMAINS: ""
+      REFLEXOR_WEBHOOK_ALLOWED_TARGETS: ""
+      REFLEXOR_WORKSPACE_ROOT: /workspace
+
+      # Demo reflex rules (safe: uses fs.list_dir under fs.read).
+      REFLEXOR_REFLEX_RULES_PATH: /app/docker/reflex_rules.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - workspace_data:/workspace
+    ports:
+      - "8000:8000"
+    command:
+      ["reflexor", "run", "api", "--host", "0.0.0.0", "--port", "8000", "--no-reload"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      REFLEXOR_PROFILE: dev
+      REFLEXOR_DRY_RUN: "true"
+
+      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor@postgres:5432/reflexor
+
+      REFLEXOR_QUEUE_BACKEND: redis_streams
+      REFLEXOR_REDIS_URL: redis://redis:6379/0
+      REFLEXOR_REDIS_STREAM_KEY: reflexor:tasks
+      REFLEXOR_REDIS_CONSUMER_GROUP: reflexor
+      REFLEXOR_REDIS_DELAYED_ZSET_KEY: reflexor:tasks:delayed
+      REFLEXOR_REDIS_CONSUMER_NAME: reflexor-worker
+
+      REFLEXOR_ENABLED_SCOPES: fs.read
+      REFLEXOR_APPROVAL_REQUIRED_SCOPES: ""
+      REFLEXOR_HTTP_ALLOWED_DOMAINS: ""
+      REFLEXOR_WEBHOOK_ALLOWED_TARGETS: ""
+      REFLEXOR_WORKSPACE_ROOT: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - workspace_data:/workspace
+    command: ["reflexor", "run", "worker", "--concurrency", "1"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  workspace_data:

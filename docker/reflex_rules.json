@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "rule_id": "list_workspace",
+      "match": { "event_type": "webhook" },
+      "action": {
+        "kind": "fast_tool",
+        "tool_name": "fs.list_dir",
+        "args_template": { "path": ".", "include_hidden": false, "max_entries": 50 }
+      }
+    }
+  ]
+}
