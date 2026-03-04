@@ -95,6 +95,13 @@ def test_private_pending_invariants_reject_timestamps() -> None:
         _validate_tool_call_invariants(call, current_state=ToolCallStatus.RUNNING)
 
 
+def test_private_pending_invariants_accept_clean_entities() -> None:
+    _validate_task_invariants(_task(status=TaskStatus.PENDING), current_state=TaskStatus.QUEUED)
+    _validate_tool_call_invariants(
+        _tool_call(status=ToolCallStatus.PENDING), current_state=ToolCallStatus.RUNNING
+    )
+
+
 def test_task_queued_requires_pending_tool_call_and_no_timestamps() -> None:
     with pytest.raises(InvalidTransition, match="queued task must have tool_call"):
         transition_task(_task(status=TaskStatus.PENDING, tool_call=None), TaskStatus.QUEUED)
@@ -200,6 +207,51 @@ def test_task_waiting_approval_invariants() -> None:
                 tool_call=_tool_call(status=ToolCallStatus.PENDING, started_at_ms=1),
             ),
             current_state=TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(InvalidTransition, match="pending/running tool_call"):
+        _validate_task_invariants(
+            _task(
+                status=TaskStatus.WAITING_APPROVAL,
+                tool_call=_tool_call(
+                    status=ToolCallStatus.SUCCEEDED,
+                    started_at_ms=1,
+                    completed_at_ms=2,
+                ),
+            ),
+            current_state=TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(InvalidTransition, match="must not have completed tool_call"):
+        _validate_task_invariants(
+            _task(
+                status=TaskStatus.WAITING_APPROVAL,
+                tool_call=_tool_call(status=ToolCallStatus.PENDING, completed_at_ms=1),
+            ),
+            current_state=TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(InvalidTransition, match="must not have started_at_ms set"):
+        _validate_task_invariants(
+            _task(
+                status=TaskStatus.WAITING_APPROVAL,
+                tool_call=_tool_call(status=ToolCallStatus.PENDING),
+                started_at_ms=1,
+            ),
+            current_state=TaskStatus.QUEUED,
+        )
+
+    with pytest.raises(
+        InvalidTransition, match="must have started_at_ms when tool_call is running"
+    ):
+        _validate_task_invariants(
+            _task(
+                status=TaskStatus.WAITING_APPROVAL,
+                tool_call=_tool_call(status=ToolCallStatus.RUNNING, started_at_ms=1),
+                attempts=1,
+                started_at_ms=None,
+            ),
+            current_state=TaskStatus.RUNNING,
         )
 
     with pytest.raises(InvalidTransition, match="waiting approval task must have attempts >= 1"):

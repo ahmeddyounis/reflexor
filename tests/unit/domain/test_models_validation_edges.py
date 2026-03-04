@@ -76,11 +76,18 @@ def test_task_id_and_run_id_validators_cover_edge_cases(monkeypatch: pytest.Monk
     provided = Task(task_id=fixed, run_id=RUN_ID, name="x", created_at_ms=0)
     assert provided.task_id == str(fixed)
 
+    provided_run_uuid = uuid.UUID(RUN_ID)
+    provided_uuid = Task(task_id=fixed, run_id=provided_run_uuid, name="x", created_at_ms=0)
+    assert provided_uuid.run_id == RUN_ID
+
     with pytest.raises(ValueError, match="task_id must be a valid UUID"):
         Task(task_id="nope", run_id=RUN_ID, name="x")
 
     with pytest.raises(TypeError, match="task_id must be a UUID or UUID string"):
         Task(task_id=123, run_id=RUN_ID, name="x")  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="task_id must be a UUID4"):
+        Task(task_id=str(uuid.uuid1()), run_id=RUN_ID, name="x")
 
     with pytest.raises(ValueError, match="run_id is required"):
         Task(run_id=None, name="x")  # type: ignore[arg-type]
@@ -129,8 +136,28 @@ def test_approval_validators_reject_invalid_ids_status_and_decision_fields(
     )
     assert approval.approval_id == str(fixed)
 
+    approval_uuid = Approval(
+        approval_id=fixed,
+        run_id=RUN_ID,
+        task_id=RUN_ID,
+        tool_call_id=RUN_ID,
+        created_at_ms=0,
+    )
+    assert approval_uuid.approval_id == str(fixed)
+
+    with pytest.raises(ValueError, match="approval_id must be a valid UUID"):
+        Approval(approval_id="nope", run_id=RUN_ID, task_id=RUN_ID, tool_call_id=RUN_ID)
+
     with pytest.raises(TypeError, match="approval_id must be a UUID or UUID string"):
         Approval(approval_id=123, run_id=RUN_ID, task_id=RUN_ID, tool_call_id=RUN_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="approval_id must be a UUID4"):
+        Approval(
+            approval_id=str(uuid.uuid1()),
+            run_id=RUN_ID,
+            task_id=RUN_ID,
+            tool_call_id=RUN_ID,
+        )
 
     with pytest.raises(ValueError, match="run_id is required"):
         Approval(run_id=None, task_id=RUN_ID, tool_call_id=RUN_ID)  # type: ignore[arg-type]
@@ -143,6 +170,10 @@ def test_approval_validators_reject_invalid_ids_status_and_decision_fields(
 
     with pytest.raises(ValueError, match="run_id must be a UUID4"):
         Approval(run_id=str(uuid.uuid1()), task_id=RUN_ID, tool_call_id=RUN_ID)
+
+    uuid_id = uuid.UUID(RUN_ID)
+    uuid_fields = Approval(run_id=uuid_id, task_id=uuid_id, tool_call_id=uuid_id, created_at_ms=0)
+    assert uuid_fields.run_id == RUN_ID
 
     with pytest.raises(ValueError, match="status must be one of"):
         Approval(
