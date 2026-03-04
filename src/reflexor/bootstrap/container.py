@@ -32,267 +32,39 @@ from reflexor.application.suppressions_service import (
     EventSuppressionCommandService,
     EventSuppressionQueryService,
 )
+from reflexor.bootstrap.orchestrator import build_orchestrator_engine
+from reflexor.bootstrap.policy import build_policy_gate, build_policy_runner
+from reflexor.bootstrap.queue import build_queue
+from reflexor.bootstrap.repos import RepoProviders, build_repo_providers
+from reflexor.bootstrap.tools import build_tool_runner
+from reflexor.bootstrap.uow import build_uow_factory
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.enums import ApprovalStatus
-from reflexor.executor.approval_store import DbApprovalStore
 from reflexor.executor.concurrency import ConcurrencyLimiter
 from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
-from reflexor.guards.defaults import (
-    build_default_circuit_breaker,
-    build_default_policy_guard_chain,
-)
 from reflexor.infra.db.engine import (
     AsyncSessionFactory,
     create_async_engine,
     create_async_session_factory,
 )
-from reflexor.infra.db.repos import (
-    SqlAlchemyApprovalRepo,
-    SqlAlchemyEventRepo,
-    SqlAlchemyEventSuppressionRepo,
-    SqlAlchemyIdempotencyLedger,
-    SqlAlchemyRunPacketRepo,
-    SqlAlchemyRunRepo,
-    SqlAlchemyTaskRepo,
-    SqlAlchemyToolCallRepo,
-)
-from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
-from reflexor.infra.queue.factory import build_queue
+from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger
 from reflexor.observability.metrics import ReflexorMetrics as ApiMetrics
-from reflexor.observability.queue_observers import (
-    CompositeQueueObserver,
-    LoggingQueueObserver,
-    PrometheusQueueObserver,
-)
-from reflexor.orchestrator.budgets import BudgetLimits
-from reflexor.orchestrator.clock import Clock, SystemClock
+from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
-from reflexor.orchestrator.event_suppression import DbEventSuppressor
-from reflexor.orchestrator.interfaces import (
-    NeedsPlanningRouter,
-    NoOpPlanner,
-    Planner,
-    ReflexRouter,
-)
-from reflexor.orchestrator.persistence import OrchestratorPersistence, OrchestratorRepoFactory
+from reflexor.orchestrator.interfaces import Planner, ReflexRouter
 from reflexor.orchestrator.queue import Queue
-from reflexor.orchestrator.sinks import NoopRunPacketSink, RunPacketSink
-from reflexor.security.policy.defaults import build_default_policy_rules
+from reflexor.orchestrator.sinks import RunPacketSink
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
-from reflexor.storage.ports import (
-    ApprovalRepo,
-    EventRepo,
-    EventSuppressionRepo,
-    RunPacketRepo,
-    RunRepo,
-    TaskRepo,
-    ToolCallRepo,
-)
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.builtin_registry import build_builtin_registry
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
-from reflexor.tools.sandbox_policy import SandboxPolicy, SandboxPolicyBackend
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class RepoProviders:
-    event_repo: Callable[[DatabaseSession], EventRepo]
-    event_suppression_repo: Callable[[DatabaseSession], EventSuppressionRepo]
-    run_repo: Callable[[DatabaseSession], RunRepo]
-    task_repo: Callable[[DatabaseSession], TaskRepo]
-    tool_call_repo: Callable[[DatabaseSession], ToolCallRepo]
-    approval_repo: Callable[[DatabaseSession], ApprovalRepo]
-    run_packet_repo: Callable[[DatabaseSession], RunPacketRepo]
-
-
-def _build_uow_factory(
-    session_factory: AsyncSessionFactory,
-) -> Callable[[], UnitOfWork]:
-    def uow_factory() -> UnitOfWork:
-        return SqlAlchemyUnitOfWork(session_factory)
-
-    return uow_factory
-
-
-def _build_repo_providers(settings: ReflexorSettings) -> RepoProviders:
-    return RepoProviders(
-        event_repo=lambda session: SqlAlchemyEventRepo(cast(AsyncSession, session)),
-        event_suppression_repo=lambda session: SqlAlchemyEventSuppressionRepo(
-            cast(AsyncSession, session)
-        ),
-        run_repo=lambda session: SqlAlchemyRunRepo(cast(AsyncSession, session)),
-        task_repo=lambda session: SqlAlchemyTaskRepo(cast(AsyncSession, session)),
-        tool_call_repo=lambda session: SqlAlchemyToolCallRepo(cast(AsyncSession, session)),
-        approval_repo=lambda session: SqlAlchemyApprovalRepo(cast(AsyncSession, session)),
-        run_packet_repo=lambda session: SqlAlchemyRunPacketRepo(
-            cast(AsyncSession, session), settings=settings
-        ),
-    )
-
-
-def _build_queue(
-    settings: ReflexorSettings,
-    *,
-    metrics: ApiMetrics,
-    queue: Queue | None,
-) -> tuple[Queue, bool]:
-    owns_queue = queue is None
-    if queue is not None:
-        return queue, owns_queue
-
-    queue_observer = CompositeQueueObserver(
-        observers=[
-            PrometheusQueueObserver(metrics=metrics),
-            LoggingQueueObserver(),
-        ]
-    )
-    return build_queue(settings, observer=queue_observer), owns_queue
-
-
-def _build_tool_runner(
-    settings: ReflexorSettings,
-    *,
-    registry: ToolRegistry,
-) -> ToolRunner:
-    sandbox_policy = SandboxPolicy.from_settings(settings)
-    sandbox_backend = SandboxPolicyBackend(policy=sandbox_policy)
-    return ToolRunner(
-        registry=registry,
-        settings=settings,
-        backend=sandbox_backend,
-    )
-
-
-def _build_policy_gate(
-    settings: ReflexorSettings,
-    *,
-    metrics: ApiMetrics,
-) -> PolicyGate:
-    return PolicyGate(
-        rules=build_default_policy_rules(),
-        settings=settings,
-        metrics=metrics,
-    )
-
-
-def _build_policy_runner(
-    *,
-    metrics: ApiMetrics,
-    uow_factory: Callable[[], UnitOfWork],
-    repos: RepoProviders,
-    registry: ToolRegistry,
-    runner: ToolRunner,
-    gate: PolicyGate,
-) -> tuple[PolicyEnforcedToolRunner, CircuitBreaker]:
-    approval_store = DbApprovalStore(uow_factory=uow_factory, approval_repo=repos.approval_repo)
-
-    circuit_breaker = build_default_circuit_breaker()
-    guard_chain = build_default_policy_guard_chain(
-        gate=gate,
-        metrics=metrics,
-        circuit_breaker=circuit_breaker,
-    )
-
-    policy_runner = PolicyEnforcedToolRunner(
-        registry=registry,
-        runner=runner,
-        gate=gate,
-        approvals=approval_store,
-        metrics=metrics,
-        guard_chain=guard_chain,
-    )
-
-    return policy_runner, circuit_breaker
-
-
-def _resolve_reflex_router(
-    settings: ReflexorSettings,
-    reflex_router: ReflexRouter | None,
-) -> ReflexRouter:
-    if reflex_router is not None:
-        return reflex_router
-
-    rules_path = getattr(settings, "reflex_rules_path", None)
-    if rules_path is not None:
-        from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
-
-        try:
-            return RuleBasedReflexRouter.from_json_file(rules_path)
-        except FileNotFoundError as exc:
-            raise ValueError(f"reflex_rules_path not found: {rules_path}") from exc
-        except Exception as exc:  # pragma: no cover
-            raise ValueError(f"failed to load reflex rules from {rules_path}: {exc}") from exc
-
-    return NeedsPlanningRouter()
-
-
-def _build_orchestrator_engine(
-    settings: ReflexorSettings,
-    *,
-    metrics: ApiMetrics,
-    uow_factory: Callable[[], UnitOfWork],
-    repos: RepoProviders,
-    queue: Queue,
-    registry: ToolRegistry,
-    reflex_router: ReflexRouter | None,
-    planner: Planner | None,
-    clock: Clock | None,
-    run_sink: RunPacketSink | None,
-) -> OrchestratorEngine:
-    limits = BudgetLimits(
-        max_tasks_per_run=settings.max_tasks_per_run,
-        max_tool_calls_per_run=settings.max_tool_calls_per_run,
-        max_wall_time_s=settings.max_run_wall_time_s,
-        max_events_per_planning_cycle=settings.max_events_per_planning_cycle,
-        max_backlog_events=settings.event_backlog_max,
-    )
-
-    effective_clock = clock or SystemClock()
-
-    orchestrator_repos = OrchestratorRepoFactory(
-        event_repo=repos.event_repo,
-        run_repo=repos.run_repo,
-        task_repo=repos.task_repo,
-        tool_call_repo=repos.tool_call_repo,
-        run_packet_repo=repos.run_packet_repo,
-    )
-    persistence = OrchestratorPersistence(uow_factory=uow_factory, repos=orchestrator_repos)
-
-    event_suppressor = None
-    if settings.event_suppression_enabled:
-        event_suppressor = DbEventSuppressor(
-            uow_factory=uow_factory,
-            repo=repos.event_suppression_repo,
-            clock=effective_clock,
-            signature_fields=tuple(settings.event_suppression_signature_fields),
-            window_s=float(settings.event_suppression_window_s),
-            threshold=int(settings.event_suppression_threshold),
-            ttl_s=float(settings.event_suppression_ttl_s),
-        )
-
-    effective_reflex_router = _resolve_reflex_router(settings, reflex_router)
-
-    return OrchestratorEngine(
-        reflex_router=effective_reflex_router,
-        planner=NoOpPlanner() if planner is None else planner,
-        tool_registry=registry,
-        queue=queue,
-        run_sink=NoopRunPacketSink() if run_sink is None else run_sink,
-        persistence=persistence,
-        event_suppressor=event_suppressor,
-        limits=limits,
-        clock=effective_clock,
-        metrics=metrics,
-        planner_debounce_s=float(settings.planner_debounce_s),
-        planner_interval_s=float(settings.planner_interval_s),
-    )
 
 
 @dataclass(slots=True)
@@ -503,18 +275,18 @@ class AppContainer:
             effective_engine
         )
 
-        uow_factory = _build_uow_factory(effective_session_factory)
-        repos = _build_repo_providers(effective_settings)
-        effective_queue, owns_queue = _build_queue(
+        uow_factory = build_uow_factory(effective_session_factory)
+        repos = build_repo_providers(effective_settings)
+        effective_queue, owns_queue = build_queue(
             effective_settings,
             metrics=effective_metrics,
             queue=queue,
         )
 
         registry = tool_registry or build_builtin_registry(settings=effective_settings)
-        tool_runner = _build_tool_runner(effective_settings, registry=registry)
-        policy_gate = _build_policy_gate(effective_settings, metrics=effective_metrics)
-        policy_runner, circuit_breaker = _build_policy_runner(
+        tool_runner = build_tool_runner(effective_settings, registry=registry)
+        policy_gate = build_policy_gate(effective_settings, metrics=effective_metrics)
+        policy_runner, circuit_breaker = build_policy_runner(
             metrics=effective_metrics,
             uow_factory=uow_factory,
             repos=repos,
@@ -522,7 +294,7 @@ class AppContainer:
             runner=tool_runner,
             gate=policy_gate,
         )
-        orchestrator_engine = _build_orchestrator_engine(
+        orchestrator_engine = build_orchestrator_engine(
             effective_settings,
             metrics=effective_metrics,
             uow_factory=uow_factory,
