@@ -60,6 +60,11 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.executor_retry_base_delay_s == 1.0
     assert settings.executor_retry_max_delay_s == 60.0
     assert settings.executor_retry_jitter == 0.0
+    assert settings.rate_limits_enabled is False
+    assert settings.rate_limit_default is None
+    assert settings.rate_limit_per_tool == {}
+    assert settings.rate_limit_per_destination == {}
+    assert settings.rate_limit_per_run is None
     assert settings.planner_interval_s == 60.0
     assert settings.planner_debounce_s == 2.0
     assert settings.event_backlog_max == 200
@@ -295,3 +300,74 @@ def test_executor_per_tool_concurrency_parses_env_values(
     monkeypatch.setenv("REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY", " echo=2 , other=1 ")
     settings = get_settings()
     assert settings.executor_per_tool_concurrency == {"echo": 2, "other": 1}
+
+
+def test_rate_limit_specs_parse_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    clear_settings_cache()
+
+    monkeypatch.setenv("REFLEXOR_RATE_LIMITS_ENABLED", "true")
+    monkeypatch.setenv(
+        "REFLEXOR_RATE_LIMIT_DEFAULT",
+        '{"capacity": 10, "refill_rate_per_s": 5, "burst": 1}',
+    )
+    monkeypatch.setenv(
+        "REFLEXOR_RATE_LIMIT_PER_TOOL",
+        '{"NET.HTTP": {"capacity": 2, "refill_rate_per_s": 1}}',
+    )
+    monkeypatch.setenv(
+        "REFLEXOR_RATE_LIMIT_PER_DESTINATION",
+        '{"Api.Example.com.": {"capacity": 3, "refill_rate_per_s": 2}}',
+    )
+
+    settings = get_settings()
+    assert settings.rate_limits_enabled is True
+    assert settings.rate_limit_default is not None
+    assert settings.rate_limit_default.capacity == 10
+    assert settings.rate_limit_default.refill_rate_per_s == 5
+    assert settings.rate_limit_default.burst == 1
+    assert settings.rate_limit_per_tool["net.http"].capacity == 2
+    assert settings.rate_limit_per_destination["api.example.com"].capacity == 3
+
+
+def test_rate_limit_settings_reject_malformed_specs(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="capacity"):
+        ReflexorSettings(
+            workspace_root=tmp_path,
+            rate_limit_default={"capacity": -1, "refill_rate_per_s": 1},
+        )
+
+    with pytest.raises(ValueError, match="refill_rate_per_s"):
+        ReflexorSettings(
+            workspace_root=tmp_path,
+            rate_limit_default={"capacity": 1, "refill_rate_per_s": -1},
+        )
+
+    with pytest.raises(ValueError, match="capacity \\+ burst must be > 0"):
+        ReflexorSettings(
+            workspace_root=tmp_path,
+            rate_limit_default={"capacity": 0, "refill_rate_per_s": 1, "burst": 0},
+        )
+
+    with pytest.raises(ValueError, match="keys must be non-empty"):
+        ReflexorSettings(
+            workspace_root=tmp_path,
+            rate_limit_per_tool={"   ": {"capacity": 1, "refill_rate_per_s": 1}},
+        )
+
+    with pytest.raises(ValueError, match="duplicate tool names"):
+        ReflexorSettings(
+            workspace_root=tmp_path,
+            rate_limit_per_tool={
+                "NET.HTTP": {"capacity": 1, "refill_rate_per_s": 1},
+                " net.http ": {"capacity": 1, "refill_rate_per_s": 1},
+            },
+        )
+
+    with pytest.raises(ValueError, match="hostname"):
+        ReflexorSettings(
+            workspace_root=tmp_path,
+            rate_limit_per_destination={
+                "https://example.com": {"capacity": 1, "refill_rate_per_s": 1}
+            },
+        )

@@ -3,13 +3,14 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import math
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
-from pydantic import Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from reflexor.config.validation import (
@@ -138,6 +139,100 @@ def _parse_str_int_dict(value: object, *, field_name: str) -> dict[str, int]:
     raise TypeError(f"{field_name} must be a dict[str,int] or str")
 
 
+class RateLimitSpecConfig(BaseModel):
+    """Pydantic-facing token-bucket configuration for rate limiting."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capacity: float
+    refill_rate_per_s: float
+    burst: float = 0.0
+
+    @field_validator("capacity", "refill_rate_per_s", "burst")
+    @classmethod
+    def _validate_finite_non_negative(cls, value: float, info: object) -> float:
+        _ = info
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("must be a finite number")
+        if number < 0:
+            raise ValueError("must be >= 0")
+        return number
+
+    @model_validator(mode="after")
+    def _validate_total_capacity(self) -> RateLimitSpecConfig:
+        if float(self.capacity) + float(self.burst) <= 0:
+            raise ValueError("capacity + burst must be > 0")
+        return self
+
+
+def _parse_rate_limit_spec(value: object, *, field_name: str) -> RateLimitSpecConfig | None:
+    if value is None:
+        return None
+    if isinstance(value, RateLimitSpecConfig):
+        return value
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() == "null":
+            return None
+        if not text.startswith("{"):
+            raise TypeError(f"{field_name} must be a JSON object or mapping")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise TypeError(f"{field_name} must be a JSON object") from exc
+        if not isinstance(parsed, dict):
+            raise TypeError(f"{field_name} must be a JSON object")
+        return RateLimitSpecConfig.model_validate(parsed)
+
+    if isinstance(value, dict):
+        return RateLimitSpecConfig.model_validate(value)
+
+    raise TypeError(f"{field_name} must be a JSON object or mapping")
+
+
+def _parse_rate_limit_spec_dict(
+    value: object, *, field_name: str
+) -> dict[str, RateLimitSpecConfig]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        if not text.startswith("{"):
+            raise TypeError(f"{field_name} must be a JSON object mapping strings to specs")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise TypeError(f"{field_name} must be a JSON object") from exc
+        if not isinstance(parsed, dict):
+            raise TypeError(f"{field_name} must be a JSON object")
+        value = parsed
+
+    if isinstance(value, dict):
+        normalized: dict[str, RateLimitSpecConfig] = {}
+        for raw_key, raw_spec in value.items():
+            if not isinstance(raw_key, str):
+                raise TypeError(f"{field_name} keys must be strings")
+            key = raw_key.strip()
+            if not key:
+                raise ValueError(f"{field_name} keys must be non-empty")
+
+            spec = _parse_rate_limit_spec(raw_spec, field_name=f"{field_name}[{raw_key}]")
+            if spec is None:
+                raise ValueError(f"{field_name}[{raw_key}] must be a rate-limit spec object")
+
+            if key in normalized:
+                raise ValueError(f"{field_name} contains duplicate keys after normalization")
+            normalized[key] = spec
+
+        return normalized
+
+    raise TypeError(f"{field_name} must be a dict[str,RateLimitSpecConfig] or str")
+
+
 def _default_redis_consumer_name() -> str:
     return f"reflexor-{uuid4().hex[:8]}"
 
@@ -203,6 +298,13 @@ class ReflexorSettings(BaseSettings):
     executor_retry_base_delay_s: float = 1.0
     executor_retry_max_delay_s: float = 60.0
     executor_retry_jitter: float = 0.0
+
+    # Rate limiting (execution guards). Disabled unless explicitly enabled.
+    rate_limits_enabled: bool = False
+    rate_limit_default: RateLimitSpecConfig | None = None
+    rate_limit_per_tool: dict[str, RateLimitSpecConfig] = Field(default_factory=dict)
+    rate_limit_per_destination: dict[str, RateLimitSpecConfig] = Field(default_factory=dict)
+    rate_limit_per_run: RateLimitSpecConfig | None = None
 
     planner_interval_s: float = 60.0
     planner_debounce_s: float = 2.0
@@ -291,6 +393,24 @@ class ReflexorSettings(BaseSettings):
         field_name = info.field_name
         assert field_name is not None
         return _parse_str_int_dict(value, field_name=field_name)
+
+    @field_validator("rate_limit_default", "rate_limit_per_run", mode="before")
+    @classmethod
+    def _parse_rate_limit_spec_fields(
+        cls, value: object, info: ValidationInfo
+    ) -> RateLimitSpecConfig | None:
+        field_name = info.field_name
+        assert field_name is not None
+        return _parse_rate_limit_spec(value, field_name=field_name)
+
+    @field_validator("rate_limit_per_tool", "rate_limit_per_destination", mode="before")
+    @classmethod
+    def _parse_rate_limit_spec_dict_fields(
+        cls, value: object, info: ValidationInfo
+    ) -> dict[str, RateLimitSpecConfig]:
+        field_name = info.field_name
+        assert field_name is not None
+        return _parse_rate_limit_spec_dict(value, field_name=field_name)
 
     @field_validator("enabled_scopes", "approval_required_scopes", mode="after")
     @classmethod
@@ -482,6 +602,39 @@ class ReflexorSettings(BaseSettings):
                 )
             normalized[normalized_tool_name] = limit
 
+        return normalized
+
+    @field_validator("rate_limit_per_tool", mode="after")
+    @classmethod
+    def _validate_rate_limit_per_tool(
+        cls, value: dict[str, RateLimitSpecConfig]
+    ) -> dict[str, RateLimitSpecConfig]:
+        normalized: dict[str, RateLimitSpecConfig] = {}
+        for tool_name, spec in value.items():
+            normalized_tool_name = tool_name.strip().lower()
+            if not normalized_tool_name:
+                raise ValueError("rate_limit_per_tool keys must be non-empty")
+            if normalized_tool_name in normalized:
+                raise ValueError(
+                    "rate_limit_per_tool contains duplicate tool names after normalization"
+                )
+            normalized[normalized_tool_name] = spec
+        return normalized
+
+    @field_validator("rate_limit_per_destination", mode="after")
+    @classmethod
+    def _validate_rate_limit_per_destination(
+        cls, value: dict[str, RateLimitSpecConfig]
+    ) -> dict[str, RateLimitSpecConfig]:
+        normalized: dict[str, RateLimitSpecConfig] = {}
+        for hostname, spec in value.items():
+            normalized_hostnames = normalize_domains([hostname], allow_wildcards=False)
+            normalized_hostname = normalized_hostnames[0]
+            if normalized_hostname in normalized:
+                raise ValueError(
+                    "rate_limit_per_destination contains duplicate hostnames after normalization"
+                )
+            normalized[normalized_hostname] = spec
         return normalized
 
     @field_validator("max_event_payload_bytes", "max_tool_output_bytes", "max_run_packet_bytes")
