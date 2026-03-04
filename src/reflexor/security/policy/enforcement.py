@@ -21,10 +21,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
-from reflexor.guards import GuardAction, GuardChain, GuardContext, GuardDecision, PolicyGuard
-from reflexor.guards.rate_limit import InMemoryRateLimiter
-from reflexor.guards.rate_limit.guard import RateLimitGuard
-from reflexor.guards.rate_limit.policy import RateLimitPolicy
+from reflexor.guards import GuardAction, GuardChain, GuardContext, GuardDecision
+from reflexor.guards.defaults import build_default_policy_guard_chain
 from reflexor.observability.context import get_correlation_ids
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.approvals import ApprovalBuilder, ApprovalStore
@@ -87,14 +85,7 @@ class PolicyEnforcedToolRunner:
         self._metrics = metrics
         self._policy_ctx = PolicyContext.from_settings(gate.settings)
         if guard_chain is None:
-            rate_limiter = InMemoryRateLimiter()
-            rate_limit_policy = RateLimitPolicy(settings=gate.settings, limiter=rate_limiter)
-            guard_chain = GuardChain(
-                [
-                    PolicyGuard(gate=gate),
-                    RateLimitGuard(policy=rate_limit_policy),
-                ]
-            )
+            guard_chain = build_default_policy_guard_chain(gate=gate)
         self._guard_chain = guard_chain
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
 

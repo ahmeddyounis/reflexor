@@ -40,16 +40,11 @@ from reflexor.executor.concurrency import ConcurrencyLimiter
 from reflexor.executor.idempotency import IdempotencyLedger
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
-from reflexor.guards import GuardChain, PolicyGuard
-from reflexor.guards.circuit_breaker import (
-    CircuitBreakerGuard,
-    CircuitBreakerSpec,
-    InMemoryCircuitBreaker,
-)
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
-from reflexor.guards.rate_limit import InMemoryRateLimiter
-from reflexor.guards.rate_limit.guard import RateLimitGuard
-from reflexor.guards.rate_limit.policy import RateLimitPolicy
+from reflexor.guards.defaults import (
+    build_default_circuit_breaker,
+    build_default_policy_guard_chain,
+)
 from reflexor.infra.db.engine import (
     AsyncSessionFactory,
     create_async_engine,
@@ -188,7 +183,6 @@ def _build_policy_gate(
 
 
 def _build_policy_runner(
-    settings: ReflexorSettings,
     *,
     metrics: ApiMetrics,
     uow_factory: Callable[[], UnitOfWork],
@@ -199,22 +193,11 @@ def _build_policy_runner(
 ) -> tuple[PolicyEnforcedToolRunner, CircuitBreaker]:
     approval_store = DbApprovalStore(uow_factory=uow_factory, approval_repo=repos.approval_repo)
 
-    circuit_breaker_spec = CircuitBreakerSpec(
-        failure_threshold=5,
-        window_s=60.0,
-        open_cooldown_s=10.0,
-        half_open_max_calls=1,
-        success_threshold=1,
-    )
-    circuit_breaker = InMemoryCircuitBreaker(spec=circuit_breaker_spec)
-    rate_limiter = InMemoryRateLimiter()
-    rate_limit_policy = RateLimitPolicy(settings=settings, limiter=rate_limiter)
-    guard_chain = GuardChain(
-        [
-            PolicyGuard(gate=gate),
-            CircuitBreakerGuard(breaker=circuit_breaker, metrics=metrics),
-            RateLimitGuard(policy=rate_limit_policy),
-        ]
+    circuit_breaker = build_default_circuit_breaker()
+    guard_chain = build_default_policy_guard_chain(
+        gate=gate,
+        metrics=metrics,
+        circuit_breaker=circuit_breaker,
     )
 
     policy_runner = PolicyEnforcedToolRunner(
@@ -508,7 +491,6 @@ class AppContainer:
         tool_runner = _build_tool_runner(effective_settings, registry=registry)
         policy_gate = _build_policy_gate(effective_settings, metrics=effective_metrics)
         policy_runner, circuit_breaker = _build_policy_runner(
-            effective_settings,
             metrics=effective_metrics,
             uow_factory=uow_factory,
             repos=repos,
