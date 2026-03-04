@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import inspect
+import re
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import structlog
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
@@ -68,8 +70,36 @@ class ToolRegistry:
 
         from importlib import metadata
 
+        trusted = {_canonicalize_dist_name(name) for name in settings.trusted_tool_packages}
+        blocked = {_canonicalize_dist_name(name) for name in settings.blocked_tool_packages}
+
         loaded = 0
         for entrypoint in metadata.entry_points(group="reflexor.tools"):
+            dist = _entrypoint_distribution_name(entrypoint)
+            dist_norm = _canonicalize_dist_name(dist)
+
+            if dist_norm and dist_norm in blocked:
+                _logger.warning(
+                    "tool_entrypoint_refused",
+                    entrypoint=entrypoint.name,
+                    distribution=dist,
+                    distribution_normalized=dist_norm,
+                    reason="blocked_package",
+                    profile=settings.profile,
+                )
+                continue
+
+            if settings.profile == "prod" and trusted and dist_norm not in trusted:
+                _logger.warning(
+                    "tool_entrypoint_refused",
+                    entrypoint=entrypoint.name,
+                    distribution=dist,
+                    distribution_normalized=dist_norm,
+                    reason="untrusted_package",
+                    profile=settings.profile,
+                )
+                continue
+
             tool = _load_tool_entrypoint(entrypoint, settings=settings)
             tool = _validate_plugin_tool(tool, entrypoint_name=entrypoint.name, settings=settings)
             try:
@@ -112,6 +142,24 @@ class _EntrypointTool:
 
     async def run(self, args: BaseModel, ctx: ToolContext) -> ToolResult:
         return await self._tool.run(args, ctx)
+
+
+_logger = structlog.get_logger(__name__)
+_DIST_CANONICAL_RE = re.compile(r"[-_.]+")
+
+
+def _canonicalize_dist_name(name: str | None) -> str:
+    if name is None:
+        return ""
+    trimmed = str(name).strip()
+    if not trimmed:
+        return ""
+    return _DIST_CANONICAL_RE.sub("-", trimmed).lower()
+
+
+def _entrypoint_distribution_name(entrypoint: object) -> str | None:
+    dist = getattr(entrypoint, "dist", None)
+    return getattr(dist, "name", None)
 
 
 def _load_tool_entrypoint(entrypoint: object, *, settings: ReflexorSettings) -> Tool[BaseModel]:

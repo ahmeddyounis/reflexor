@@ -63,6 +63,17 @@ Deprecation process:
   `SUPPORTED_TOOL_SDK_VERSIONS` for a grace period (announced in release notes).
 - After the grace period, support is removed and tools must upgrade their declared `sdk_version`.
 
+### Plugin trust controls (distribution allow/deny)
+
+When discovery via entry points is enabled, Reflexor can restrict which installed packages are
+allowed to provide tools:
+
+- `REFLEXOR_BLOCKED_TOOL_PACKAGES`: denylist (always enforced; wins over allowlist).
+- `REFLEXOR_TRUSTED_TOOL_PACKAGES`: allowlist (when non-empty in `prod`, only these packages are
+  allowed).
+
+Refusals are logged as structured warnings with `message="tool_entrypoint_refused"`.
+
 ### ToolContext
 
 `ToolContext` (see `reflexor.tools.sdk.tool.ToolContext`) contains:

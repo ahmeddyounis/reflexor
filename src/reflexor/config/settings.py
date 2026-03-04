@@ -259,6 +259,8 @@ class ReflexorSettings(BaseSettings):
 
     enable_tool_entrypoints: bool = False
     allow_unsupported_tools: bool = False
+    trusted_tool_packages: list[str] = Field(default_factory=list)
+    blocked_tool_packages: list[str] = Field(default_factory=list)
 
     admin_api_key: str | None = None
     events_require_admin: bool = False
@@ -418,6 +420,8 @@ class ReflexorSettings(BaseSettings):
         "webhook_allowed_targets",
         "sandbox_tools",
         "sandbox_env_allowlist",
+        "trusted_tool_packages",
+        "blocked_tool_packages",
         mode="before",
     )
     @classmethod

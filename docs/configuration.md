@@ -41,6 +41,13 @@ Tool discovery via Python entry points is disabled by default.
   - When `true` in `dev`, tools with unsupported `ToolManifest.sdk_version` are allowed with a
     warning.
   - In `prod`, settings validation rejects `REFLEXOR_ALLOW_UNSUPPORTED_TOOLS=true`.
+- `REFLEXOR_TRUSTED_TOOL_PACKAGES` (default `[]`)
+  - Allowlist of distribution names (packages) that are allowed to provide tools.
+  - In `prod`, when this allowlist is non-empty, only tools from these packages are loaded.
+  - Names are normalized (case-insensitive; `-`/`_`/`.` treated equivalently).
+- `REFLEXOR_BLOCKED_TOOL_PACKAGES` (default `[]`)
+  - Denylist of distribution names that are refused during discovery (denylist always wins).
+  - Names are normalized (case-insensitive; `-`/`_`/`.` treated equivalently).
 
 ## Profiles
 
