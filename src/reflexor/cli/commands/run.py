@@ -97,6 +97,7 @@ __all__ = ["register"]
 
 async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) -> None:
     import asyncio
+    import inspect
     import logging
     from typing import cast
 
@@ -125,6 +126,12 @@ async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) ->
 
     app = AppContainer.build(settings=settings)
     try:
+        ensure_ready = getattr(app.queue, "ensure_ready", None)
+        if ensure_ready is not None:
+            result = ensure_ready()
+            if inspect.isawaitable(result):
+                await result
+
         per_tool = {
             name: min(int(limit), effective_concurrency)
             for name, limit in settings.executor_per_tool_concurrency.items()

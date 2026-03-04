@@ -67,6 +67,9 @@ async def test_redis_streams_queue_enqueue_dequeue_ack_roundtrip() -> None:
     assert isinstance(queue, RedisStreamsQueue)
 
     try:
+        await queue.ensure_ready()
+        await queue.ensure_ready()
+
         envelope = _envelope(created_at_ms=0, available_at_ms=0)
         await queue.enqueue(envelope)
 

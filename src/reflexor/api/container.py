@@ -11,6 +11,7 @@ Clean Architecture:
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -123,8 +124,14 @@ class AppContainer:
     _owns_engine: bool = True
     _owns_queue: bool = True
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """Start any background application tasks."""
+
+        ensure_ready = getattr(self.queue, "ensure_ready", None)
+        if ensure_ready is not None:
+            result = ensure_ready()
+            if inspect.isawaitable(result):
+                await result
 
         self.orchestrator_engine.start()
 

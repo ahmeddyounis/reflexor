@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import importlib.util
 import json
+import logging
 import time
 from collections.abc import Callable
 from typing import Any
@@ -217,6 +218,7 @@ class RedisStreamsQueue:
         default_visibility_timeout_s: float = 60.0,
         observer: QueueObserver | None = None,
     ) -> None:
+        self._logger = logging.getLogger("reflexor.queue.redis_streams")
         self._redis_url = redis_url
         self._stream_key = stream_key
         self._group = consumer_group
@@ -253,6 +255,7 @@ class RedisStreamsQueue:
         self._closed = False
         self._init_lock = asyncio.Lock()
         self._initialized = False
+        self._ready_logged = False
 
         self._autoclaim_lock = asyncio.Lock()
         self._autoclaim_start_id = "0-0"
@@ -288,9 +291,9 @@ class RedisStreamsQueue:
         )
 
     async def _ensure_initialized(self) -> None:
+        if self._initialized:
+            return
         async with self._init_lock:
-            if self._initialized:
-                return
             try:
                 await self._redis.xgroup_create(
                     self._stream_key,
@@ -303,6 +306,27 @@ class RedisStreamsQueue:
                 if "BUSYGROUP" not in str(exc).upper():
                     raise
             self._initialized = True
+
+    async def ensure_ready(self) -> None:
+        """Ensure the stream + consumer group exist (idempotent).
+
+        This is intended to be called once at process startup so first-run deployments (docker,
+        CI, etc.) don't require manual Redis initialization.
+        """
+
+        await self._ensure_initialized()
+        if self._ready_logged:
+            return
+        self._ready_logged = True
+        self._logger.info(
+            "redis streams queue ready",
+            extra={
+                "event_type": "queue.redis_streams.ready",
+                "stream_key": self._stream_key,
+                "consumer_group": self._group,
+                "consumer_name": self._consumer,
+            },
+        )
 
     async def _promote_delayed(self, *, now_ms: int) -> None:
         maxlen = "" if self._stream_maxlen is None else str(int(self._stream_maxlen))

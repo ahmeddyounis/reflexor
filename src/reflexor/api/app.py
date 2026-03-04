@@ -38,7 +38,7 @@ def create_app(
             AppContainer.build(settings=effective_settings) if container is None else container
         )
         app.state.container = effective_container
-        effective_container.start()
+        await effective_container.start()
         try:
             yield
         finally:
