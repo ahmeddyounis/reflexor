@@ -5,6 +5,7 @@ import pytest
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
 from reflexor.domain.errors import InvalidTransition
 from reflexor.domain.execution_state import (
+    complete_canceled,
     complete_denied,
     complete_failed,
     complete_succeeded,
@@ -96,3 +97,15 @@ def test_complete_denied_sets_completed_and_cancels_task() -> None:
     assert denied.tool_call.completed_at_ms == 1_000
     assert denied.task.status == TaskStatus.CANCELED
     assert denied.task.completed_at_ms == 1_000
+
+
+def test_complete_canceled_sets_completed_and_cancels_task_and_tool_call() -> None:
+    tool_call = _tool_call()
+    task = _task(tool_call)
+
+    canceled = complete_canceled(task=task, tool_call=tool_call, now_ms=1_000)
+    assert canceled.tool_call.status == ToolCallStatus.CANCELED
+    assert canceled.tool_call.started_at_ms is None
+    assert canceled.tool_call.completed_at_ms == 1_000
+    assert canceled.task.status == TaskStatus.CANCELED
+    assert canceled.task.completed_at_ms == 1_000
