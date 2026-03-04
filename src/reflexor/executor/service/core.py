@@ -14,11 +14,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.execution_state import (
@@ -40,11 +38,21 @@ from reflexor.executor.retries import (
     RetryPolicy,
     exponential_backoff_s,
 )
+from reflexor.executor.service.types import (
+    ApprovalPersistError,
+    ExecutionDisposition,
+    ExecutionReport,
+    ExecutorRepoFactory,
+    RunPacketPersistError,
+    TaskNotFound,
+    ToolCallMissing,
+    _LoadedTask,
+)
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
 from reflexor.guards.circuit_breaker.resolver import key_for_tool_call
 from reflexor.guards.decision import GuardDecision
 from reflexor.observability.audit_sanitize import sanitize_tool_output
-from reflexor.observability.context import correlation_context, get_correlation_ids
+from reflexor.observability.context import correlation_context
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue
@@ -55,75 +63,13 @@ from reflexor.security.policy.enforcement import (
     ToolExecutionOutcome,
 )
 from reflexor.storage.idempotency import IdempotencyLedger, OutcomeToCache
-from reflexor.storage.ports import ApprovalRepo, RunPacketRepo, TaskRepo, ToolCallRepo
+from reflexor.storage.ports import ApprovalRepo, RunPacketRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.context import tool_context_from_settings
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import Tool, ToolResult
 
 DEFAULT_MAX_EXECUTION_RESULT_SUMMARY_BYTES = 8_000
-
-
-class ExecutionDisposition(StrEnum):
-    """High-level execution outcome for a single task."""
-
-    CACHED = "cached"
-    SUCCEEDED = "succeeded"
-    FAILED_TRANSIENT = "failed_transient"
-    FAILED_PERMANENT = "failed_permanent"
-    WAITING_APPROVAL = "waiting_approval"
-    DENIED = "denied"
-    CANCELED = "canceled"
-
-
-class ExecutionReport(BaseModel):
-    """Return value for executor runs (logging/metrics friendly, JSON-safe)."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    task_id: str
-    run_id: str
-    tool_call_id: str
-    tool_name: str
-    idempotency_key: str
-    disposition: ExecutionDisposition
-    used_cached_result: bool = False
-    retry_after_s: float | None = None
-    decision: PolicyDecision | None = None
-    result: ToolResult
-    approval_id: str | None = None
-    approval_status: ApprovalStatus | None = None
-    correlation_ids: dict[str, str | None] = Field(default_factory=get_correlation_ids)
-
-
-class ExecutorError(RuntimeError):
-    """Base error for unexpected executor failures."""
-
-
-class TaskNotFound(ExecutorError):
-    """Raised when a task_id cannot be loaded."""
-
-
-class ToolCallMissing(ExecutorError):
-    """Raised when a task has no tool_call attached."""
-
-
-class ApprovalPersistError(ExecutorError):
-    """Raised when an approval exists but cannot be persisted."""
-
-
-class RunPacketPersistError(ExecutorError):
-    """Raised when run-packet persistence fails."""
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutorRepoFactory:
-    """Factories for constructing repository adapters from a UnitOfWork session."""
-
-    task_repo: Callable[[DatabaseSession], TaskRepo]
-    tool_call_repo: Callable[[DatabaseSession], ToolCallRepo]
-    approval_repo: Callable[[DatabaseSession], ApprovalRepo]
-    run_packet_repo: Callable[[DatabaseSession], RunPacketRepo]
 
 
 class ExecutorService:
@@ -840,22 +786,3 @@ class ExecutorService:
                 raise ToolCallMissing(f"task has no tool_call: {task.task_id!r}")
 
             return _LoadedTask(task=task, tool_call=tool_call)
-
-
-class _LoadedTask(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    task: Task
-    tool_call: ToolCall
-
-
-__all__ = [
-    "ApprovalPersistError",
-    "ExecutionDisposition",
-    "ExecutionReport",
-    "ExecutorRepoFactory",
-    "ExecutorService",
-    "RunPacketPersistError",
-    "TaskNotFound",
-    "ToolCallMissing",
-]
