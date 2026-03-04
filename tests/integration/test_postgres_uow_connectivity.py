@@ -12,12 +12,12 @@ from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 
 @pytest.mark.asyncio
 async def test_postgres_uow_can_connect_and_select_1() -> None:
-    database_url = os.environ.get("REFLEXOR_TEST_POSTGRES_URL")
+    database_url = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("POSTGRES_DSN")
     if not database_url:
-        pytest.skip("REFLEXOR_TEST_POSTGRES_URL is not set")
+        pytest.skip("TEST_POSTGRES_DSN or POSTGRES_DSN is not set")
 
     if not database_url.strip().lower().startswith("postgresql"):
-        pytest.skip("REFLEXOR_TEST_POSTGRES_URL must be a postgresql URL")
+        pytest.skip("TEST_POSTGRES_DSN must be a postgresql URL")
 
     settings = ReflexorSettings(database_url=database_url)
     engine = create_async_engine(settings)

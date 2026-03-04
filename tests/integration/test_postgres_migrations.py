@@ -78,13 +78,13 @@ async def _get_udt_name(database_url: str, *, table: str, column: str) -> str | 
 
 
 def test_alembic_upgrade_head_converts_json_columns_to_jsonb_on_postgres() -> None:
-    database_url = os.environ.get("REFLEXOR_TEST_POSTGRES_URL")
+    database_url = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("POSTGRES_DSN")
     if not database_url:
-        pytest.skip("REFLEXOR_TEST_POSTGRES_URL is not set")
+        pytest.skip("TEST_POSTGRES_DSN or POSTGRES_DSN is not set")
 
     database_url = database_url.strip()
     if not database_url.lower().startswith("postgresql+asyncpg"):
-        pytest.skip("REFLEXOR_TEST_POSTGRES_URL must be a postgresql+asyncpg URL")
+        pytest.skip("TEST_POSTGRES_DSN must be a postgresql+asyncpg URL")
 
     pytest.importorskip("asyncpg")
 

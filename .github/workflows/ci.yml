@@ -89,11 +89,12 @@ jobs:
 
       - name: Pytest (Postgres)
         env:
-          REFLEXOR_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/reflexor_test
+          TEST_POSTGRES_DSN: postgresql+asyncpg://postgres:postgres@localhost:5432/reflexor_test
         run: |
           pytest -q \
             tests/integration/test_postgres_uow_connectivity.py \
-            tests/integration/test_postgres_migrations.py
+            tests/integration/test_postgres_migrations.py \
+            tests/integration/test_postgres_migrations_and_repos.py
 
   redis:
     name: Redis integration
