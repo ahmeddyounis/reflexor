@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Shared composition root in `reflexor.bootstrap.container` for wiring `AppContainer` outside the
+  FastAPI package.
+
+### Changed
+
+- CLI/worker entrypoints now import `AppContainer` from `reflexor.bootstrap.container`.
+- `reflexor.api.container` is now a thin shim re-exporting from `reflexor.bootstrap.container`.
+- Execution state transition helpers moved to `reflexor.domain.execution_state` (with
+  `reflexor.executor.state` remaining as a shim).
+- Added architecture guardrails for `reflexor.application` and `reflexor.storage`.
+
 ## 1.0.0 - 2026-03-04
 
 ### Added
