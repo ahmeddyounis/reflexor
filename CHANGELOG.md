@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Architecture guardrails for `reflexor.bootstrap` and `reflexor.infra`.
 - Architecture guardrails for `reflexor.config` and `reflexor.observability`.
 - Architecture guardrails for `reflexor.replay`.
+- Architecture guardrails for `reflexor.cli`.
 
 ### Changed
 
@@ -36,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Executor service internals split into modules under `reflexor.executor.service` (public API
   preserved).
 - Added architecture guardrails for `reflexor.application` and `reflexor.storage`.
+- SQLAlchemy repos split into smaller modules under `reflexor.infra.db.repos` (public API preserved).
+- Queue backends converted into packages under `reflexor.infra.queue.in_memory_queue` and
+  `reflexor.infra.queue.redis_streams` (import paths preserved).
+- Policy enforcement implementation split into modules under `reflexor.security.policy.enforcement`
+  (public API preserved).
 
 ### Deprecated
 

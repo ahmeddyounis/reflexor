@@ -6,8 +6,8 @@ workers with **at-least-once** semantics. Concrete implementations live in infra
 Code:
 
 - Interface + contracts: `src/reflexor/orchestrator/queue/`
-- In-memory backend: `src/reflexor/infra/queue/in_memory_queue.py`
-- Redis Streams backend: `src/reflexor/infra/queue/redis_streams.py`
+- In-memory backend: `src/reflexor/infra/queue/in_memory_queue/core.py`
+- Redis Streams backend: `src/reflexor/infra/queue/redis_streams/core.py`
 - Settings wiring: `src/reflexor/infra/queue/factory.py`
 
 ## Core models
@@ -104,7 +104,7 @@ The queue layer exposes a lightweight observer interface for metrics/logging wit
 specific telemetry stack.
 
 - Observer contracts: `src/reflexor/orchestrator/queue/observer.py`
-- In-memory backend integration: `src/reflexor/infra/queue/in_memory_queue.py`
+- In-memory backend integration: `src/reflexor/infra/queue/in_memory_queue/core.py`
 
 Callbacks:
 
