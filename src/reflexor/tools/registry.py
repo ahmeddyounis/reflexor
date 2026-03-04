@@ -5,6 +5,7 @@ import re
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import TypeGuard
 
 import structlog
 from pydantic import BaseModel
@@ -187,9 +188,7 @@ def _materialize_tool(
         factory = loaded_obj
         tool_obj = _call_factory(factory, settings=settings, entrypoint_name=entrypoint_name)
         if not _looks_like_tool(tool_obj):
-            raise ValueError(
-                f"tool entrypoint {entrypoint_name!r} factory did not return a Tool"
-            )
+            raise ValueError(f"tool entrypoint {entrypoint_name!r} factory did not return a Tool")
         return tool_obj
 
     raise ValueError(
@@ -197,9 +196,7 @@ def _materialize_tool(
     )
 
 
-def _call_factory(
-    factory: object, *, settings: ReflexorSettings, entrypoint_name: str
-) -> object:
+def _call_factory(factory: object, *, settings: ReflexorSettings, entrypoint_name: str) -> object:
     if not callable(factory):
         raise ValueError("factory must be callable")
 
@@ -248,7 +245,7 @@ def _call_factory(
     )
 
 
-def _looks_like_tool(obj: object) -> bool:
+def _looks_like_tool(obj: object) -> TypeGuard[Tool[BaseModel]]:
     if obj is None:
         return False
     if not hasattr(obj, "manifest") or not hasattr(obj, "ArgsModel") or not hasattr(obj, "run"):

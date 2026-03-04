@@ -103,4 +103,3 @@ async def test_sandbox_policy_backend_sandboxes_listed_tool_and_strips_env(
     assert result.ok is True
     assert isinstance(result.data, dict)
     assert result.data["value"] is None
-

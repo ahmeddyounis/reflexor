@@ -124,7 +124,7 @@ def _apply_best_effort_memory_limit(max_memory_mb: int | None) -> None:
         return
 
     try:
-        import resource  # type: ignore[import-not-found]
+        import resource
     except Exception:
         return
 
