@@ -31,6 +31,17 @@ Dict-valued settings accept either:
 - JSON object strings, e.g. `REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY='{"echo":5,"other":2}'`, or
 - Comma-separated pairs, e.g. `REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY='echo=5,other=2'`.
 
+## Tool plugins (entry points)
+
+Tool discovery via Python entry points is disabled by default.
+
+- `REFLEXOR_ENABLE_TOOL_ENTRYPOINTS` (default `false`)
+  - When `true`, Reflexor discovers tools from the `reflexor.tools` entry point group.
+- `REFLEXOR_ALLOW_UNSUPPORTED_TOOLS` (default `false`, dev-only)
+  - When `true` in `dev`, tools with unsupported `ToolManifest.sdk_version` are allowed with a
+    warning.
+  - In `prod`, settings validation rejects `REFLEXOR_ALLOW_UNSUPPORTED_TOOLS=true`.
+
 ## Profiles
 
 `REFLEXOR_PROFILE` supports:

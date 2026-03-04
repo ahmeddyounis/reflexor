@@ -258,6 +258,7 @@ class ReflexorSettings(BaseSettings):
     log_level: str = "INFO"
 
     enable_tool_entrypoints: bool = False
+    allow_unsupported_tools: bool = False
 
     admin_api_key: str | None = None
     events_require_admin: bool = False
@@ -743,6 +744,8 @@ class ReflexorSettings(BaseSettings):
                 "prod with dry_run=False requires allow_side_effects_in_prod=True "
                 "(set REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true)"
             )
+        if self.profile == "prod" and self.allow_unsupported_tools:
+            raise ValueError("prod does not allow allow_unsupported_tools=true")
         if self.queue_backend == "redis_streams" and self.profile == "prod" and not self.redis_url:
             raise ValueError(
                 "prod with queue_backend=redis_streams requires redis_url "

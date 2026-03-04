@@ -26,6 +26,7 @@ The tool boundary types live in `reflexor.tools.sdk`:
 
 `ToolManifest` fields (see `reflexor.tools.sdk.contracts.ToolManifest`):
 
+- `sdk_version`: tool SDK compatibility version (e.g. `1.0`).
 - `name`: stable identifier (e.g. `net.http`).
 - `version`: tool implementation version.
 - `description`: human-friendly description.
@@ -35,6 +36,32 @@ The tool boundary types live in `reflexor.tools.sdk`:
 - `default_timeout_s`: suggested execution timeout.
 - `max_output_bytes`: maximum tool output size (used by sanitation).
 - `tags`: optional taxonomy strings.
+
+## SDK compatibility policy (plugins)
+
+When loading tools from Python entry points (`reflexor.tools`), Reflexor enforces an SDK
+compatibility check based on `ToolManifest.sdk_version`.
+
+- Current SDK version: `reflexor.tools.sdk.TOOL_SDK_VERSION`
+- Supported SDK versions: `reflexor.tools.sdk.SUPPORTED_TOOL_SDK_VERSIONS`
+
+Behavior:
+
+- In `prod`, tools with an unsupported `sdk_version` are rejected.
+- In `dev`, tools with an unsupported `sdk_version` are rejected by default, but you can opt in to
+  warning-only behavior with:
+  - `REFLEXOR_ALLOW_UNSUPPORTED_TOOLS=true`
+
+Compatibility guarantees (high level):
+
+- Changes within the same **major** SDK version aim to be backward compatible for existing tools.
+- Breaking changes require a new **major** SDK version.
+
+Deprecation process:
+
+- When an SDK version is planned for removal, it will remain in
+  `SUPPORTED_TOOL_SDK_VERSIONS` for a grace period (announced in release notes).
+- After the grace period, support is removed and tools must upgrade their declared `sdk_version`.
 
 ### ToolContext
 

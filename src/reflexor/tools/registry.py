@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -8,7 +9,8 @@ from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
 from reflexor.security.scopes import ALL_SCOPES
-from reflexor.tools.sdk import TOOL_SDK_VERSION, Tool, ToolContext, ToolManifest, ToolResult
+from reflexor.tools.sdk import Tool, ToolContext, ToolManifest, ToolResult
+from reflexor.tools.sdk.compat import SUPPORTED_TOOL_SDK_VERSIONS, is_supported_tool_sdk_version
 
 
 class ToolRegistry:
@@ -69,7 +71,7 @@ class ToolRegistry:
         loaded = 0
         for entrypoint in metadata.entry_points(group="reflexor.tools"):
             tool = _load_tool_entrypoint(entrypoint, settings=settings)
-            tool = _validate_plugin_tool(tool, entrypoint_name=entrypoint.name)
+            tool = _validate_plugin_tool(tool, entrypoint_name=entrypoint.name, settings=settings)
             try:
                 self.register(tool)
             except ValueError as exc:
@@ -174,7 +176,7 @@ def _call_factory(
     required = [
         p
         for p in signature.parameters.values()
-        if p.default is inspect._empty
+        if p.default is inspect.Parameter.empty
         and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     ]
     if not required:
@@ -209,7 +211,9 @@ def _looks_like_tool(obj: object) -> bool:
     return True
 
 
-def _validate_plugin_tool(tool: Tool[BaseModel], *, entrypoint_name: str) -> Tool[BaseModel]:
+def _validate_plugin_tool(
+    tool: Tool[BaseModel], *, entrypoint_name: str, settings: ReflexorSettings
+) -> Tool[BaseModel]:
     raw_manifest = getattr(tool, "manifest", None)
     try:
         manifest = ToolManifest.model_validate(raw_manifest)
@@ -218,11 +222,16 @@ def _validate_plugin_tool(tool: Tool[BaseModel], *, entrypoint_name: str) -> Too
             f"tool entrypoint {entrypoint_name!r} returned an invalid manifest"
         ) from exc
 
-    if int(getattr(manifest, "sdk_version", 0)) != int(TOOL_SDK_VERSION):
-        raise ValueError(
+    if not is_supported_tool_sdk_version(manifest.sdk_version):
+        supported = ", ".join(sorted(SUPPORTED_TOOL_SDK_VERSIONS))
+        message = (
             f"tool entrypoint {entrypoint_name!r} requires unsupported sdk_version="
-            f"{int(getattr(manifest, 'sdk_version', 0))} (supported: {int(TOOL_SDK_VERSION)})"
+            f"{manifest.sdk_version!r} (supported: {supported})"
         )
+        if settings.profile == "dev" and settings.allow_unsupported_tools:
+            warnings.warn(message, category=UserWarning, stacklevel=2)
+        else:
+            raise ValueError(message)
 
     if manifest.permission_scope not in ALL_SCOPES:
         raise ValueError(

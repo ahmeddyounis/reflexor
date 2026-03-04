@@ -88,7 +88,11 @@ def test_load_entrypoints_registers_tools_from_instance_and_factory(
 
     monkeypatch.setattr(importlib.metadata, "entry_points", _fake_entry_points)
 
-    settings = ReflexorSettings(workspace_root=tmp_path, enable_tool_entrypoints=True)
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        profile="prod",
+        enable_tool_entrypoints=True,
+    )
     registry = ToolRegistry()
 
     assert registry.load_entrypoints(settings=settings) == 2
@@ -130,12 +134,12 @@ def test_load_entrypoints_rejects_unknown_scopes(
         registry.load_entrypoints(settings=settings)
 
 
-def test_load_entrypoints_rejects_unsupported_sdk_version(
+def test_load_entrypoints_rejects_unsupported_sdk_version_in_prod(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class BadSdkTool:
         manifest = ToolManifest(
-            sdk_version=TOOL_SDK_VERSION + 1,
+            sdk_version="2.0",
             name="plugin.bad_sdk",
             version="0.1.0",
             description="Bad SDK.",
@@ -155,11 +159,53 @@ def test_load_entrypoints_rejects_unsupported_sdk_version(
 
     monkeypatch.setattr(importlib.metadata, "entry_points", _fake_entry_points)
 
-    settings = ReflexorSettings(workspace_root=tmp_path, enable_tool_entrypoints=True)
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        profile="prod",
+        enable_tool_entrypoints=True,
+    )
     registry = ToolRegistry()
 
     with pytest.raises(ValueError, match=r"unsupported sdk_version"):
         registry.load_entrypoints(settings=settings)
+
+
+def test_load_entrypoints_warns_and_allows_unsupported_sdk_version_in_dev_when_opted_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class BadSdkTool:
+        manifest = ToolManifest(
+            sdk_version="2.0",
+            name="plugin.bad_sdk",
+            version="0.1.0",
+            description="Bad SDK.",
+            permission_scope=Scope.FS_READ.value,
+        )
+        ArgsModel = PluginArgs
+
+        async def run(self, args: PluginArgs, ctx: ToolContext) -> ToolResult:
+            _ = args, ctx
+            return ToolResult(ok=True, data={})
+
+    eps = [FakeEntryPoint(name="bad-sdk", obj=BadSdkTool())]
+
+    def _fake_entry_points(**params: object) -> object:
+        assert params.get("group") == "reflexor.tools"
+        return eps
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", _fake_entry_points)
+
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        profile="dev",
+        enable_tool_entrypoints=True,
+        allow_unsupported_tools=True,
+    )
+    registry = ToolRegistry()
+
+    with pytest.warns(UserWarning, match=r"unsupported sdk_version"):
+        assert registry.load_entrypoints(settings=settings) == 1
+    assert registry.get("plugin.bad_sdk").manifest.sdk_version == "2.0"
 
 
 def test_load_entrypoints_rejects_duplicate_tool_names(
