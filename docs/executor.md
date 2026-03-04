@@ -16,7 +16,7 @@ Code:
 - Worker loop: `src/reflexor/worker/runner.py`
 - Executor pipeline: `src/reflexor/executor/service.py`
 - Retry classification/backoff: `src/reflexor/executor/retries.py`
-- Idempotency ledger port: `src/reflexor/executor/idempotency.py`
+- Idempotency ledger port: `src/reflexor/storage/idempotency.py` (shim: `src/reflexor/executor/idempotency.py`)
 - Policy enforcement boundary: `src/reflexor/security/policy/enforcement.py`
 - Queue contract: `src/reflexor/orchestrator/queue/` (see `docs/queue.md`)
 
