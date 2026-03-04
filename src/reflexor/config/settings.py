@@ -7,6 +7,7 @@ from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, cast
+from uuid import uuid4
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -137,6 +138,10 @@ def _parse_str_int_dict(value: object, *, field_name: str) -> dict[str, int]:
     raise TypeError(f"{field_name} must be a dict[str,int] or str")
 
 
+def _default_redis_consumer_name() -> str:
+    return f"reflexor-{uuid4().hex[:8]}"
+
+
 class ReflexorSettings(BaseSettings):
     """Runtime configuration for Reflexor.
 
@@ -170,10 +175,24 @@ class ReflexorSettings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./reflexor.db"
     db_echo: bool = False
     db_pool_size: int | None = None
+    db_max_overflow: int | None = None
     db_pool_timeout_s: float | None = None
+    db_pool_pre_ping: bool = True
 
-    queue_backend: Literal["inmemory"] = "inmemory"
+    queue_backend: Literal["inmemory", "redis_streams"] = "inmemory"
     queue_visibility_timeout_s: float = 60.0
+
+    # Redis Streams queue backend settings (queue_backend=redis_streams).
+    # Safe to leave unset when using the default in-memory queue.
+    redis_url: str | None = None
+    redis_stream_key: str = "reflexor:tasks"
+    redis_consumer_group: str = "reflexor"
+    redis_consumer_name: str = Field(default_factory=_default_redis_consumer_name)
+    redis_stream_maxlen: int | None = None
+    redis_claim_batch_size: int = 50
+    redis_promote_batch_size: int = 50
+    redis_visibility_timeout_ms: int = 60_000
+    redis_delayed_zset_key: str = "reflexor:tasks:delayed"
 
     executor_max_concurrency: int = 50
     executor_per_tool_concurrency: dict[str, int] = Field(default_factory=dict)
@@ -209,6 +228,16 @@ class ReflexorSettings(BaseSettings):
     @field_validator("api_url")
     @classmethod
     def _normalize_api_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        if not trimmed:
+            return None
+        return trimmed
+
+    @field_validator("redis_url")
+    @classmethod
+    def _normalize_redis_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
         trimmed = str(value).strip()
@@ -292,6 +321,16 @@ class ReflexorSettings(BaseSettings):
             raise ValueError("db_pool_size must be > 0")
         return size
 
+    @field_validator("db_max_overflow")
+    @classmethod
+    def _validate_db_max_overflow(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        overflow = int(value)
+        if overflow < 0:
+            raise ValueError("db_max_overflow must be >= 0")
+        return overflow
+
     @field_validator("db_pool_timeout_s")
     @classmethod
     def _validate_db_pool_timeout_s(cls, value: float | None) -> float | None:
@@ -308,7 +347,7 @@ class ReflexorSettings(BaseSettings):
         if value is None:
             return "inmemory"
         if isinstance(value, str):
-            normalized = value.strip().lower()
+            normalized = value.strip().lower().replace("-", "_")
             if not normalized:
                 raise ValueError("queue_backend must be non-empty")
             return normalized
@@ -321,6 +360,47 @@ class ReflexorSettings(BaseSettings):
         if timeout_s <= 0:
             raise ValueError("queue_visibility_timeout_s must be > 0")
         return timeout_s
+
+    @field_validator(
+        "redis_stream_key",
+        "redis_consumer_group",
+        "redis_consumer_name",
+        "redis_delayed_zset_key",
+    )
+    @classmethod
+    def _validate_redis_non_empty_strings(cls, value: str, info: ValidationInfo) -> str:
+        field_name = info.field_name or "value"
+        trimmed = str(value).strip()
+        if not trimmed:
+            raise ValueError(f"{field_name} must be non-empty")
+        return trimmed
+
+    @field_validator("redis_stream_maxlen")
+    @classmethod
+    def _validate_redis_stream_maxlen(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        maxlen = int(value)
+        if maxlen <= 0:
+            raise ValueError("redis_stream_maxlen must be > 0")
+        return maxlen
+
+    @field_validator("redis_claim_batch_size", "redis_promote_batch_size")
+    @classmethod
+    def _validate_redis_positive_ints(cls, value: int, info: ValidationInfo) -> int:
+        field_name = info.field_name or "value"
+        number = int(value)
+        if number <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+        return number
+
+    @field_validator("redis_visibility_timeout_ms")
+    @classmethod
+    def _validate_redis_visibility_timeout_ms(cls, value: int) -> int:
+        timeout_ms = int(value)
+        if timeout_ms <= 0:
+            raise ValueError("redis_visibility_timeout_ms must be > 0")
+        return timeout_ms
 
     @field_validator(
         "executor_default_timeout_s",
@@ -406,6 +486,11 @@ class ReflexorSettings(BaseSettings):
             raise ValueError(
                 "prod with dry_run=False requires allow_side_effects_in_prod=True "
                 "(set REFLEXOR_ALLOW_SIDE_EFFECTS_IN_PROD=true)"
+            )
+        if self.queue_backend == "redis_streams" and self.profile == "prod" and not self.redis_url:
+            raise ValueError(
+                "prod with queue_backend=redis_streams requires redis_url "
+                "(set REFLEXOR_REDIS_URL=redis://...)"
             )
         if self.executor_retry_max_delay_s < self.executor_retry_base_delay_s:
             raise ValueError("executor_retry_max_delay_s must be >= executor_retry_base_delay_s")

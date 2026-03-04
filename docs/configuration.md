@@ -129,8 +129,12 @@ These settings define how Reflexor will connect to its persistence layer (SQLite
   - Enables SQLAlchemy engine SQL logging when the database layer is wired.
 - `REFLEXOR_DB_POOL_SIZE` (default unset)
   - Pool tuning for non-SQLite backends. Ignored for SQLite.
+- `REFLEXOR_DB_MAX_OVERFLOW` (default unset)
+  - Pool tuning for non-SQLite backends. Ignored for SQLite.
 - `REFLEXOR_DB_POOL_TIMEOUT_S` (default unset)
   - Pool tuning for non-SQLite backends. Ignored for SQLite.
+- `REFLEXOR_DB_POOL_PRE_PING` (default `true`)
+  - Enables SQLAlchemy `pool_pre_ping` for non-SQLite backends. Ignored for SQLite.
 
 ## Size limits (bytes)
 
@@ -144,9 +148,33 @@ These caps are used by observability utilities to avoid runaway log/audit payloa
 
 - `REFLEXOR_QUEUE_BACKEND` (default `inmemory`)
   - Selects the queue backend implementation.
+  - Supported values: `inmemory` | `redis_streams`.
 - `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` (default `60`)
   - Default visibility timeout (seconds) used by queue backends when `Queue.dequeue()` is called
     without an explicit `timeout_s`.
+
+### Redis Streams queue settings
+
+When `REFLEXOR_QUEUE_BACKEND=redis_streams`, the following settings apply:
+
+- `REFLEXOR_REDIS_URL` (default unset)
+  - In `prod`, this is required when using the Redis Streams queue backend.
+- `REFLEXOR_REDIS_STREAM_KEY` (default `reflexor:tasks`)
+  - Redis stream key used for task envelopes.
+- `REFLEXOR_REDIS_CONSUMER_GROUP` (default `reflexor`)
+  - Redis consumer group name.
+- `REFLEXOR_REDIS_CONSUMER_NAME` (default auto-generated)
+  - Consumer name for this worker process.
+- `REFLEXOR_REDIS_STREAM_MAXLEN` (default unset)
+  - Optional approximate max length for stream trimming; must be > 0 if set.
+- `REFLEXOR_REDIS_CLAIM_BATCH_SIZE` (default `50`)
+  - Batch size for claim operations.
+- `REFLEXOR_REDIS_PROMOTE_BATCH_SIZE` (default `50`)
+  - Batch size for promoting delayed work.
+- `REFLEXOR_REDIS_VISIBILITY_TIMEOUT_MS` (default `60000`)
+  - Visibility timeout for claimed messages; must be > 0.
+- `REFLEXOR_REDIS_DELAYED_ZSET_KEY` (default `reflexor:tasks:delayed`)
+  - ZSET key used for delayed scheduling.
 
 ## Executor defaults
 
@@ -212,9 +240,20 @@ which can cause excessive churn/cost. Validation enforces positivity but does no
 | `database_url` | `REFLEXOR_DATABASE_URL` | str | `sqlite+aiosqlite:///./reflexor.db` |
 | `db_echo` | `REFLEXOR_DB_ECHO` | bool | `false` |
 | `db_pool_size` | `REFLEXOR_DB_POOL_SIZE` | int? | unset |
+| `db_max_overflow` | `REFLEXOR_DB_MAX_OVERFLOW` | int? | unset |
 | `db_pool_timeout_s` | `REFLEXOR_DB_POOL_TIMEOUT_S` | float? | unset |
-| `queue_backend` | `REFLEXOR_QUEUE_BACKEND` | `inmemory` | `inmemory` |
+| `db_pool_pre_ping` | `REFLEXOR_DB_POOL_PRE_PING` | bool | `true` |
+| `queue_backend` | `REFLEXOR_QUEUE_BACKEND` | `inmemory` \| `redis_streams` | `inmemory` |
 | `queue_visibility_timeout_s` | `REFLEXOR_QUEUE_VISIBILITY_TIMEOUT_S` | float | `60` |
+| `redis_url` | `REFLEXOR_REDIS_URL` | str? | unset |
+| `redis_stream_key` | `REFLEXOR_REDIS_STREAM_KEY` | str | `reflexor:tasks` |
+| `redis_consumer_group` | `REFLEXOR_REDIS_CONSUMER_GROUP` | str | `reflexor` |
+| `redis_consumer_name` | `REFLEXOR_REDIS_CONSUMER_NAME` | str | auto |
+| `redis_stream_maxlen` | `REFLEXOR_REDIS_STREAM_MAXLEN` | int? | unset |
+| `redis_claim_batch_size` | `REFLEXOR_REDIS_CLAIM_BATCH_SIZE` | int | `50` |
+| `redis_promote_batch_size` | `REFLEXOR_REDIS_PROMOTE_BATCH_SIZE` | int | `50` |
+| `redis_visibility_timeout_ms` | `REFLEXOR_REDIS_VISIBILITY_TIMEOUT_MS` | int | `60000` |
+| `redis_delayed_zset_key` | `REFLEXOR_REDIS_DELAYED_ZSET_KEY` | str | `reflexor:tasks:delayed` |
 | `executor_max_concurrency` | `REFLEXOR_EXECUTOR_MAX_CONCURRENCY` | int | `50` |
 | `executor_per_tool_concurrency` | `REFLEXOR_EXECUTOR_PER_TOOL_CONCURRENCY` | dict[str,int] | `{}` |
 | `executor_default_timeout_s` | `REFLEXOR_EXECUTOR_DEFAULT_TIMEOUT_S` | float | `60` |

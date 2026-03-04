@@ -39,9 +39,20 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.database_url == "sqlite+aiosqlite:///./reflexor.db"
     assert settings.db_echo is False
     assert settings.db_pool_size is None
+    assert settings.db_max_overflow is None
     assert settings.db_pool_timeout_s is None
+    assert settings.db_pool_pre_ping is True
     assert settings.queue_backend == "inmemory"
     assert settings.queue_visibility_timeout_s == 60.0
+    assert settings.redis_url is None
+    assert settings.redis_stream_key == "reflexor:tasks"
+    assert settings.redis_consumer_group == "reflexor"
+    assert settings.redis_consumer_name.startswith("reflexor-")
+    assert settings.redis_stream_maxlen is None
+    assert settings.redis_claim_batch_size == 50
+    assert settings.redis_promote_batch_size == 50
+    assert settings.redis_visibility_timeout_ms == 60_000
+    assert settings.redis_delayed_zset_key == "reflexor:tasks:delayed"
     assert settings.executor_max_concurrency == 50
     assert settings.executor_per_tool_concurrency == {}
     assert settings.executor_default_timeout_s == 60.0
@@ -147,6 +158,11 @@ def test_queue_backend_is_normalized(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     settings = get_settings()
     assert settings.queue_backend == "inmemory"
 
+    clear_settings_cache()
+    monkeypatch.setenv("REFLEXOR_QUEUE_BACKEND", " REDIS-STREAMS ")
+    settings = get_settings()
+    assert settings.queue_backend == "redis_streams"
+
 
 def test_database_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
@@ -160,9 +176,50 @@ def test_database_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_pa
     with pytest.raises(ValueError, match="db_pool_size must be > 0"):
         ReflexorSettings(db_pool_size=0)
 
+    with pytest.raises(ValueError, match="db_max_overflow must be >= 0"):
+        ReflexorSettings(db_max_overflow=-1)
+
     with pytest.raises(ValueError, match="db_pool_timeout_s must be > 0"):
         ReflexorSettings(db_pool_timeout_s=0)
 
+
+def test_redis_settings_reject_invalid_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="redis_stream_key must be non-empty"):
+        ReflexorSettings(redis_stream_key=" ")
+
+    with pytest.raises(ValueError, match="redis_consumer_group must be non-empty"):
+        ReflexorSettings(redis_consumer_group=" ")
+
+    with pytest.raises(ValueError, match="redis_delayed_zset_key must be non-empty"):
+        ReflexorSettings(redis_delayed_zset_key=" ")
+
+    with pytest.raises(ValueError, match="redis_stream_maxlen must be > 0"):
+        ReflexorSettings(redis_stream_maxlen=0)
+
+    with pytest.raises(ValueError, match="redis_visibility_timeout_ms must be > 0"):
+        ReflexorSettings(redis_visibility_timeout_ms=0)
+
+    with pytest.raises(ValueError, match="redis_claim_batch_size must be > 0"):
+        ReflexorSettings(redis_claim_batch_size=0)
+
+    with pytest.raises(ValueError, match="redis_promote_batch_size must be > 0"):
+        ReflexorSettings(redis_promote_batch_size=0)
+
+
+def test_prod_requires_redis_url_for_redis_streams_queue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="REFLEXOR_REDIS_URL"):
+        ReflexorSettings(profile="prod", queue_backend="redis_streams")
+
+    settings = ReflexorSettings(profile="prod", queue_backend="redis_streams", redis_url="redis://x")
+    assert settings.redis_url == "redis://x"
 
 def test_orchestrator_settings_reject_non_positive_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
