@@ -71,11 +71,14 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [API](docs/api.md)
 - [CLI](docs/cli.md)
 - [Observability](docs/observability.md)
+- [Replay](docs/replay.md)
 - [Policy & Approvals](docs/policy.md)
 - [Tools](docs/tools.md)
 - [Queue](docs/queue.md)
 - [Storage & Migrations](docs/storage.md)
 - [Security: Redaction & Truncation](docs/security_redaction.md)
+- [Examples](examples/README.md)
+- [Benchmark Script](scripts/benchmark_event_to_enqueue.py)
 
 ## Quickstart (local dev)
 
