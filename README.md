@@ -42,8 +42,8 @@ Reflexor ships with safe-by-default runtime configuration in `reflexor.config.Re
 
 Note: configuration alone does not execute anything. Runtime enforcement happens when tool calls are
 executed through `reflexor.security.policy.PolicyEnforcedToolRunner`. Reflexor includes an API and
-CLI wrappers, but multi-process end-to-end execution requires a durable queue backend (not
-implemented yet).
+CLI wrappers. For multi-process deployments, use the Redis Streams queue backend
+(`REFLEXOR_QUEUE_BACKEND=redis_streams`).
 
 ## Permission scopes (vocabulary)
 
@@ -70,6 +70,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [Configuration & Profiles](docs/configuration.md)
 - [API](docs/api.md)
 - [CLI](docs/cli.md)
+- [Production Deployment (v0.2)](docs/production_v0.2.md)
 - [Observability](docs/observability.md)
 - [Replay](docs/replay.md)
 - [Policy & Approvals](docs/policy.md)
@@ -126,9 +127,11 @@ reflexor --api-url http://localhost:8000 approvals approve <approval_id>
 ```
 
 Important: the default queue backend is `inmemory`, which is **single-process only**. Running the
-API and a worker in separate processes will not share the queue; a durable queue backend is needed
-for multi-process deployments (not implemented yet). For an end-to-end offline demo (including an
-approval-required execution path), run:
+API and a worker in separate processes will not share the queue. For multi-process deployments,
+use `REFLEXOR_QUEUE_BACKEND=redis_streams` (see `docs/production_v0.2.md` and
+`docker/docker-compose.yml`).
+
+For an end-to-end offline demo (including an approval-required execution path), run:
 
 ```sh
 pytest -q tests/integration/test_cli_smoke.py
@@ -143,6 +146,34 @@ python -m pip install -U pip
 python -m pip install -e ".[dev]"
 pytest
 ```
+
+## Production Quickstart (v0.2)
+
+For a production-shaped local stack (API + worker + Postgres + Redis Streams):
+
+```sh
+cd docker
+docker compose up --build
+```
+
+Health check:
+
+```sh
+curl -sSf http://localhost:8000/healthz
+```
+
+Submit an event (uses the demo reflex rules configured by the compose stack):
+
+```sh
+curl -sS -X POST http://localhost:8000/events \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"webhook","source":"docker","payload":{"hello":"world"},"dedupe_key":"demo-1","received_at_ms":1}'
+```
+
+Docs:
+
+- `docs/production_v0.2.md`
+- `docker/README.md`
 
 ## Roadmap
 

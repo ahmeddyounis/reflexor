@@ -7,6 +7,7 @@ Code:
 
 - Interface + contracts: `src/reflexor/orchestrator/queue/`
 - In-memory backend: `src/reflexor/infra/queue/in_memory_queue.py`
+- Redis Streams backend: `src/reflexor/infra/queue/redis_streams.py`
 - Settings wiring: `src/reflexor/infra/queue/factory.py`
 
 ## Core models
@@ -31,7 +32,9 @@ Defined in `src/reflexor/orchestrator/queue/interface.py`.
 
 A `Lease` represents a reserved delivery of an envelope:
 
-- `lease_id` (UUID4 string)
+- `lease_id` (string)
+  - in-memory: UUID4 string
+  - Redis Streams: stream entry ID like `"1700000000000-0"`
 - `envelope` (`TaskEnvelope`)
 - `leased_at_ms` (ms since epoch)
 - `visibility_timeout_s` (seconds)
@@ -127,10 +130,46 @@ Factory:
 
 The factory is DI-friendly (no globals) and returns the narrow `Queue` interface.
 
-## Implementing a durable backend (guide)
+## Redis Streams backend (notes + limitations)
 
-When adding a durable backend (Redis/Taskiq/SAQ/etc), implement the `Queue` Protocol and preserve
-the invariants above.
+The `redis_streams` backend implements the same `Queue` interface using Redis Streams + consumer
+groups.
+
+Key settings (see `docs/configuration.md` for the full list):
+
+- `REFLEXOR_QUEUE_BACKEND=redis_streams`
+- `REFLEXOR_REDIS_URL=redis://...`
+- `REFLEXOR_REDIS_STREAM_KEY` / `REFLEXOR_REDIS_CONSUMER_GROUP` / `REFLEXOR_REDIS_CONSUMER_NAME`
+- `REFLEXOR_REDIS_DELAYED_ZSET_KEY` (for delayed scheduling)
+- `REFLEXOR_REDIS_VISIBILITY_TIMEOUT_MS` (minimum idle threshold for redelivery)
+- `REFLEXOR_REDIS_STREAM_MAXLEN` (optional approximate trimming)
+
+Semantics:
+
+- **Group initialization:** `ensure_ready()` creates the stream + group (`XGROUP CREATE ... MKSTREAM`)
+  and is called at API startup (`AppContainer.start()`).
+- **Dequeue new work:** `XREADGROUP` with `>` reads new messages for the group.
+- **Redelivery:** before blocking on new work, `dequeue()` attempts to reclaim idle pending messages:
+  - uses `XAUTOCLAIM` when available (Redis 6.2+), otherwise falls back to a bounded
+    `XPENDING` + `XCLAIM` scan.
+- **Delayed scheduling:** future envelopes are stored as canonical JSON in a ZSET and promoted to the
+  stream using a Lua script (atomic best-effort: `ZRANGEBYSCORE` → `ZREM` → `XADD`).
+- **Nack behavior:** `nack(...)` acks the current stream entry and re-enqueues a *new* envelope
+  (immediate or delayed), with a deterministic attempt increment (`attempt = previous_attempt + 1`).
+
+Limitations / operational notes:
+
+- **Stream growth:** `XACK` removes the message from the pending set but does not delete the stream
+  entry. Use `REFLEXOR_REDIS_STREAM_MAXLEN` if you need bounded stream size.
+- **Fallback redelivery scan:** the `XPENDING` + `XCLAIM` fallback is bounded and may miss eligible
+  messages when there are many pending entries. Prefer Redis 6.2+ so `XAUTOCLAIM` is available.
+- **Consumer identity:** for multi-process deployments, set a unique
+  `REFLEXOR_REDIS_CONSUMER_NAME` per worker process for clean redelivery behavior and observability.
+
+## Adding a backend (guide)
+
+When adding an additional backend (Taskiq/SAQ/SQS/etc), implement the `Queue` Protocol and
+preserve the invariants above.
 
 Recommended approach:
 
@@ -146,4 +185,3 @@ Recommended approach:
    - prevents further operations (raise `QueueClosed`)
 
 Do not strengthen guarantees (e.g., strict FIFO) unless you can preserve them across all backends.
-

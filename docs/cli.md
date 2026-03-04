@@ -30,7 +30,8 @@ application services directly (no network).
 
 Important caveat: the default queue backend is `inmemory`, which is **single-process only**. If you
 run `submit-event` in one process and `run worker` in another, they will **not** share the queue.
-For a full end-to-end demo today, prefer the integration tests (see below).
+For multi-process deployments, configure `REFLEXOR_QUEUE_BACKEND=redis_streams` and point both
+processes at the same Redis + database (see `docs/production_v0.2.md`).
 
 ### Remote mode
 
@@ -60,7 +61,7 @@ In table/text mode (default), list commands render aligned tables.
 - `reflexor run worker [--concurrency N]`
 
 Note: with the default `inmemory` queue, the API and worker only share a queue when running in the
-same process (durable queue backends are not implemented yet).
+same process. For multi-process deployments, use `REFLEXOR_QUEUE_BACKEND=redis_streams`.
 
 ### Event submission
 
@@ -114,4 +115,3 @@ approval-required execution path) in a single process:
 ```sh
 pytest -q tests/integration/test_cli_smoke.py
 ```
-

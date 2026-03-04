@@ -7,8 +7,8 @@ This document describes Reflexor’s **task execution** pipeline:
 - how retries, idempotency caching, and approvals interact
 
 Reflexor currently wires the worker/executor primarily in tests. A dev convenience wrapper exists
-(`reflexor run worker`), but end-to-end multi-process execution still requires a durable queue
-backend (not implemented yet). The behavior described here matches what exists in
+(`reflexor run worker`). For multi-process deployments, use the Redis Streams queue backend
+(`REFLEXOR_QUEUE_BACKEND=redis_streams`). The behavior described here matches what exists in
 `src/reflexor/executor/` and `src/reflexor/worker/`.
 
 Code:
