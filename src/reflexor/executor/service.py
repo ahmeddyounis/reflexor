@@ -41,6 +41,7 @@ from reflexor.executor.state import (
     mark_waiting_approval,
     start_execution,
 )
+from reflexor.guards import GuardAction
 from reflexor.observability.audit_sanitize import sanitize_tool_output
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.observability.metrics import ReflexorMetrics
@@ -48,7 +49,11 @@ from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue
 from reflexor.security.policy.context import tool_spec_from_tool
 from reflexor.security.policy.decision import PolicyAction, PolicyDecision
-from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner, ToolExecutionOutcome
+from reflexor.security.policy.enforcement import (
+    EXECUTION_DELAYED_ERROR_CODE,
+    PolicyEnforcedToolRunner,
+    ToolExecutionOutcome,
+)
 from reflexor.storage.ports import ApprovalRepo, RunPacketRepo, TaskRepo, ToolCallRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.context import tool_context_from_settings
@@ -213,6 +218,32 @@ class ExecutorService:
                     started_s = time.perf_counter()
                     outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
                     tool_latency_s = time.perf_counter() - started_s
+
+            if outcome.result.error_code == EXECUTION_DELAYED_ERROR_CODE:
+                delay_s = 0.0
+                debug = outcome.result.debug or {}
+                raw_delay_s = debug.get("delay_s")
+                if isinstance(raw_delay_s, (int, float, str)):
+                    try:
+                        parsed_delay_s = float(raw_delay_s)
+                    except ValueError:
+                        parsed_delay_s = 0.0
+                    delay_s = max(0.0, parsed_delay_s)
+
+                return ExecutionReport(
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    tool_name=tool_call.tool_name,
+                    idempotency_key=tool_call.idempotency_key,
+                    disposition=ExecutionDisposition.FAILED_TRANSIENT,
+                    used_cached_result=False,
+                    retry_after_s=delay_s,
+                    decision=outcome.decision,
+                    result=outcome.result,
+                    approval_id=outcome.approval_id,
+                    approval_status=outcome.approval_status,
+                )
 
             return await self._persist_outcome(
                 task,
@@ -412,19 +443,34 @@ class ExecutorService:
         except ValidationError:
             return False
 
-        decision = self._policy_runner.gate.evaluate(
+        now_ms = int(self._clock.now_ms())
+        tool_spec = tool_spec_from_tool(tool)
+        guard = self._policy_runner.evaluate_guards(
             tool_call=tool_call,
-            tool_spec=tool_spec_from_tool(tool),
+            tool_spec=tool_spec,
             parsed_args=parsed_args,
+            approval_status=None,
             emit_metrics=False,
+            now_ms=now_ms,
         )
 
-        if decision.action == PolicyAction.ALLOW:
+        if guard.action == GuardAction.ALLOW:
             return True
 
-        if decision.action == PolicyAction.REQUIRE_APPROVAL:
+        if guard.action == GuardAction.REQUIRE_APPROVAL:
             approval = await self._policy_runner.approvals.get_by_tool_call(tool_call.tool_call_id)
-            return approval is not None and approval.status == ApprovalStatus.APPROVED
+            if approval is None or approval.status != ApprovalStatus.APPROVED:
+                return False
+
+            post_approval = self._policy_runner.evaluate_guards(
+                tool_call=tool_call,
+                tool_spec=tool_spec,
+                parsed_args=parsed_args,
+                approval_status=ApprovalStatus.APPROVED,
+                emit_metrics=False,
+                now_ms=now_ms,
+            )
+            return post_approval.action == GuardAction.ALLOW
 
         return False
 

@@ -12,6 +12,8 @@ The policy layer must not import infrastructure/framework layers.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from uuid import UUID, uuid4
 
 import structlog
@@ -19,9 +21,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
+from reflexor.guards import GuardAction, GuardChain, GuardContext, GuardDecision, PolicyGuard
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.approvals import ApprovalBuilder, ApprovalStore
-from reflexor.security.policy.context import tool_spec_from_tool
+from reflexor.security.policy.context import PolicyContext, ToolSpec, tool_spec_from_tool
 from reflexor.security.policy.decision import (
     REASON_APPROVAL_DENIED,
     REASON_APPROVED_OVERRIDE,
@@ -37,6 +40,7 @@ from reflexor.tools.sdk import ToolContext, ToolResult
 
 POLICY_DENIED_ERROR_CODE = "policy_denied"
 APPROVAL_REQUIRED_ERROR_CODE = "approval_required"
+EXECUTION_DELAYED_ERROR_CODE = "execution_delayed"
 
 
 _logger = structlog.get_logger(__name__)
@@ -67,6 +71,8 @@ class PolicyEnforcedToolRunner:
         approvals: ApprovalStore,
         approval_builder: ApprovalBuilder | None = None,
         metrics: ReflexorMetrics | None = None,
+        guard_chain: GuardChain | None = None,
+        now_ms: Callable[[], int] | None = None,
     ) -> None:
         self._registry = registry
         self._runner = runner
@@ -74,6 +80,9 @@ class PolicyEnforcedToolRunner:
         self._approvals = approvals
         self._approval_builder = approval_builder or ApprovalBuilder(settings=gate.settings)
         self._metrics = metrics
+        self._policy_ctx = PolicyContext.from_settings(gate.settings)
+        self._guard_chain = guard_chain or GuardChain([PolicyGuard(gate=gate)])
+        self._now_ms = now_ms or (lambda: int(time.time() * 1000))
 
     @property
     def registry(self) -> ToolRegistry:
@@ -98,6 +107,61 @@ class PolicyEnforcedToolRunner:
     @property
     def metrics(self) -> ReflexorMetrics | None:
         return self._metrics
+
+    @property
+    def guard_chain(self) -> GuardChain:
+        return self._guard_chain
+
+    def evaluate_guards(
+        self,
+        *,
+        tool_call: ToolCall,
+        tool_spec: ToolSpec,
+        parsed_args: BaseModel,
+        approval_status: ApprovalStatus | None = None,
+        emit_metrics: bool = True,
+        now_ms: int | None = None,
+    ) -> GuardDecision:
+        resolved_now_ms = int(self._now_ms()) if now_ms is None else int(now_ms)
+        ctx = GuardContext(
+            policy=self._policy_ctx,
+            now_ms=resolved_now_ms,
+            emit_metrics=bool(emit_metrics),
+            approval_status=approval_status,
+        )
+        return self._guard_chain.check(
+            tool_call=tool_call,
+            tool_spec=tool_spec,
+            parsed_args=parsed_args,
+            ctx=ctx,
+        )
+
+    def _policy_decision_from_guard(self, guard_decision: GuardDecision) -> PolicyDecision:
+        if guard_decision.action == GuardAction.ALLOW:
+            return PolicyDecision.allow(
+                reason_code=guard_decision.reason_code,
+                message=guard_decision.message,
+                rule_id=guard_decision.guard_id,
+                metadata=dict(guard_decision.metadata),
+            )
+
+        if guard_decision.action == GuardAction.DENY:
+            return PolicyDecision.deny(
+                reason_code=guard_decision.reason_code,
+                message=guard_decision.message,
+                rule_id=guard_decision.guard_id,
+                metadata=dict(guard_decision.metadata),
+            )
+
+        if guard_decision.action == GuardAction.REQUIRE_APPROVAL:
+            return PolicyDecision.require_approval(
+                reason_code=guard_decision.reason_code,
+                message=guard_decision.message,
+                rule_id=guard_decision.guard_id,
+                metadata=dict(guard_decision.metadata),
+            )
+
+        raise ValueError(f"cannot map guard action to policy decision: {guard_decision.action!r}")
 
     def _emit_decision_metric(self, decision: PolicyDecision) -> None:
         if self._metrics is None:
@@ -187,10 +251,36 @@ class PolicyEnforcedToolRunner:
                 result=result,
             )
 
-        decision = self._gate.evaluate(
-            tool_call=tool_call, tool_spec=tool_spec, parsed_args=parsed_args
+        guard_decision = self.evaluate_guards(
+            tool_call=tool_call,
+            tool_spec=tool_spec,
+            parsed_args=parsed_args,
+            approval_status=None,
+            emit_metrics=True,
+            now_ms=None,
         )
-        if decision.action == PolicyAction.DENY:
+
+        if guard_decision.action == GuardAction.DELAY:
+            result = ToolResult(
+                ok=False,
+                error_code=EXECUTION_DELAYED_ERROR_CODE,
+                error_message=guard_decision.message or "execution delayed",
+                debug=dict(guard_decision.metadata),
+            )
+            return ToolExecutionOutcome(
+                tool_call_id=tool_call.tool_call_id,
+                tool_name=tool_call.tool_name,
+                decision=PolicyDecision.allow(
+                    reason_code=guard_decision.reason_code,
+                    message=guard_decision.message,
+                    rule_id=guard_decision.guard_id,
+                    metadata=dict(guard_decision.metadata),
+                ),
+                result=result,
+            )
+
+        decision = self._policy_decision_from_guard(guard_decision)
+        if guard_decision.action == GuardAction.DENY:
             result = ToolResult(
                 ok=False,
                 error_code=POLICY_DENIED_ERROR_CODE,
@@ -204,7 +294,7 @@ class PolicyEnforcedToolRunner:
                 result=result,
             )
 
-        if decision.action == PolicyAction.REQUIRE_APPROVAL:
+        if guard_decision.action == GuardAction.REQUIRE_APPROVAL:
             existing = await self._approvals.get_by_tool_call(tool_call.tool_call_id)
             if existing is not None:
                 expected_hash, _ = self._approval_builder.build_payload_hash_for_args(
@@ -243,6 +333,58 @@ class PolicyEnforcedToolRunner:
                     )
 
                 if existing.status == ApprovalStatus.APPROVED:
+                    post_approval_guard = self.evaluate_guards(
+                        tool_call=tool_call,
+                        tool_spec=tool_spec,
+                        parsed_args=parsed_args,
+                        approval_status=ApprovalStatus.APPROVED,
+                        emit_metrics=False,
+                        now_ms=None,
+                    )
+                    if post_approval_guard.action == GuardAction.DENY:
+                        denied = self._policy_decision_from_guard(post_approval_guard)
+                        result = ToolResult(
+                            ok=False,
+                            error_code=POLICY_DENIED_ERROR_CODE,
+                            error_message=denied.message or f"policy denied: {denied.reason_code}",
+                            data={"approval_id": existing.approval_id},
+                        )
+                        self._log_decision(
+                            decision=denied,
+                            tool_call=tool_call,
+                            approval_id=existing.approval_id,
+                            approval_status=existing.status,
+                        )
+                        return ToolExecutionOutcome(
+                            tool_call_id=tool_call.tool_call_id,
+                            tool_name=tool_call.tool_name,
+                            decision=denied,
+                            result=result,
+                            approval_id=existing.approval_id,
+                            approval_status=existing.status,
+                        )
+                    if post_approval_guard.action == GuardAction.DELAY:
+                        result = ToolResult(
+                            ok=False,
+                            error_code=EXECUTION_DELAYED_ERROR_CODE,
+                            error_message=post_approval_guard.message or "execution delayed",
+                            debug=dict(post_approval_guard.metadata),
+                            data={"approval_id": existing.approval_id},
+                        )
+                        return ToolExecutionOutcome(
+                            tool_call_id=tool_call.tool_call_id,
+                            tool_name=tool_call.tool_name,
+                            decision=PolicyDecision.allow(
+                                reason_code=post_approval_guard.reason_code,
+                                message=post_approval_guard.message,
+                                rule_id=post_approval_guard.guard_id,
+                                metadata=dict(post_approval_guard.metadata),
+                            ),
+                            result=result,
+                            approval_id=existing.approval_id,
+                            approval_status=existing.status,
+                        )
+
                     override = PolicyDecision.allow(
                         reason_code=REASON_APPROVED_OVERRIDE,
                         message="approval approved",
@@ -344,6 +486,58 @@ class PolicyEnforcedToolRunner:
                 self._metrics.approvals_pending_total.inc()
 
             if created.status == ApprovalStatus.APPROVED:
+                post_approval_guard = self.evaluate_guards(
+                    tool_call=tool_call,
+                    tool_spec=tool_spec,
+                    parsed_args=parsed_args,
+                    approval_status=ApprovalStatus.APPROVED,
+                    emit_metrics=False,
+                    now_ms=None,
+                )
+                if post_approval_guard.action == GuardAction.DENY:
+                    denied = self._policy_decision_from_guard(post_approval_guard)
+                    result = ToolResult(
+                        ok=False,
+                        error_code=POLICY_DENIED_ERROR_CODE,
+                        error_message=denied.message or f"policy denied: {denied.reason_code}",
+                        data={"approval_id": created.approval_id},
+                    )
+                    self._log_decision(
+                        decision=denied,
+                        tool_call=tool_call,
+                        approval_id=created.approval_id,
+                        approval_status=created.status,
+                    )
+                    return ToolExecutionOutcome(
+                        tool_call_id=tool_call.tool_call_id,
+                        tool_name=tool_call.tool_name,
+                        decision=denied,
+                        result=result,
+                        approval_id=created.approval_id,
+                        approval_status=created.status,
+                    )
+                if post_approval_guard.action == GuardAction.DELAY:
+                    result = ToolResult(
+                        ok=False,
+                        error_code=EXECUTION_DELAYED_ERROR_CODE,
+                        error_message=post_approval_guard.message or "execution delayed",
+                        debug=dict(post_approval_guard.metadata),
+                        data={"approval_id": created.approval_id},
+                    )
+                    return ToolExecutionOutcome(
+                        tool_call_id=tool_call.tool_call_id,
+                        tool_name=tool_call.tool_name,
+                        decision=PolicyDecision.allow(
+                            reason_code=post_approval_guard.reason_code,
+                            message=post_approval_guard.message,
+                            rule_id=post_approval_guard.guard_id,
+                            metadata=dict(post_approval_guard.metadata),
+                        ),
+                        result=result,
+                        approval_id=created.approval_id,
+                        approval_status=created.status,
+                    )
+
                 override = PolicyDecision.allow(
                     reason_code=REASON_APPROVED_OVERRIDE,
                     message="approval approved",

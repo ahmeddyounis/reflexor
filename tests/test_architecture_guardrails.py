@@ -118,3 +118,41 @@ def test_domain_imports_are_pure() -> None:
         "Domain layer imports must be stdlib-only (plus optional pydantic) and must not depend on "
         f"outer layers/frameworks. Offenders: {offenders}"
     )
+
+
+def test_guards_do_not_import_outer_layers_or_concrete_tools() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    src_root = repo_root / "src"
+    guards_root = repo_root / "src" / "reflexor" / "guards"
+
+    forbidden_prefixes = {
+        # Outer layers/frameworks
+        "fastapi",
+        "sqlalchemy",
+        "httpx",
+        "redis",
+        "reflexor.api",
+        "reflexor.worker",
+        "reflexor.cli",
+        # Concrete tool implementations (guards should depend on boundaries only)
+        "reflexor.tools.fs_tool",
+        "reflexor.tools.http_tool",
+        "reflexor.tools.webhook_tool",
+        "reflexor.tools.impl",
+        "reflexor.tools.mock_tool",
+    }
+
+    offenders: dict[str, set[str]] = {}
+    for path in _iter_python_files(guards_root):
+        imported = _iter_imported_modules(path, src_root)
+        forbidden = set()
+        for module in imported:
+            if any(_matches_prefix(module, prefix) for prefix in forbidden_prefixes):
+                forbidden.add(module)
+        if forbidden:
+            offenders[str(path.relative_to(repo_root))] = forbidden
+
+    assert not offenders, (
+        "Guard layer must not import outer layers (API/worker/CLI/frameworks) or concrete tools. "
+        f"Offenders: {offenders}"
+    )
