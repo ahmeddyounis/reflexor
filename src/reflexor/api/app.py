@@ -32,7 +32,11 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        effective_settings = get_settings() if settings is None else settings
+        effective_settings = (
+            container.settings
+            if container is not None
+            else (get_settings() if settings is None else settings)
+        )
         configure_logging(effective_settings)
         effective_container = (
             AppContainer.build(settings=effective_settings) if container is None else container
