@@ -34,27 +34,19 @@ local count = tonumber(ARGV[2])
 local field_name = ARGV[3]
 local maxlen = ARGV[4]
 
+local due = redis.call('ZRANGEBYSCORE', delayed_key, '-inf', now_ms, 'LIMIT', 0, count)
+
 local moved = 0
-
-for i = 1, count do
-  local head = redis.call('ZRANGE', delayed_key, 0, 0, 'WITHSCORES')
-  if #head == 0 then
-    break
+for _, payload in ipairs(due) do
+  local removed = redis.call('ZREM', delayed_key, payload)
+  if removed == 1 then
+    if maxlen ~= '' then
+      redis.call('XADD', stream_key, 'MAXLEN', '~', tonumber(maxlen), '*', field_name, payload)
+    else
+      redis.call('XADD', stream_key, '*', field_name, payload)
+    end
+    moved = moved + 1
   end
-
-  local payload = head[1]
-  local score = tonumber(head[2])
-  if score > now_ms then
-    break
-  end
-
-  redis.call('ZREM', delayed_key, payload)
-  if maxlen ~= '' then
-    redis.call('XADD', stream_key, 'MAXLEN', '~', tonumber(maxlen), '*', field_name, payload)
-  else
-    redis.call('XADD', stream_key, '*', field_name, payload)
-  end
-  moved = moved + 1
 end
 
 return moved

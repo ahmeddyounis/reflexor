@@ -235,6 +235,65 @@ async def test_redis_streams_queue_available_at_ms_future_schedules_to_delayed()
 
 
 @pytest.mark.asyncio
+async def test_redis_streams_queue_promotion_is_atomic_under_concurrency() -> None:
+    url = _redis_url()
+    stream_key = f"test:reflexor:stream:{uuid4().hex}"
+    delayed_key = f"test:reflexor:delayed:{uuid4().hex}"
+    group = f"test-group-{uuid4().hex}"
+
+    now_ms = 0
+
+    def clock() -> int:
+        return now_ms
+
+    queues = [
+        RedisStreamsQueue.from_settings(
+            ReflexorSettings(
+                queue_backend="redis_streams",
+                redis_url=url,
+                redis_stream_key=stream_key,
+                redis_consumer_group=group,
+                redis_consumer_name=consumer,
+                redis_delayed_zset_key=delayed_key,
+                redis_visibility_timeout_ms=1,
+                redis_promote_batch_size=10,
+            ),
+            now_ms=clock,
+        )
+        for consumer in ("consumer-a", "consumer-b", "consumer-c")
+    ]
+
+    client = redis.asyncio.Redis.from_url(url, decode_responses=True)
+    try:
+        for queue in queues:
+            await queue.ensure_ready()
+
+        envelope = _envelope(created_at_ms=0, available_at_ms=5_000)
+        await queues[0].enqueue(envelope)
+
+        now_ms = 5_000
+        leases = await asyncio.gather(*(queue.dequeue(timeout_s=1, wait_s=0.0) for queue in queues))
+        delivered = [(idx, lease) for idx, lease in enumerate(leases) if lease is not None]
+
+        assert len(delivered) == 1
+        idx, lease = delivered[0]
+        assert lease.envelope.envelope_id == envelope.envelope_id
+
+        await queues[idx].ack(lease)
+
+        assert int(await client.zcard(delayed_key)) == 0
+        assert int(await client.xlen(stream_key)) == 1
+
+        more = await asyncio.gather(*(queue.dequeue(timeout_s=1, wait_s=0.0) for queue in queues))
+        assert all(lease is None for lease in more)
+    finally:
+        for queue in queues:
+            await queue.aclose()
+        await client.aclose(close_connection_pool=True)
+        await _cleanup(url, keys=[stream_key, delayed_key])
+
+
+@pytest.mark.asyncio
 async def test_redis_streams_queue_claims_expired_pending_messages() -> None:
     url = _redis_url()
     stream_key = f"test:reflexor:stream:{uuid4().hex}"
