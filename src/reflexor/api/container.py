@@ -85,15 +85,9 @@ from reflexor.orchestrator.interfaces import (
 from reflexor.orchestrator.persistence import OrchestratorPersistence, OrchestratorRepoFactory
 from reflexor.orchestrator.queue import Queue
 from reflexor.orchestrator.sinks import NoopRunPacketSink, RunPacketSink
+from reflexor.security.policy.defaults import build_default_policy_rules
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
-from reflexor.security.policy.rules import (
-    ApprovalRequiredRule,
-    NetworkAllowlistRule,
-    ScopeEnabledRule,
-    ScopeMatchesManifestRule,
-    WorkspaceRule,
-)
 from reflexor.storage.ports import (
     ApprovalRepo,
     EventRepo,
@@ -343,13 +337,7 @@ class AppContainer:
         )
 
         policy_gate = PolicyGate(
-            rules=[
-                ScopeMatchesManifestRule(),
-                ScopeEnabledRule(),
-                NetworkAllowlistRule(),
-                WorkspaceRule(),
-                ApprovalRequiredRule(),
-            ],
+            rules=build_default_policy_rules(),
             settings=effective_settings,
             metrics=effective_metrics,
         )

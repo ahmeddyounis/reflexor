@@ -50,15 +50,9 @@ from reflexor.orchestrator.queue import TaskEnvelope
 from reflexor.replay.exporter import EXPORT_SCHEMA_VERSION
 from reflexor.security.net_safety import normalize_hostname, validate_and_normalize_url
 from reflexor.security.policy.approvals import InMemoryApprovalStore
+from reflexor.security.policy.defaults import build_default_policy_rules
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
-from reflexor.security.policy.rules import (
-    ApprovalRequiredRule,
-    NetworkAllowlistRule,
-    ScopeEnabledRule,
-    ScopeMatchesManifestRule,
-    WorkspaceRule,
-)
 from reflexor.security.scopes import Scope
 from reflexor.storage.ports import RunRecord
 from reflexor.storage.uow import UnitOfWork
@@ -480,13 +474,7 @@ class ReplayRunner:
 
         tool_runner = ToolRunner(registry=registry, settings=replay_settings)
         policy_gate = PolicyGate(
-            rules=[
-                ScopeMatchesManifestRule(),
-                ScopeEnabledRule(),
-                NetworkAllowlistRule(),
-                WorkspaceRule(),
-                ApprovalRequiredRule(),
-            ],
+            rules=build_default_policy_rules(),
             settings=replay_settings,
         )
 
