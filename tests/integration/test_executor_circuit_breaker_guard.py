@@ -360,8 +360,13 @@ async def test_circuit_breaker_opens_fast_denies_and_recovers(tmp_path: Path) ->
                 entry.get("policy_decision", {}).get("reason_code") == "circuit_half_open"
                 for entry in delayed
             )
-            assert all(entry.get("guard_decision", {}).get("action") == "delay" for entry in delayed)
-            assert any(entry.get("guard_decision", {}).get("reason_code") == "circuit_open" for entry in delayed)
+            assert all(
+                entry.get("guard_decision", {}).get("action") == "delay" for entry in delayed
+            )
+            assert any(
+                entry.get("guard_decision", {}).get("reason_code") == "circuit_open"
+                for entry in delayed
+            )
             assert any(
                 entry.get("guard_decision", {}).get("reason_code") == "circuit_half_open"
                 for entry in delayed

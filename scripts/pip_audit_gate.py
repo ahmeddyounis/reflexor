@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -25,7 +24,15 @@ class Finding:
     osv_id_used: str | None
 
 
-_SEVERITY_ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4, "unknown": 99, "ignored": -1}
+_SEVERITY_ORDER = {
+    "none": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+    "unknown": 99,
+    "ignored": -1,
+}
 
 
 def _read_allowlist(path: Path | None) -> set[str]:
@@ -237,7 +244,9 @@ def _collect_findings(
 
             aliases_field = vuln.get("aliases", [])
             aliases: tuple[str, ...] = ()
-            if isinstance(aliases_field, list) and all(isinstance(item, str) for item in aliases_field):
+            if isinstance(aliases_field, list) and all(
+                isinstance(item, str) for item in aliases_field
+            ):
                 aliases = tuple(item for item in aliases_field if item.strip())
 
             ids_for_allow = {vuln_id, *aliases}
@@ -300,9 +309,7 @@ def _collect_findings(
                     continue
 
             if _severity_meets_threshold(severity, min_severity=min_severity):
-                failing.append(
-                    finding
-                )
+                failing.append(finding)
 
     failing.sort(key=lambda f: (_SEVERITY_ORDER.get(f.severity, 99), f.dependency, f.vuln_id))
     unknown.sort(key=lambda f: (f.dependency, f.vuln_id))
@@ -348,7 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     elapsed_s = time.time() - started
 
     total_vulns = sum(
-        len(dep.get("vulns", [])) for dep in deps if isinstance(dep, dict) and isinstance(dep.get("vulns"), list)
+        len(dep.get("vulns", []))
+        for dep in deps
+        if isinstance(dep, dict) and isinstance(dep.get("vulns"), list)
     )
 
     print(

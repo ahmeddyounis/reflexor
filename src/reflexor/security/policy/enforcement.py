@@ -151,7 +151,9 @@ class PolicyEnforcedToolRunner:
             parsed_args=parsed_args,
             ctx=ctx,
         )
-        self._emit_guard_metrics(tool_call=tool_call, decision=decision, emit_metrics=bool(emit_metrics))
+        self._emit_guard_metrics(
+            tool_call=tool_call, decision=decision, emit_metrics=bool(emit_metrics)
+        )
         return decision
 
     def _emit_guard_metrics(
