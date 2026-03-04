@@ -9,13 +9,16 @@ implement real functionality.
 Reflexor is organized into four conceptual layers plus an outer runtime/drivers layer. Dependencies
 should point **inward**.
 
-| Layer | Package | Purpose | Can depend on |
+| Layer | Package(s) | Purpose | Can depend on |
 | --- | --- | --- | --- |
 | Domain | `reflexor.domain` | Pure business rules and core types | stdlib (and optionally `pydantic`) |
-| Application | `reflexor.executor`, `reflexor.orchestrator` | Use-cases/workflows that orchestrate domain behavior | `domain`, boundary interfaces |
-| Interfaces | `reflexor.interfaces` | Ports/adapters, DTOs, boundary interfaces | `application`, `domain` |
-| Infrastructure | `reflexor.infra` | Concrete implementations (I/O, DB, HTTP clients, etc.) | `interfaces`, `application`, `domain` |
-| Runtime (drivers) | `reflexor.worker`, `reflexor.cli` | Process entrypoints and long-running loops | `infrastructure`, `interfaces`, `application`, `domain` |
+| Application | `reflexor.application`, `reflexor.executor`, `reflexor.orchestrator` | Use-cases/workflows that orchestrate domain behavior | `domain`, ports/boundaries |
+| Ports (boundaries) | `reflexor.storage.ports`, `reflexor.orchestrator.queue`, `reflexor.tools.sdk` | Protocols/contracts that isolate core from I/O | `domain` (and small shared utilities) |
+| Infrastructure (adapters) | `reflexor.infra`, `reflexor.tools` | Concrete implementations (DB, queues, tool adapters, etc.) | ports, application, domain |
+| Runtime (drivers) | `reflexor.api`, `reflexor.worker`, `reflexor.cli`, `reflexor.replay` | Entrypoints, HTTP surface area, and long-running loops | infrastructure, ports, application, domain |
+
+Note: `reflexor.interfaces` is currently reserved; most ports live close to their subsystem (e.g.
+`reflexor.storage.ports`, `reflexor.orchestrator.queue`, `reflexor.tools.sdk`).
 
 ### Application boundaries (ports)
 
@@ -55,6 +58,8 @@ Some subsystems define explicit boundary interfaces ("ports") that infrastructur
 
 ## Enforcement scaffold
 
-We keep a lightweight pytest guardrail (`tests/test_architecture_guardrails.py`) that
-checks for obviously-forbidden imports in `reflexor.domain` (e.g. web/DB frameworks or
-internal infra modules). It will be expanded as packages and dependencies are added.
+We keep lightweight pytest guardrails that check for import-layer violations:
+
+- `tests/test_architecture_guardrails.py`: coarse checks for `reflexor.domain` and `reflexor.guards`.
+- `tests/unit/test_*_architecture.py`: focused checks for orchestrator/executor/policy/queue/tools/worker.
+- `tests/unit/test_domain_purity.py`: an import-time “loaded modules” sanity check for domain purity.
