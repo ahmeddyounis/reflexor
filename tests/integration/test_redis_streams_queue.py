@@ -19,9 +19,9 @@ from reflexor.orchestrator.queue.observer import (  # noqa: E402
 
 
 def _redis_url() -> str:
-    url = os.environ.get("REFLEXOR_TEST_REDIS_URL")
+    url = os.environ.get("TEST_REDIS_URL") or os.environ.get("REDIS_URL")
     if not url:
-        pytest.skip("REFLEXOR_TEST_REDIS_URL is not set")
+        pytest.skip("TEST_REDIS_URL or REDIS_URL is not set")
     return url.strip()
 
 
@@ -70,6 +70,7 @@ async def test_redis_streams_queue_enqueue_dequeue_ack_roundtrip() -> None:
     queue = build_queue(settings, now_ms=clock)
     assert isinstance(queue, RedisStreamsQueue)
 
+    client = redis.asyncio.Redis.from_url(url, decode_responses=True)
     try:
         await queue.ensure_ready()
         await queue.ensure_ready()
@@ -84,9 +85,18 @@ async def test_redis_streams_queue_enqueue_dequeue_ack_roundtrip() -> None:
         assert isinstance(lease.lease_id, str) and lease.lease_id
 
         await queue.ack(lease)
+        pending = await client.xpending_range(
+            stream_key,
+            group,
+            min=lease.lease_id,
+            max=lease.lease_id,
+            count=1,
+        )
+        assert pending == []
         assert await queue.dequeue(timeout_s=1, wait_s=0.0) is None
     finally:
         await queue.aclose()
+        await client.aclose(close_connection_pool=True)
         await _cleanup(url, keys=[stream_key, delayed_key])
 
 
@@ -351,7 +361,7 @@ async def test_redis_streams_queue_claims_expired_pending_messages() -> None:
         assert lease_a is not None
         assert lease_a.envelope.attempt == 0
 
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.05)
 
         lease_b = await queue_b.dequeue(timeout_s=0.01, wait_s=0.0)
         assert lease_b is not None
