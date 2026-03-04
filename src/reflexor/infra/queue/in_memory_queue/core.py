@@ -4,10 +4,10 @@ import asyncio
 import heapq
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from reflexor.infra.queue.in_memory_queue.types import _EnvelopeState, _InFlight
 from reflexor.orchestrator.queue import Lease, Queue, QueueClosed, TaskEnvelope
 from reflexor.orchestrator.queue.interface import system_now_ms
 from reflexor.orchestrator.queue.observer import (
@@ -20,25 +20,6 @@ from reflexor.orchestrator.queue.observer import (
     QueueRedeliverObservation,
     build_queue_correlation_ids,
 )
-
-
-@dataclass(slots=True)
-class _EnvelopeState:
-    envelope: TaskEnvelope
-    next_attempt: int
-    available_at_ms: int
-
-    in_ready: bool = False
-    active_lease_id: str | None = None
-
-
-@dataclass(slots=True)
-class _InFlight:
-    envelope_id: str
-    attempt: int
-    leased_at_ms: int
-    deadline_ms: int
-    visibility_timeout_s: float
 
 
 class InMemoryQueue:
