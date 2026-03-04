@@ -1,0 +1,10 @@
+# pip-audit vulnerability allowlist
+#
+# Add vulnerability IDs here to ignore them in CI gating (one per line).
+# Prefer upgrading dependencies first. If you must ignore, include a short reason and
+# a link to tracking context in a comment.
+#
+# Examples:
+#   # false positive: not reachable in our usage (tracked in <link>)
+#   GHSA-xxxx-xxxx-xxxx
+

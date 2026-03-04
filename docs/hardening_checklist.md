@@ -115,3 +115,44 @@ recommended production choices.
 | `REFLEXOR_ENABLE_TOOL_ENTRYPOINTS` | `false` | `false` or tightly controlled | Reduces plugin attack surface. |
 | `REFLEXOR_TRUSTED_TOOL_PACKAGES` | `[]` | set if entry points enabled | Allowlist in prod when non-empty. |
 | `REFLEXOR_BLOCKED_TOOL_PACKAGES` | `[]` | set as needed | Denylist always wins. |
+
+## CI security checks (how to triage)
+
+This repo runs dependency and code scanning in GitHub Actions. Treat failures as actionable signals,
+not as “noise to suppress”.
+
+### pip-audit (dependency vulnerabilities)
+
+The CI job runs `pip-audit` and gates on high/critical findings.
+
+To reproduce locally:
+
+```bash
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+python -m pip install pip-audit==2.9.0
+
+mkdir -p advisory
+pip-audit -s osv -f json --desc off --aliases on -o advisory/pip-audit.json
+python scripts/pip_audit_gate.py \
+  --audit-json advisory/pip-audit.json \
+  --allowlist .github/pip-audit-allowlist.txt \
+  --min-severity high
+```
+
+Preferred triage order:
+
+1) Upgrade the affected dependency (or constrain it to a non-vulnerable version).
+2) If the finding is a false positive or not reachable in our usage, add the vulnerability ID to
+   `.github/pip-audit-allowlist.txt` with a brief comment explaining why and link to tracking context.
+   Keep allowlists small and temporary.
+
+### CodeQL (static analysis)
+
+CodeQL runs on pull requests and on `main` (and periodically on a schedule).
+
+Preferred triage order:
+
+1) Fix the issue or refactor to remove the pattern CodeQL flagged.
+2) If it’s a false positive, dismiss it in GitHub’s Code Scanning UI with a clear justification and
+   (when appropriate) a link to supporting analysis.

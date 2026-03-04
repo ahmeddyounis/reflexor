@@ -105,7 +105,7 @@ jobs:
           pytest -q tests/integration
 
   advisory-audit:
-    name: Advisory audit
+    name: Security audit (pip-audit)
     runs-on: ubuntu-latest
 
     steps:
@@ -126,22 +126,34 @@ jobs:
         run: |
           python -m pip install -U pip
           python -m pip install -e ".[dev]"
-          python -m pip install pip-audit
+          python -m pip install pip-audit==2.9.0
 
       - name: Dependency update report (advisory)
         run: |
           python -m pip list --outdated > advisory/pip-outdated.txt
           python -m pip freeze > advisory/pip-freeze.txt
 
-      - name: pip-audit (advisory)
-        continue-on-error: true
+      - name: pip-audit (report)
         run: |
           set +e
-          pip-audit -f json > advisory/pip-audit.json
+          pip-audit \
+            -s osv \
+            -f json \
+            --desc off \
+            --aliases on \
+            --progress-spinner off \
+            -o advisory/pip-audit.json
           audit_exit=$?
-          pip-audit > advisory/pip-audit.txt
+          pip-audit -s osv --progress-spinner off -o advisory/pip-audit.txt
           echo "$audit_exit" > advisory/pip-audit.exitcode
-          exit "$audit_exit"
+          set -e
+
+      - name: pip-audit (gate high/critical)
+        run: |
+          python scripts/pip_audit_gate.py \
+            --audit-json advisory/pip-audit.json \
+            --allowlist .github/pip-audit-allowlist.txt \
+            --min-severity high
 
       - name: Upload advisory reports
         if: always()
