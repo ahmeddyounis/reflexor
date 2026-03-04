@@ -14,62 +14,48 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from uuid import uuid4
 
 from pydantic import BaseModel
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.execution_state import (
     ExecutionState,
-    complete_canceled,
-    complete_denied,
-    complete_failed,
     complete_succeeded,
-    mark_waiting_approval,
     start_execution,
 )
 from reflexor.domain.models import Task, ToolCall
-from reflexor.domain.models_event import Event
-from reflexor.domain.models_run_packet import RunPacket
 from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.retries import (
-    ErrorClassifier,
-    RetryDisposition,
-    RetryPolicy,
-    exponential_backoff_s,
-)
+from reflexor.executor.retries import RetryPolicy
+from reflexor.executor.service.audit import append_audit
+from reflexor.executor.service.outcomes import classify_outcome, did_attempt_tool_run
+from reflexor.executor.service.state_transitions import apply_state_transition
 from reflexor.executor.service.types import (
     ApprovalPersistError,
     ExecutionDisposition,
     ExecutionReport,
     ExecutorRepoFactory,
-    RunPacketPersistError,
     TaskNotFound,
     ToolCallMissing,
     _LoadedTask,
 )
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
 from reflexor.guards.circuit_breaker.resolver import key_for_tool_call
-from reflexor.guards.decision import GuardDecision
-from reflexor.observability.audit_sanitize import sanitize_tool_output
 from reflexor.observability.context import correlation_context
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue
-from reflexor.security.policy.decision import PolicyAction, PolicyDecision
+from reflexor.security.policy.decision import PolicyDecision
 from reflexor.security.policy.enforcement import (
     EXECUTION_DELAYED_ERROR_CODE,
     PolicyEnforcedToolRunner,
     ToolExecutionOutcome,
 )
 from reflexor.storage.idempotency import IdempotencyLedger, OutcomeToCache
-from reflexor.storage.ports import ApprovalRepo, RunPacketRepo
+from reflexor.storage.ports import ApprovalRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.context import tool_context_from_settings
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import Tool, ToolResult
-
-DEFAULT_MAX_EXECUTION_RESULT_SUMMARY_BYTES = 8_000
 
 
 class ExecutorService:
@@ -205,7 +191,8 @@ class ExecutorService:
                             approval_repo=approval_repo,
                         )
 
-                    await self._append_audit(
+                    now_ms = int(self._clock.now_ms())
+                    await append_audit(
                         run_packet_repo=run_packet_repo,
                         task=task,
                         tool_call=tool_call,
@@ -217,6 +204,8 @@ class ExecutorService:
                         approval_id=outcome.approval_id,
                         approval_status=outcome.approval_status,
                         guard_decision=outcome.guard_decision,
+                        now_ms=now_ms,
+                        settings=self._policy_runner.gate.settings,
                     )
 
                 return ExecutionReport(
@@ -251,7 +240,7 @@ class ExecutorService:
             return
         if outcome.result.error_code == EXECUTION_DELAYED_ERROR_CODE:
             return
-        if not self._did_attempt_tool_run(outcome):
+        if not did_attempt_tool_run(outcome):
             return
 
         url_value = tool_call.args.get("url") if isinstance(tool_call.args, dict) else None
@@ -420,7 +409,7 @@ class ExecutorService:
                 metadata={"idempotency_key": tool_call.idempotency_key},
             )
 
-            await self._append_audit(
+            await append_audit(
                 run_packet_repo=run_packet_repo,
                 task=completed.task,
                 tool_call=completed.tool_call,
@@ -431,6 +420,8 @@ class ExecutorService:
                 will_retry=False,
                 approval_id=None,
                 approval_status=None,
+                now_ms=now_ms,
+                settings=self._policy_runner.gate.settings,
             )
 
             if self._metrics is not None:
@@ -464,47 +455,6 @@ class ExecutorService:
 
         return state
 
-    def _apply_state_transition(
-        self,
-        *,
-        task: Task,
-        tool_call: ToolCall,
-        decision: PolicyDecision,
-        disposition: ExecutionDisposition,
-        now_ms: int,
-    ) -> ExecutionState:
-        _ = decision
-
-        if disposition == ExecutionDisposition.WAITING_APPROVAL:
-            return mark_waiting_approval(task=task, tool_call=tool_call)
-
-        if disposition == ExecutionDisposition.DENIED:
-            if tool_call.status == ToolCallStatus.PENDING:
-                return complete_denied(task=task, tool_call=tool_call, now_ms=now_ms)
-            return complete_canceled(task=task, tool_call=tool_call, now_ms=now_ms)
-
-        if disposition == ExecutionDisposition.CANCELED:
-            return complete_canceled(task=task, tool_call=tool_call, now_ms=now_ms)
-
-        if disposition == ExecutionDisposition.SUCCEEDED:
-            if task.status != TaskStatus.RUNNING or tool_call.status != ToolCallStatus.RUNNING:
-                started = start_execution(task=task, tool_call=tool_call, now_ms=now_ms)
-                task = started.task
-                tool_call = started.tool_call
-            return complete_succeeded(task=task, tool_call=tool_call, now_ms=now_ms)
-
-        if disposition in {
-            ExecutionDisposition.FAILED_TRANSIENT,
-            ExecutionDisposition.FAILED_PERMANENT,
-        }:
-            if task.status != TaskStatus.RUNNING or tool_call.status != ToolCallStatus.RUNNING:
-                started = start_execution(task=task, tool_call=tool_call, now_ms=now_ms)
-                task = started.task
-                tool_call = started.tool_call
-            return complete_failed(task=task, tool_call=tool_call, now_ms=now_ms)
-
-        raise ValueError(f"unhandled disposition: {disposition}")
-
     async def _persist_outcome(
         self,
         task: Task,
@@ -516,9 +466,13 @@ class ExecutorService:
         decision = outcome.decision
         result = outcome.result
 
-        disposition, retry_after_s = self._classify_outcome(task, outcome)
+        disposition, retry_after_s = classify_outcome(
+            task=task,
+            outcome=outcome,
+            retry_policy=self._retry_policy,
+        )
         now_ms = int(self._clock.now_ms())
-        state = self._apply_state_transition(
+        state = apply_state_transition(
             task=task,
             tool_call=tool_call,
             decision=decision,
@@ -548,7 +502,7 @@ class ExecutorService:
             await tool_call_repo.update(state.tool_call)
             await task_repo.update(state.task)
 
-            await self._append_audit(
+            await append_audit(
                 run_packet_repo=run_packet_repo,
                 task=state.task,
                 tool_call=state.tool_call,
@@ -560,11 +514,13 @@ class ExecutorService:
                 approval_id=outcome.approval_id,
                 approval_status=outcome.approval_status,
                 guard_decision=outcome.guard_decision,
+                now_ms=now_ms,
+                settings=self._policy_runner.gate.settings,
             )
 
-            did_attempt_tool_run = self._did_attempt_tool_run(outcome)
+            attempted_tool_run = did_attempt_tool_run(outcome)
             tool_is_idempotent = self._is_tool_idempotent(tool_call.tool_name)
-            if tool_is_idempotent and did_attempt_tool_run:
+            if tool_is_idempotent and attempted_tool_run:
                 await self._record_ledger(
                     ledger=ledger,
                     tool_call=state.tool_call,
@@ -582,7 +538,7 @@ class ExecutorService:
                     error_code=error_code,
                 ).inc()
 
-            if tool_latency_s is not None and did_attempt_tool_run:
+            if tool_latency_s is not None and attempted_tool_run:
                 self._metrics.tool_latency_seconds.labels(
                     tool_name=tool_call.tool_name,
                     ok="true" if result.ok else "false",
@@ -612,44 +568,6 @@ class ExecutorService:
     def _is_tool_idempotent(self, tool_name: str) -> bool:
         tool = self._try_get_tool(tool_name)
         return bool(tool is not None and tool.manifest.idempotent)
-
-    def _did_attempt_tool_run(self, outcome: ToolExecutionOutcome) -> bool:
-        if outcome.decision.action == PolicyAction.ALLOW:
-            return True
-        if outcome.decision.action == PolicyAction.REQUIRE_APPROVAL:
-            return outcome.approval_status == ApprovalStatus.APPROVED
-        return False
-
-    def _classify_outcome(
-        self, task: Task, outcome: ToolExecutionOutcome
-    ) -> tuple[ExecutionDisposition, float | None]:
-        if task.status == TaskStatus.CANCELED:
-            return ExecutionDisposition.CANCELED, None
-
-        if outcome.approval_status == ApprovalStatus.DENIED:
-            return ExecutionDisposition.DENIED, None
-
-        if outcome.decision.action == PolicyAction.DENY:
-            return ExecutionDisposition.DENIED, None
-
-        if outcome.result.ok:
-            return ExecutionDisposition.SUCCEEDED, None
-
-        classifier = ErrorClassifier(policy=self._retry_policy)
-        disposition = classifier.classify(outcome.result)
-        if disposition == RetryDisposition.APPROVAL_REQUIRED:
-            return ExecutionDisposition.WAITING_APPROVAL, None
-
-        if disposition == RetryDisposition.TRANSIENT:
-            attempt = max(1, int(task.attempts))
-            retry_after_s = exponential_backoff_s(
-                attempt,
-                base_delay_s=self._retry_policy.base_delay_s,
-                max_delay_s=self._retry_policy.max_delay_s,
-            )
-            return ExecutionDisposition.FAILED_TRANSIENT, retry_after_s
-
-        return ExecutionDisposition.FAILED_PERMANENT, None
 
     async def _record_ledger(
         self,
@@ -689,88 +607,6 @@ class ExecutorService:
             if approval is None:
                 return None, None
             return approval.approval_id, approval.status
-
-    async def _append_audit(
-        self,
-        *,
-        run_packet_repo: RunPacketRepo,
-        task: Task,
-        tool_call: ToolCall,
-        decision: PolicyDecision,
-        result: ToolResult,
-        disposition: ExecutionDisposition,
-        retry_after_s: float | None,
-        will_retry: bool,
-        approval_id: str | None,
-        approval_status: ApprovalStatus | None,
-        guard_decision: GuardDecision | None = None,
-    ) -> None:
-        now_ms = int(self._clock.now_ms())
-        packet = await run_packet_repo.get(task.run_id)
-        if packet is None:
-            packet = self._new_fallback_packet(task=task, now_ms=now_ms)
-
-        settings = self._policy_runner.gate.settings
-        summary_budget = min(
-            int(settings.max_tool_output_bytes),
-            DEFAULT_MAX_EXECUTION_RESULT_SUMMARY_BYTES,
-        )
-        summary_settings = settings.model_copy(update={"max_tool_output_bytes": summary_budget})
-
-        tool_result_entry: dict[str, object] = {
-            "task_id": task.task_id,
-            "tool_call_id": tool_call.tool_call_id,
-            "tool_name": tool_call.tool_name,
-            "status": disposition.value,
-            "error_code": result.error_code,
-            "retry": {
-                "will_retry": bool(will_retry),
-                "retry_after_s": retry_after_s,
-                "attempt": int(task.attempts),
-                "max_attempts": int(task.max_attempts),
-            },
-            "policy_decision": {
-                "action": decision.action.value,
-                "reason_code": decision.reason_code,
-                "rule_id": decision.rule_id,
-            },
-            "result_summary": sanitize_tool_output(
-                result.model_dump(mode="json"), settings=summary_settings
-            ),
-            "approval_id": approval_id,
-            "approval_status": None if approval_status is None else approval_status.value,
-            "recorded_at_ms": now_ms,
-        }
-        if guard_decision is not None:
-            tool_result_entry["guard_decision"] = guard_decision.model_dump(mode="json")
-        decision_entry: dict[str, object] = {
-            "task_id": task.task_id,
-            "tool_call_id": tool_call.tool_call_id,
-            **decision.to_audit_dict(),
-        }
-
-        updated = packet.with_tool_result_added(tool_result_entry).with_policy_decision_added(
-            decision_entry
-        )
-
-        try:
-            await run_packet_repo.create(updated)
-        except Exception as exc:  # pragma: no cover
-            raise RunPacketPersistError("failed to persist run packet") from exc
-
-    def _new_fallback_packet(self, *, task: Task, now_ms: int) -> RunPacket:
-        return RunPacket(
-            run_id=task.run_id,
-            event=Event(
-                event_id=str(uuid4()),
-                type="executor.task",
-                source="executor",
-                received_at_ms=now_ms,
-                payload={"task_id": task.task_id, "run_id": task.run_id},
-            ),
-            tasks=[task],
-            created_at_ms=now_ms,
-        )
 
     async def _load_task_and_tool_call(self, task_id: str) -> _LoadedTask:
         uow = self._uow_factory()
