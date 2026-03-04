@@ -41,6 +41,8 @@ from reflexor.executor.state import (
     mark_waiting_approval,
     start_execution,
 )
+from reflexor.guards.circuit_breaker.interface import CircuitBreaker
+from reflexor.guards.circuit_breaker.resolver import key_for_tool_call
 from reflexor.observability.audit_sanitize import sanitize_tool_output
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.observability.metrics import ReflexorMetrics
@@ -139,6 +141,7 @@ class ExecutorService:
         limiter: ConcurrencyLimiter,
         clock: Clock,
         metrics: ReflexorMetrics | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._repos = repos
@@ -150,6 +153,7 @@ class ExecutorService:
         self._limiter = limiter
         self._clock = clock
         self._metrics = metrics
+        self._circuit_breaker = circuit_breaker
 
     @property
     def queue(self) -> Queue:
@@ -228,6 +232,8 @@ class ExecutorService:
                     )
                     tool_latency_s = time.perf_counter() - started_s
 
+            await self._record_circuit_breaker_result(tool_call=tool_call, outcome=outcome)
+
             if outcome.result.error_code == EXECUTION_DELAYED_ERROR_CODE:
                 delay_s = 0.0
                 debug = outcome.result.debug or {}
@@ -286,6 +292,35 @@ class ExecutorService:
                 outcome,
                 tool_latency_s=tool_latency_s,
             )
+
+    async def _record_circuit_breaker_result(
+        self,
+        *,
+        tool_call: ToolCall,
+        outcome: ToolExecutionOutcome,
+    ) -> None:
+        if self._circuit_breaker is None:
+            return
+        if outcome.result.error_code == EXECUTION_DELAYED_ERROR_CODE:
+            return
+        if not self._did_attempt_tool_run(outcome):
+            return
+
+        url_value = tool_call.args.get("url") if isinstance(tool_call.args, dict) else None
+        key = key_for_tool_call(
+            tool_name=tool_call.tool_name,
+            url=url_value if isinstance(url_value, str) else None,
+        )
+        now_s = float(self._clock.now_ms()) / 1000.0
+        try:
+            await self._circuit_breaker.record_result(
+                key=key,
+                ok=bool(outcome.result.ok),
+                now_s=now_s,
+            )
+        except Exception:
+            # Best-effort: never fail the task because the circuit breaker store is down.
+            return
 
     async def process_lease(self, lease: Lease) -> ExecutionReport:
         """Execute a leased queue item and apply ack/nack retry scheduling.

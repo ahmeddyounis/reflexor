@@ -168,6 +168,7 @@ async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) ->
             limiter=limiter,
             clock=SystemClock(),
             metrics=app.metrics,
+            circuit_breaker=app.circuit_breaker,
         )
 
         logger.info("worker starting", extra={"concurrency": effective_concurrency})

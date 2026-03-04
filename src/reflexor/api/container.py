@@ -32,6 +32,16 @@ from reflexor.application.services import (
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.executor.approval_store import DbApprovalStore
+from reflexor.guards import GuardChain, PolicyGuard
+from reflexor.guards.circuit_breaker import (
+    CircuitBreakerGuard,
+    CircuitBreakerSpec,
+    InMemoryCircuitBreaker,
+)
+from reflexor.guards.circuit_breaker.interface import CircuitBreaker
+from reflexor.guards.rate_limit import InMemoryRateLimiter
+from reflexor.guards.rate_limit.guard import RateLimitGuard
+from reflexor.guards.rate_limit.policy import RateLimitPolicy
 from reflexor.infra.db.engine import (
     AsyncSessionFactory,
     create_async_engine,
@@ -115,6 +125,7 @@ class AppContainer:
     tool_runner: ToolRunner
     policy_gate: PolicyGate
     policy_runner: PolicyEnforcedToolRunner
+    circuit_breaker: CircuitBreaker
     orchestrator_engine: OrchestratorEngine
 
     submit_events: EventSubmissionService
@@ -190,6 +201,11 @@ class AppContainer:
         try:
             await self.orchestrator_engine.aclose()
         finally:
+            aclose = getattr(self.circuit_breaker, "aclose", None)
+            if aclose is not None:
+                result = aclose()
+                if inspect.isawaitable(result):
+                    await result
             if self._owns_queue:
                 await self.queue.aclose()
             if self._owns_engine:
@@ -258,12 +274,30 @@ class AppContainer:
 
         approval_store = DbApprovalStore(uow_factory=uow_factory, approval_repo=repos.approval_repo)
 
+        circuit_breaker_spec = CircuitBreakerSpec(
+            failure_threshold=5,
+            window_s=60.0,
+            open_cooldown_s=10.0,
+            half_open_max_calls=1,
+            success_threshold=1,
+        )
+        circuit_breaker = InMemoryCircuitBreaker(spec=circuit_breaker_spec)
+        rate_limiter = InMemoryRateLimiter()
+        rate_limit_policy = RateLimitPolicy(settings=effective_settings, limiter=rate_limiter)
+        guard_chain = GuardChain(
+            [
+                PolicyGuard(gate=policy_gate),
+                CircuitBreakerGuard(breaker=circuit_breaker, metrics=effective_metrics),
+                RateLimitGuard(policy=rate_limit_policy),
+            ]
+        )
         policy_runner = PolicyEnforcedToolRunner(
             registry=registry,
             runner=tool_runner,
             gate=policy_gate,
             approvals=approval_store,
             metrics=effective_metrics,
+            guard_chain=guard_chain,
         )
 
         orchestrator_repos = OrchestratorRepoFactory(
@@ -353,6 +387,7 @@ class AppContainer:
             tool_runner=tool_runner,
             policy_gate=policy_gate,
             policy_runner=policy_runner,
+            circuit_breaker=circuit_breaker,
             orchestrator_engine=orchestrator_engine,
             submit_events=submit_events,
             approvals=approvals,

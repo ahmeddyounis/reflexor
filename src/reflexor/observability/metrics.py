@@ -202,6 +202,7 @@ class ReflexorMetrics:
     executor_retries_total: Counter
     idempotency_cache_hits_total: Counter
     policy_decisions_total: Counter
+    circuit_breaker_checks_total: Counter
     queue_depth: Gauge
     queue_redeliver_total: Counter
     orchestrator_rejections_total: Counter
@@ -260,6 +261,12 @@ class ReflexorMetrics:
                 labels=["action", "reason_code"],
                 registry=effective_registry,
                 description="Policy decisions by action and reason code",
+            ),
+            circuit_breaker_checks_total=counter(
+                "circuit_breaker_checks",
+                labels=["state", "allowed"],
+                registry=effective_registry,
+                description="Circuit breaker guard checks by state and allow/deny outcome",
             ),
             queue_depth=gauge(
                 "queue_depth",

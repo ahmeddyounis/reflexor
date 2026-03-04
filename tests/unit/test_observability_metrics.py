@@ -68,6 +68,7 @@ def test_metrics_registry_includes_core_names() -> None:
     assert "executor_retries_total" in text
     assert "idempotency_cache_hits_total" in text
     assert "policy_decisions_total" in text
+    assert "circuit_breaker_checks_total" in text
     assert "queue_depth" in text
     assert "queue_redeliver_total" in text
     assert "orchestrator_rejections_total" in text
