@@ -104,12 +104,10 @@ from reflexor.storage.ports import (
     ToolCallRepo,
 )
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
-from reflexor.tools.fs_tool import FsListDirTool, FsReadTextTool, FsWriteTextTool
-from reflexor.tools.http_tool import HttpTool
+from reflexor.tools.builtin_registry import build_builtin_registry
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sandbox_policy import SandboxPolicy, SandboxPolicyBackend
-from reflexor.tools.webhook_tool import WebhookEmitTool
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +333,7 @@ class AppContainer:
         )
         effective_queue = queue or build_queue(effective_settings, observer=queue_observer)
 
-        registry = tool_registry or _build_default_tool_registry(effective_settings)
+        registry = tool_registry or build_builtin_registry(settings=effective_settings)
         sandbox_policy = SandboxPolicy.from_settings(effective_settings)
         sandbox_backend = SandboxPolicyBackend(policy=sandbox_policy)
         tool_runner = ToolRunner(
@@ -507,17 +505,6 @@ class AppContainer:
             _owns_engine=owns_engine,
             _owns_queue=owns_queue,
         )
-
-
-def _build_default_tool_registry(settings: ReflexorSettings) -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(FsReadTextTool(settings=settings))
-    registry.register(FsWriteTextTool(settings=settings))
-    registry.register(FsListDirTool(settings=settings))
-    registry.register(HttpTool(settings=settings))
-    registry.register(WebhookEmitTool(settings=settings))
-    registry.load_entrypoints(settings=settings)
-    return registry
 
 
 __all__ = ["AppContainer", "RepoProviders"]

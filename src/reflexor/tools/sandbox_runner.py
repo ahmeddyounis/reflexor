@@ -11,12 +11,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from reflexor.config import ReflexorSettings
-from reflexor.tools.fs_tool import FsListDirTool, FsReadTextTool, FsWriteTextTool
-from reflexor.tools.http_tool import HttpTool
+from reflexor.tools.builtin_registry import build_builtin_registry
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolContext, ToolResult
-from reflexor.tools.webhook_tool import WebhookEmitTool
 
 _PROTOCOL_VERSION = 1
 _MAX_REQUEST_BYTES = 2_000_000
@@ -69,17 +67,6 @@ def _import_registry_factory(import_path: str) -> ToolRegistryFactory:
     if factory is None or not callable(factory):
         raise ValueError("registry_factory must resolve to a callable")
     return factory
-
-
-def build_builtin_registry(*, settings: ReflexorSettings) -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(FsReadTextTool(settings=settings))
-    registry.register(FsWriteTextTool(settings=settings))
-    registry.register(FsListDirTool(settings=settings))
-    registry.register(HttpTool(settings=settings))
-    registry.register(WebhookEmitTool(settings=settings))
-    registry.load_entrypoints(settings=settings)
-    return registry
 
 
 def _tool_ctx_from_request(ctx: SandboxToolContext) -> ToolContext:
