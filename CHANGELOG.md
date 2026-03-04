@@ -12,23 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared composition root in `reflexor.bootstrap.container` for wiring `AppContainer` outside the
   FastAPI package.
 - Architecture guardrails for `reflexor.bootstrap` and `reflexor.infra`.
+- Architecture guardrails for `reflexor.config` and `reflexor.observability`.
 
 ### Changed
 
 - CLI/worker entrypoints now import `AppContainer` from `reflexor.bootstrap.container`.
 - `reflexor.bootstrap.container` wiring split into smaller modules under `reflexor.bootstrap.*`.
+- `AppContainer` fields grouped into resource/policy/service structs (public API preserved via
+  properties).
 - Internal code now uses `ReflexorMetrics` consistently (with `reflexor.api.metrics` remaining as a
   shim).
 - Tests/examples now prefer importing `AppContainer` from `reflexor.bootstrap.container`.
 - `reflexor.api.container` is now a thin shim re-exporting from `reflexor.bootstrap.container`.
 - Execution state transition helpers moved to `reflexor.domain.execution_state` (with
   `reflexor.executor.state` remaining as a shim).
+- Idempotency caching port moved to `reflexor.storage.idempotency` (with `reflexor.executor.idempotency`
+  remaining as a shim).
 - Added architecture guardrails for `reflexor.application` and `reflexor.storage`.
 
 ### Deprecated
 
 - `reflexor.api.container` shim (use `reflexor.bootstrap.container`; planned removal in 2.0.0).
 - `reflexor.executor.state` shim (use `reflexor.domain.execution_state`; planned removal in 2.0.0).
+- `reflexor.executor.idempotency` shim (use `reflexor.storage.idempotency`; planned removal in 2.0.0).
 
 ## 1.0.0 - 2026-03-04
 
