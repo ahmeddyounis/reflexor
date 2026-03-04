@@ -82,6 +82,11 @@ jobs:
           python -m pip install -U pip
           python -m pip install -e ".[dev,postgres]"
 
+      - name: DB upgrade (Postgres)
+        run: |
+          python scripts/db_upgrade.py --database-url \
+            postgresql+asyncpg://postgres:postgres@localhost:5432/reflexor_test
+
       - name: Pytest (Postgres)
         env:
           REFLEXOR_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/reflexor_test

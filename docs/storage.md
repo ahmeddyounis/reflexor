@@ -1,8 +1,10 @@
-# Storage (SQLite) & Migrations
+# Storage (SQLite/Postgres) & Migrations
 
-Reflexor currently uses SQLite (via SQLAlchemy async) as its MVP persistence layer. The database is
-intended to store **audit/replay artifacts** (run packets) and **execution state** (runs, tasks,
-tool calls, approvals) while keeping the domain layer pure.
+Reflexor persists **audit/replay artifacts** (run packets) and **execution state** (runs, tasks,
+tool calls, approvals) via SQLAlchemy async.
+
+- Default (dev): SQLite (`sqlite+aiosqlite://...`)
+- Optional (prod): Postgres (`postgresql+asyncpg://...`)
 
 This schema is still evolving and should be treated as internal until explicitly versioned as a
 public contract.
@@ -107,10 +109,17 @@ Alembic reads the database URL from:
 - `REFLEXOR_DATABASE_URL` (preferred), or
 - `alembic.ini` (`sqlalchemy.url`) as a fallback
 
-Example:
+SQLite example:
 
 ```sh
 export REFLEXOR_DATABASE_URL="sqlite+aiosqlite:///./reflexor.db"
+```
+
+Postgres example (requires extras):
+
+```sh
+pip install -e ".[postgres]"
+export REFLEXOR_DATABASE_URL="postgresql+asyncpg://user:pass@localhost:5432/reflexor"
 ```
 
 ### Apply migrations
@@ -127,10 +136,25 @@ Alternatively (same behavior, without `make`):
 python -m reflexor.infra.db.migrate upgrade
 ```
 
+Or via the wrapper script:
+
+```sh
+python scripts/db_upgrade.py
+```
+
 If you prefer using Alembic directly:
 
 ```sh
 alembic upgrade head
+```
+
+### Reset a dev database (DANGEROUS)
+
+This is intended for local development only. It drops Reflexor tables and then re-runs migrations
+to `head`.
+
+```sh
+python scripts/db_reset_dev.py --yes
 ```
 
 ### Create a new migration (developer workflow)
@@ -153,6 +177,10 @@ make db-upgrade
 
 - `ValueError: database_url must be non-empty`:
   set `REFLEXOR_DATABASE_URL` or ensure `alembic.ini` has `sqlalchemy.url`.
+- `Missing optional dependency asyncpg`:
+  install Postgres extras (`pip install -e ".[postgres]"`).
+- `Unsupported URL scheme 'postgres://'`:
+  use `postgresql+asyncpg://...` instead.
 - “No such table …” at runtime:
   run `alembic upgrade head` against the target DB.
 - Smoke test:
