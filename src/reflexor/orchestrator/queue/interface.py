@@ -31,19 +31,26 @@ class Lease(BaseModel):
             return str(uuid4())
 
         if isinstance(value, UUID):
-            parsed = value
-        elif isinstance(value, str):
+            if value.version != 4:
+                raise ValueError("lease_id UUIDs must be UUID4")
+            return str(value)
+
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if not trimmed:
+                raise ValueError("lease_id must be non-empty")
+
+            # Keep strictness for UUID-looking values while allowing non-UUID lease IDs
+            # (e.g., Redis Stream entry IDs like "1700000000000-0").
             try:
-                parsed = UUID(value)
-            except ValueError as exc:
-                raise ValueError("lease_id must be a valid UUID") from exc
-        else:
-            raise TypeError("lease_id must be a UUID or UUID string")
+                parsed = UUID(trimmed)
+            except ValueError:
+                return trimmed
+            if parsed.version != 4:
+                raise ValueError("lease_id UUID strings must be UUID4")
+            return str(parsed)
 
-        if parsed.version != 4:
-            raise ValueError("lease_id must be a UUID4")
-
-        return str(parsed)
+        raise TypeError("lease_id must be a string or UUID")
 
     @field_validator("leased_at_ms")
     @classmethod
