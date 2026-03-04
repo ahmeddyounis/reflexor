@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -8,6 +7,7 @@ from pydantic import ValidationError
 
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.observability.audit_sanitize import sanitize_tool_output
+from reflexor.tools.execution_backend import InProcessBackend, ToolExecutionBackend
 from reflexor.tools.normalization import normalize_tool_args
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import ToolContext, ToolResult
@@ -19,6 +19,7 @@ class ToolRunner:
 
     registry: ToolRegistry
     settings: ReflexorSettings | None = None
+    backend: ToolExecutionBackend | None = None
 
     async def run_tool(
         self,
@@ -54,21 +55,9 @@ class ToolRunner:
         except ValueError as exc:
             return ToolResult(ok=False, error_code="INVALID_ARGS", error_message=str(exc))
 
-        try:
-            result = await asyncio.wait_for(tool.run(normalized_args, ctx), timeout=ctx.timeout_s)
-        except TimeoutError:
-            result = ToolResult(
-                ok=False,
-                error_code="TIMEOUT",
-                error_message=f"tool execution exceeded timeout_s={ctx.timeout_s}",
-            )
-        except Exception as exc:
-            result = ToolResult(
-                ok=False,
-                error_code="TOOL_ERROR",
-                error_message=f"tool raised {type(exc).__name__}",
-                debug={"exception": repr(exc)},
-            )
+        settings = self.settings or get_settings()
+        backend = self.backend or InProcessBackend()
+        result = await backend.execute(tool=tool, args=normalized_args, ctx=ctx, settings=settings)
 
         return self._sanitize_result(
             result,
