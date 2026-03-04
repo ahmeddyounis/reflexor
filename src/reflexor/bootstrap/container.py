@@ -67,24 +67,27 @@ from reflexor.tools.runner import ToolRunner
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
-class AppContainer:
-    """Application container stored on `app.state.container`."""
-
-    settings: ReflexorSettings
-    metrics: ReflexorMetrics
+@dataclass(frozen=True, slots=True)
+class _AppResources:
     engine: AsyncEngine
     session_factory: AsyncSessionFactory
     uow_factory: Callable[[], UnitOfWork]
-    repos: RepoProviders
     queue: Queue
+    owns_engine: bool
+    owns_queue: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _AppPolicy:
     tool_registry: ToolRegistry
     tool_runner: ToolRunner
     policy_gate: PolicyGate
     policy_runner: PolicyEnforcedToolRunner
     circuit_breaker: CircuitBreaker
-    orchestrator_engine: OrchestratorEngine
 
+
+@dataclass(frozen=True, slots=True)
+class _AppServices:
     submit_events: EventSubmissionService
     approvals: ApprovalsService
     approval_commands: ApprovalCommandService
@@ -94,8 +97,86 @@ class AppContainer:
     suppression_queries: EventSuppressionQueryService
     suppression_commands: EventSuppressionCommandService
 
-    _owns_engine: bool = True
-    _owns_queue: bool = True
+
+@dataclass(slots=True)
+class AppContainer:
+    """Application container stored on `app.state.container`."""
+
+    settings: ReflexorSettings
+    metrics: ReflexorMetrics
+    resources: _AppResources
+    repos: RepoProviders
+    policy: _AppPolicy
+    orchestrator_engine: OrchestratorEngine
+    services: _AppServices
+
+    @property
+    def engine(self) -> AsyncEngine:
+        return self.resources.engine
+
+    @property
+    def session_factory(self) -> AsyncSessionFactory:
+        return self.resources.session_factory
+
+    @property
+    def uow_factory(self) -> Callable[[], UnitOfWork]:
+        return self.resources.uow_factory
+
+    @property
+    def queue(self) -> Queue:
+        return self.resources.queue
+
+    @property
+    def tool_registry(self) -> ToolRegistry:
+        return self.policy.tool_registry
+
+    @property
+    def tool_runner(self) -> ToolRunner:
+        return self.policy.tool_runner
+
+    @property
+    def policy_gate(self) -> PolicyGate:
+        return self.policy.policy_gate
+
+    @property
+    def policy_runner(self) -> PolicyEnforcedToolRunner:
+        return self.policy.policy_runner
+
+    @property
+    def circuit_breaker(self) -> CircuitBreaker:
+        return self.policy.circuit_breaker
+
+    @property
+    def submit_events(self) -> EventSubmissionService:
+        return self.services.submit_events
+
+    @property
+    def approvals(self) -> ApprovalsService:
+        return self.services.approvals
+
+    @property
+    def approval_commands(self) -> ApprovalCommandService:
+        return self.services.approval_commands
+
+    @property
+    def queries(self) -> QueryService:
+        return self.services.queries
+
+    @property
+    def run_queries(self) -> RunQueryService:
+        return self.services.run_queries
+
+    @property
+    def task_queries(self) -> TaskQueryService:
+        return self.services.task_queries
+
+    @property
+    def suppression_queries(self) -> EventSuppressionQueryService:
+        return self.services.suppression_queries
+
+    @property
+    def suppression_commands(self) -> EventSuppressionCommandService:
+        return self.services.suppression_commands
 
     async def ensure_queue_ready(
         self,
@@ -189,9 +270,9 @@ class AppContainer:
                 result = aclose()
                 if inspect.isawaitable(result):
                     await result
-            if self._owns_queue:
+            if self.resources.owns_queue:
                 await self.queue.aclose()
-            if self._owns_engine:
+            if self.resources.owns_engine:
                 await self.engine.dispose()
 
     def build_executor_service(
@@ -344,20 +425,22 @@ class AppContainer:
             clock=orchestrator_engine.clock,
         )
 
-        return cls(
-            settings=effective_settings,
-            metrics=effective_metrics,
+        resources = _AppResources(
             engine=effective_engine,
             session_factory=effective_session_factory,
             uow_factory=uow_factory,
-            repos=repos,
             queue=effective_queue,
+            owns_engine=owns_engine,
+            owns_queue=owns_queue,
+        )
+        policy = _AppPolicy(
             tool_registry=registry,
             tool_runner=tool_runner,
             policy_gate=policy_gate,
             policy_runner=policy_runner,
             circuit_breaker=circuit_breaker,
-            orchestrator_engine=orchestrator_engine,
+        )
+        services = _AppServices(
             submit_events=submit_events,
             approvals=approvals,
             approval_commands=approval_commands,
@@ -366,8 +449,16 @@ class AppContainer:
             task_queries=task_queries,
             suppression_queries=suppression_queries,
             suppression_commands=suppression_commands,
-            _owns_engine=owns_engine,
-            _owns_queue=owns_queue,
+        )
+
+        return cls(
+            settings=effective_settings,
+            metrics=effective_metrics,
+            resources=resources,
+            repos=repos,
+            policy=policy,
+            orchestrator_engine=orchestrator_engine,
+            services=services,
         )
 
 
