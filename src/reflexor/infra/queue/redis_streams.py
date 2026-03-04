@@ -90,6 +90,12 @@ return ''
 """
 
 
+def _is_unknown_command_error(exc: Exception, *, command: str) -> bool:
+    message = str(exc).lower()
+    needle = command.lower()
+    return "unknown command" in message and needle in message
+
+
 def _import_redis_asyncio() -> Any:
     if importlib.util.find_spec("redis") is None:
         raise RuntimeError(
@@ -193,6 +199,14 @@ class RedisStreamsQueue:
     - Stream field `{_FIELD_ENVELOPE}` stores a canonical JSON string of the `TaskEnvelope`
       (sorted keys, compact separators).
 
+    Visibility timeout / redelivery:
+    - Before blocking on new work, `dequeue()` attempts to reclaim (redeliver) pending
+      stream entries idle longer than the configured visibility timeout.
+    - Primary mechanism: `XAUTOCLAIM` (Redis 6.2+) with an internal cursor to avoid rescanning from
+      `0-0` every time.
+    - Fallback: if `XAUTOCLAIM` is not available, we use a bounded `XPENDING` (range) + `XCLAIM`
+      scan. This is best-effort and may miss eligible messages when there are many pending entries.
+
     Attempt semantics (deterministic):
     - The stored envelope JSON contains a base attempt counter (`TaskEnvelope.attempt`).
     - On delivery, `Lease.envelope.attempt` is computed as:
@@ -258,6 +272,7 @@ class RedisStreamsQueue:
         self._ready_logged = False
 
         self._autoclaim_lock = asyncio.Lock()
+        self._autoclaim_supported: bool | None = None
         self._autoclaim_start_id = "0-0"
         self._claimed_buffer: asyncio.Queue[tuple[str, dict[str, str]]] = asyncio.Queue()
 
@@ -409,25 +424,107 @@ class RedisStreamsQueue:
         *,
         claim_idle_ms: int,
     ) -> tuple[str, dict[str, str]] | None:
+        try:
+            return self._claimed_buffer.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+
         async with self._autoclaim_lock:
-            response = await self._redis.xautoclaim(
-                self._stream_key,
-                self._group,
-                self._consumer,
-                min_idle_time=int(claim_idle_ms),
-                start_id=self._autoclaim_start_id,
-                count=int(self._claim_batch_size),
-                justid=False,
-            )
-            next_start, entries = _extract_autoclaim_response(response)
-            self._autoclaim_start_id = next_start
+            try:
+                return self._claimed_buffer.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
 
-            for entry in entries:
-                self._claimed_buffer.put_nowait(entry)
+            if self._autoclaim_supported is not False:
+                try:
+                    response = await self._redis.xautoclaim(
+                        self._stream_key,
+                        self._group,
+                        self._consumer,
+                        min_idle_time=int(claim_idle_ms),
+                        start_id=self._autoclaim_start_id,
+                        count=int(self._claim_batch_size),
+                        justid=False,
+                    )
+                except Exception as exc:
+                    if _is_unknown_command_error(exc, command="XAUTOCLAIM"):
+                        self._autoclaim_supported = False
+                    else:
+                        raise
+                else:
+                    self._autoclaim_supported = True
+                    next_start, entries = _extract_autoclaim_response(response)
+                    self._autoclaim_start_id = next_start
+                    for entry in entries:
+                        self._claimed_buffer.put_nowait(entry)
 
-        if self._claimed_buffer.empty():
+            if self._claimed_buffer.empty() and self._autoclaim_supported is False:
+                await self._try_claim_expired_fallback(claim_idle_ms=int(claim_idle_ms))
+
+        try:
+            return self._claimed_buffer.get_nowait()
+        except asyncio.QueueEmpty:
             return None
-        return await self._claimed_buffer.get()
+
+    async def _try_claim_expired_fallback(self, *, claim_idle_ms: int) -> None:
+        pending = await self._redis.execute_command(
+            "XPENDING",
+            self._stream_key,
+            self._group,
+            "-",
+            "+",
+            int(self._claim_batch_size),
+        )
+
+        candidate_ids: list[str] = []
+        for entry in pending or []:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 3:
+                continue
+            message_id = entry[0]
+            idle_ms = entry[2]
+            try:
+                if int(idle_ms) < int(claim_idle_ms):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            candidate_ids.append(message_id if isinstance(message_id, str) else str(message_id))
+
+        if not candidate_ids:
+            return
+
+        claimed = await self._redis.execute_command(
+            "XCLAIM",
+            self._stream_key,
+            self._group,
+            self._consumer,
+            int(claim_idle_ms),
+            *candidate_ids,
+        )
+
+        for item in claimed or []:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                continue
+
+            raw_id, raw_fields = item
+            message_id = raw_id if isinstance(raw_id, str) else str(raw_id)
+
+            fields: dict[str, str] = {}
+            if isinstance(raw_fields, dict):
+                for key, value in raw_fields.items():
+                    fields[key if isinstance(key, str) else str(key)] = (
+                        value if isinstance(value, str) else str(value)
+                    )
+            elif isinstance(raw_fields, (list, tuple)):
+                for i in range(0, len(raw_fields), 2):
+                    if i + 1 >= len(raw_fields):
+                        break
+                    key = raw_fields[i]
+                    value = raw_fields[i + 1]
+                    fields[key if isinstance(key, str) else str(key)] = (
+                        value if isinstance(value, str) else str(value)
+                    )
+
+            self._claimed_buffer.put_nowait((message_id, fields))
 
     async def _lease_from_entry(
         self,

@@ -12,6 +12,10 @@ from reflexor.config import ReflexorSettings  # noqa: E402
 from reflexor.infra.queue.factory import build_queue  # noqa: E402
 from reflexor.infra.queue.redis_streams import RedisStreamsQueue  # noqa: E402
 from reflexor.orchestrator.queue import TaskEnvelope  # noqa: E402
+from reflexor.orchestrator.queue.observer import (  # noqa: E402
+    NoopQueueObserver,
+    QueueRedeliverObservation,
+)
 
 
 def _redis_url() -> str:
@@ -255,6 +259,16 @@ async def test_redis_streams_queue_claims_expired_pending_messages() -> None:
         ),
         now_ms=clock,
     )
+
+    class _Observer(NoopQueueObserver):
+        def __init__(self) -> None:
+            self.redeliver_count = 0
+
+        def on_redeliver(self, observation: QueueRedeliverObservation) -> None:
+            _ = observation
+            self.redeliver_count += 1
+
+    observer_b = _Observer()
     queue_b = RedisStreamsQueue.from_settings(
         ReflexorSettings(
             queue_backend="redis_streams",
@@ -267,6 +281,7 @@ async def test_redis_streams_queue_claims_expired_pending_messages() -> None:
             redis_claim_batch_size=10,
         ),
         now_ms=clock,
+        observer=observer_b,
     )
 
     try:
@@ -281,6 +296,7 @@ async def test_redis_streams_queue_claims_expired_pending_messages() -> None:
 
         lease_b = await queue_b.dequeue(timeout_s=0.01, wait_s=0.0)
         assert lease_b is not None
+        assert observer_b.redeliver_count == 1
         assert lease_b.envelope.envelope_id == envelope.envelope_id
         assert lease_b.envelope.attempt == 1
 
