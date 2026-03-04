@@ -17,7 +17,7 @@ _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
-from reflexor.api.container import AppContainer  # noqa: E402
+from reflexor.bootstrap.container import AppContainer  # noqa: E402
 from reflexor.config import ReflexorSettings  # noqa: E402
 from reflexor.domain.models_event import Event  # noqa: E402
 from reflexor.executor.concurrency import ConcurrencyLimiter  # noqa: E402

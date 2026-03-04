@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 from reflexor.api.app import create_app
-from reflexor.api.container import AppContainer
+from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall

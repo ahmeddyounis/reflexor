@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from reflexor.api.container import AppContainer
+from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import RunStatus
 from reflexor.domain.models_event import Event

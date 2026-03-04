@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 from typer.testing import CliRunner
 
-from reflexor.api.container import AppContainer
+from reflexor.bootstrap.container import AppContainer
 from reflexor.cli.client import LocalClient
 from reflexor.cli.container import CliContainer
 from reflexor.cli.main import app

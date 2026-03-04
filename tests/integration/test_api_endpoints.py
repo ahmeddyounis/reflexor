@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.api.app import create_app
-from reflexor.api.container import AppContainer
+from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 from reflexor.executor.concurrency import ConcurrencyLimiter
 from reflexor.executor.idempotency import IdempotencyLedger

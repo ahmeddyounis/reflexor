@@ -4,14 +4,14 @@ import pytest
 
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
 from reflexor.domain.errors import InvalidTransition
-from reflexor.domain.models import Task, ToolCall
-from reflexor.executor.state import (
+from reflexor.domain.execution_state import (
     complete_denied,
     complete_failed,
     complete_succeeded,
     mark_waiting_approval,
     start_execution,
 )
+from reflexor.domain.models import Task, ToolCall
 
 
 def _tool_call() -> ToolCall:

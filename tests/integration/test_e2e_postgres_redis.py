@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 redis = pytest.importorskip("redis")
 
 from reflexor.api.app import create_app  # noqa: E402
-from reflexor.api.container import AppContainer  # noqa: E402
+from reflexor.bootstrap.container import AppContainer  # noqa: E402
 from reflexor.config import ReflexorSettings  # noqa: E402
 from reflexor.domain.enums import TaskStatus, ToolCallStatus  # noqa: E402
 from reflexor.executor.concurrency import ConcurrencyLimiter  # noqa: E402

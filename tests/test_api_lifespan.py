@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from reflexor.api.app import create_app
-from reflexor.api.container import AppContainer
+from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 
 

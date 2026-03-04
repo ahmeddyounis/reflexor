@@ -14,7 +14,7 @@ if str(_SRC_ROOT) not in sys.path:
 
 from sqlalchemy import create_engine  # noqa: E402
 
-from reflexor.api.container import AppContainer  # noqa: E402
+from reflexor.bootstrap.container import AppContainer  # noqa: E402
 from reflexor.config import ReflexorSettings  # noqa: E402
 from reflexor.infra.db.models import Base  # noqa: E402
 from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask  # noqa: E402

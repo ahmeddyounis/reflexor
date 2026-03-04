@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from reflexor.api.app import create_app
-from reflexor.api.container import AppContainer
+from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import TaskStatus
 from reflexor.infra.db.models import Base, EventRow, RunPacketRow, RunRow, TaskRow

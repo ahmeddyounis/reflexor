@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 redis = pytest.importorskip("redis")
 
 from reflexor.api.app import create_app  # noqa: E402
-from reflexor.api.container import AppContainer  # noqa: E402
+from reflexor.bootstrap.container import AppContainer  # noqa: E402
 from reflexor.config import ReflexorSettings  # noqa: E402
 from reflexor.infra.db.models import Base  # noqa: E402
 

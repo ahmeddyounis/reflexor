@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from reflexor.api.app import create_app
-from reflexor.api.container import AppContainer
+from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 from reflexor.infra.db.models import Base
 from reflexor.orchestrator.clock import Clock
