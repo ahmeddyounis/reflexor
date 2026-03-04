@@ -10,7 +10,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from reflexor.config import ReflexorSettings, get_settings
-from reflexor.security.net_safety import validate_and_normalize_url
+from reflexor.security.net_safety import validate_and_normalize_url_async
 from reflexor.security.scopes import Scope
 from reflexor.tools.sdk.contracts import ToolManifest, ToolResult
 from reflexor.tools.sdk.tool import ToolContext
@@ -223,10 +223,12 @@ class HttpTool:
         settings = self.settings or get_settings()
 
         try:
-            normalized_url = validate_and_normalize_url(
+            normalized_url = await validate_and_normalize_url_async(
                 args.url,
                 allowed_domains=settings.http_allowed_domains,
                 require_https=True,
+                resolve_dns=bool(settings.net_safety_resolve_dns),
+                dns_timeout_s=float(settings.net_safety_dns_timeout_s),
             )
         except ValueError as exc:
             message = str(exc)
@@ -307,6 +309,8 @@ class HttpTool:
                     content=content,
                     follow_redirects=args.follow_redirects,
                     allowed_domains=settings.http_allowed_domains,
+                    resolve_dns=bool(settings.net_safety_resolve_dns),
+                    dns_timeout_s=float(settings.net_safety_dns_timeout_s),
                     max_response_bytes=max_response_bytes,
                 )
         except httpx.TimeoutException as exc:
@@ -339,6 +343,8 @@ class HttpTool:
         content: bytes | None,
         follow_redirects: bool,
         allowed_domains: list[str],
+        resolve_dns: bool,
+        dns_timeout_s: float,
         max_response_bytes: int,
     ) -> dict[str, object]:
         current_method: Literal["GET", "POST"] = method
@@ -359,10 +365,12 @@ class HttpTool:
                     if location:
                         next_url = urljoin(str(response.url), location)
                         try:
-                            normalized_next = validate_and_normalize_url(
+                            normalized_next = await validate_and_normalize_url_async(
                                 next_url,
                                 allowed_domains=allowed_domains,
                                 require_https=True,
+                                resolve_dns=bool(resolve_dns),
+                                dns_timeout_s=float(dns_timeout_s),
                             )
                         except ValueError as exc:
                             raise httpx.RequestError(str(exc), request=response.request) from exc

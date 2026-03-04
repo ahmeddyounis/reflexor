@@ -79,6 +79,27 @@ Network tools are expected to:
 These checks are implemented with `reflexor.security.net_safety.validate_and_normalize_url` and
 settings normalization in `reflexor.config.validation`.
 
+#### Optional DNS resolution (anti-rebinding)
+
+By default, Reflexor does **not** perform DNS resolution as part of URL validation (to avoid a DNS
+dependency in constrained/offline environments).
+
+For stronger SSRF defense-in-depth in production, you can opt in:
+
+- `REFLEXOR_NET_SAFETY_RESOLVE_DNS=true`
+- `REFLEXOR_NET_SAFETY_DNS_TIMEOUT_S=0.5`
+
+When enabled, Reflexor resolves hostnames (via `asyncio.getaddrinfo`) and blocks targets that
+resolve to **non-global** IP ranges (private/loopback/link-local/reserved), mitigating allowlist
+bypass via DNS rebinding.
+
+Tradeoffs:
+
+- Adds DNS lookups and latency to outbound requests.
+- Fails closed when DNS is unavailable/slow (requests are blocked on timeout).
+- Best-effort: DNS can still change between the check and the actual connection; use network-level
+  egress controls for stronger guarantees.
+
 ### Workspace confinement + atomic writes
 
 Filesystem tools must confine paths to `workspace_root` and prevent traversal and symlink escapes.
@@ -273,4 +294,3 @@ Note: raw secret values and signature header values are never included in the re
 
 For tests, `reflexor.tools.mock_tool.MockTool` provides deterministic call keys, call recording, and
 failure simulation plans. Pytest fixtures are available in `tests/fixtures/tools.py`.
-

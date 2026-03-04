@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from reflexor.security.net_safety import validate_and_normalize_url
+from reflexor.security import net_safety
+from reflexor.security.net_safety import (
+    validate_and_normalize_url,
+    validate_and_normalize_url_async,
+)
 
 
 def test_url_allowlist_allows_expected_domain() -> None:
@@ -60,3 +66,61 @@ def test_url_can_allow_metadata_ip_explicitly() -> None:
 def test_url_enforces_https_by_default() -> None:
     with pytest.raises(ValueError, match="https"):
         validate_and_normalize_url("http://example.com")
+
+
+@pytest.mark.asyncio
+async def test_url_dns_resolution_blocks_private_ips_even_when_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_getaddrinfo_ip_texts(_host: str, *, port: int | None) -> list[str]:
+        assert port == 443
+        return ["10.0.0.1"]
+
+    monkeypatch.setattr(net_safety, "_getaddrinfo_ip_texts", fake_getaddrinfo_ip_texts)
+
+    with pytest.raises(ValueError, match="non-global IP"):
+        await validate_and_normalize_url_async(
+            "https://example.com/path",
+            allowed_domains=["example.com"],
+            resolve_dns=True,
+            dns_timeout_s=0.1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_url_dns_resolution_is_not_used_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def should_not_be_called(_host: str, *, port: int | None) -> list[str]:
+        _ = (port,)
+        raise AssertionError("resolver should not be called when resolve_dns is false")
+
+    monkeypatch.setattr(net_safety, "_getaddrinfo_ip_texts", should_not_be_called)
+
+    normalized = await validate_and_normalize_url_async(
+        " https://Example.com/Path ",
+        allowed_domains=["example.com"],
+        resolve_dns=False,
+        dns_timeout_s=0.1,
+    )
+    assert normalized == "https://example.com/Path"
+
+
+@pytest.mark.asyncio
+async def test_url_dns_resolution_timeout_surfaces_as_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def slow_resolver(_host: str, *, port: int | None) -> list[str]:
+        _ = (port,)
+        await asyncio.sleep(0.05)
+        return ["8.8.8.8"]
+
+    monkeypatch.setattr(net_safety, "_getaddrinfo_ip_texts", slow_resolver)
+
+    with pytest.raises(ValueError, match="dns resolution timed out"):
+        await validate_and_normalize_url_async(
+            "https://example.com/",
+            allowed_domains=["example.com"],
+            resolve_dns=True,
+            dns_timeout_s=0.001,
+        )

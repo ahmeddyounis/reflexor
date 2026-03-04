@@ -265,6 +265,8 @@ class ReflexorSettings(BaseSettings):
     approval_required_scopes: list[str] = Field(default_factory=list)
     http_allowed_domains: list[str] = Field(default_factory=list)
     webhook_allowed_targets: list[str] = Field(default_factory=list)
+    net_safety_resolve_dns: bool = False
+    net_safety_dns_timeout_s: float = 0.5
     workspace_root: Path = Field(default_factory=Path.cwd)
 
     reflex_rules_path: Path | None = None
@@ -345,6 +347,16 @@ class ReflexorSettings(BaseSettings):
         if not trimmed:
             return None
         return trimmed
+
+    @field_validator("net_safety_dns_timeout_s")
+    @classmethod
+    def _validate_net_safety_dns_timeout_s(cls, value: float) -> float:
+        timeout_s = float(value)
+        if not math.isfinite(timeout_s):
+            raise ValueError("net_safety_dns_timeout_s must be finite")
+        if timeout_s <= 0:
+            raise ValueError("net_safety_dns_timeout_s must be > 0")
+        return timeout_s
 
     @field_validator("redis_url")
     @classmethod

@@ -109,6 +109,23 @@ Example:
 
 - `["https://hooks.example.com/path"]`
 
+### Optional DNS resolution (anti-rebinding)
+
+By default, allowlist and SSRF checks are purely **syntactic** (they validate/normalize the URL and
+hostnames) and do not require DNS.
+
+For additional defense-in-depth against DNS rebinding (where an allowlisted hostname later resolves
+to a private/loopback/link-local/reserved IP), you can opt in to DNS resolution checks:
+
+- `REFLEXOR_NET_SAFETY_RESOLVE_DNS` (default `false`)
+- `REFLEXOR_NET_SAFETY_DNS_TIMEOUT_S` (default `0.5`)
+
+Tradeoffs:
+
+- Adds DNS lookups and latency to outbound requests.
+- Blocks requests when DNS is unavailable/slow (fails closed on timeout).
+- Best-effort: DNS can change between the check and the actual connection.
+
 ## Workspace root
 
 - Env var: `REFLEXOR_WORKSPACE_ROOT`
@@ -236,6 +253,8 @@ which can cause excessive churn/cost. Validation enforces positivity but does no
 | `approval_required_scopes` | `REFLEXOR_APPROVAL_REQUIRED_SCOPES` | list[str] | `[]` |
 | `http_allowed_domains` | `REFLEXOR_HTTP_ALLOWED_DOMAINS` | list[str] | `[]` |
 | `webhook_allowed_targets` | `REFLEXOR_WEBHOOK_ALLOWED_TARGETS` | list[str] | `[]` |
+| `net_safety_resolve_dns` | `REFLEXOR_NET_SAFETY_RESOLVE_DNS` | bool | `false` |
+| `net_safety_dns_timeout_s` | `REFLEXOR_NET_SAFETY_DNS_TIMEOUT_S` | float | `0.5` |
 | `workspace_root` | `REFLEXOR_WORKSPACE_ROOT` | path | CWD |
 | `database_url` | `REFLEXOR_DATABASE_URL` | str | `sqlite+aiosqlite:///./reflexor.db` |
 | `db_echo` | `REFLEXOR_DB_ECHO` | bool | `false` |

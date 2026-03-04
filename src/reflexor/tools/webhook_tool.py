@@ -11,7 +11,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from reflexor.config import ReflexorSettings, get_settings
-from reflexor.security.net_safety import validate_and_normalize_url
+from reflexor.security.net_safety import validate_and_normalize_url_async
 from reflexor.security.scopes import Scope
 from reflexor.security.secrets import SecretRef
 from reflexor.tools.sdk.contracts import ToolManifest, ToolResult
@@ -209,7 +209,12 @@ class WebhookEmitTool:
         settings = self.settings or get_settings()
 
         try:
-            normalized_url = validate_and_normalize_url(args.url, require_https=True)
+            normalized_url = await validate_and_normalize_url_async(
+                args.url,
+                require_https=True,
+                resolve_dns=bool(settings.net_safety_resolve_dns),
+                dns_timeout_s=float(settings.net_safety_dns_timeout_s),
+            )
         except ValueError as exc:
             return ToolResult(ok=False, error_code="SSRF_BLOCKED", error_message=str(exc))
 
