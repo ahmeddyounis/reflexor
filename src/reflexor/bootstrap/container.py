@@ -15,10 +15,9 @@ import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from reflexor.application.approvals_service import ApprovalCommandService
 from reflexor.application.services import (
@@ -32,6 +31,7 @@ from reflexor.application.suppressions_service import (
     EventSuppressionCommandService,
     EventSuppressionQueryService,
 )
+from reflexor.bootstrap.executor import build_executor_service
 from reflexor.bootstrap.orchestrator import build_orchestrator_engine
 from reflexor.bootstrap.policy import build_policy_gate, build_policy_runner
 from reflexor.bootstrap.queue import build_queue
@@ -40,16 +40,13 @@ from reflexor.bootstrap.tools import build_tool_runner
 from reflexor.bootstrap.uow import build_uow_factory
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.enums import ApprovalStatus
-from reflexor.executor.concurrency import ConcurrencyLimiter
-from reflexor.executor.retries import RetryPolicy
-from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
+from reflexor.executor.service import ExecutorService
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
 from reflexor.infra.db.engine import (
     AsyncSessionFactory,
     create_async_engine,
     create_async_session_factory,
 )
-from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
@@ -58,8 +55,7 @@ from reflexor.orchestrator.queue import Queue
 from reflexor.orchestrator.sinks import RunPacketSink
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
-from reflexor.storage.idempotency import IdempotencyLedger
-from reflexor.storage.uow import DatabaseSession, UnitOfWork
+from reflexor.storage.uow import UnitOfWork
 from reflexor.tools.builtin_registry import build_builtin_registry
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
@@ -286,51 +282,18 @@ class AppContainer:
         reuse the same wiring as the API container while keeping executor construction in one place.
         """
 
-        effective_concurrency = int(self.settings.executor_max_concurrency)
-        if concurrency is not None:
-            effective_concurrency = int(concurrency)
-        if effective_concurrency <= 0:
-            raise ValueError("concurrency must be > 0")
-
-        per_tool = {
-            name: min(int(limit), effective_concurrency)
-            for name, limit in self.settings.executor_per_tool_concurrency.items()
-        }
-        limiter = ConcurrencyLimiter(max_global=effective_concurrency, per_tool=per_tool)
-
-        retry_policy = RetryPolicy(
-            base_delay_s=float(self.settings.executor_retry_base_delay_s),
-            max_delay_s=float(self.settings.executor_retry_max_delay_s),
-            jitter=float(self.settings.executor_retry_jitter),
-        )
-
-        repos = ExecutorRepoFactory(
-            task_repo=self.repos.task_repo,
-            tool_call_repo=self.repos.tool_call_repo,
-            approval_repo=self.repos.approval_repo,
-            run_packet_repo=self.repos.run_packet_repo,
-        )
-
-        def ledger_factory(session: DatabaseSession) -> IdempotencyLedger:
-            return SqlAlchemyIdempotencyLedger(
-                cast(AsyncSession, session),
-                settings=self.settings,
-            )
-
-        executor = ExecutorService(
+        return build_executor_service(
+            settings=self.settings,
+            metrics=self.metrics,
             uow_factory=self.uow_factory,
-            repos=repos,
+            repos=self.repos,
             queue=self.queue,
             policy_runner=self.policy_runner,
             tool_registry=self.tool_registry,
-            idempotency_ledger=ledger_factory,
-            retry_policy=retry_policy,
-            limiter=limiter,
             clock=self.orchestrator_engine.clock,
-            metrics=self.metrics,
             circuit_breaker=self.circuit_breaker,
+            concurrency=concurrency,
         )
-        return executor, effective_concurrency
 
     @classmethod
     def build(
