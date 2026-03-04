@@ -20,6 +20,7 @@ def test_executor_layer_does_not_import_frameworks_or_outer_entrypoints() -> Non
         # Outer entrypoints / runtime shells.
         "reflexor.api",
         "reflexor.cli",
+        "reflexor.replay",
         "reflexor.worker",
         # Executor should depend on ports, not infrastructure adapters.
         "reflexor.infra",

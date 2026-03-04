@@ -60,6 +60,7 @@ def test_security_and_policy_layers_do_not_import_framework_or_outer_layers() ->
         "reflexor.infra",
         "reflexor.interfaces",
         "reflexor.orchestrator",
+        "reflexor.replay",
         "reflexor.storage",
         "reflexor.worker",
         # Concrete tool implementations should not be imported by policy/security.

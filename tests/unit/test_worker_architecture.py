@@ -15,6 +15,7 @@ def test_worker_does_not_import_fastapi_or_cli_entrypoints() -> None:
         "starlette",
         "reflexor.api",
         "reflexor.cli",
+        "reflexor.replay",
     }
 
     offenders = collect_forbidden_imports(

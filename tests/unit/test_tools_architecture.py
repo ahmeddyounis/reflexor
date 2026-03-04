@@ -17,6 +17,7 @@ def test_tools_layer_does_not_import_application_or_entrypoint_layers() -> None:
         "reflexor.worker",
         "reflexor.cli",
         "reflexor.api",
+        "reflexor.replay",
     }
 
     offenders = collect_forbidden_imports(

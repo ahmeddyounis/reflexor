@@ -27,6 +27,7 @@ def test_domain_imports_are_pure() -> None:
         "reflexor.orchestrator",
         "reflexor.tools",
         "reflexor.cli",
+        "reflexor.replay",
         "reflexor.worker",
     }
 
@@ -84,6 +85,7 @@ def test_guards_do_not_import_outer_layers_or_concrete_tools() -> None:
         "reflexor.api",
         "reflexor.worker",
         "reflexor.cli",
+        "reflexor.replay",
         # Concrete tool implementations (guards should depend on boundaries only)
         "reflexor.tools.fs_tool",
         "reflexor.tools.http_tool",
