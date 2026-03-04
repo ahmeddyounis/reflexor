@@ -1,4 +1,4 @@
-"""Shim for `reflexor.domain.execution_state`.
+"""Deprecated shim for `reflexor.domain.execution_state` (planned removal in 2.0.0).
 
 These helpers are pure domain logic but are used by both the executor and other application
 services.
