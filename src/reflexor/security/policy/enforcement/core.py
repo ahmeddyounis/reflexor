@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import structlog
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
@@ -35,31 +35,19 @@ from reflexor.security.policy.decision import (
     PolicyAction,
     PolicyDecision,
 )
+from reflexor.security.policy.enforcement.types import (
+    APPROVAL_REQUIRED_ERROR_CODE,
+    EXECUTION_DELAYED_ERROR_CODE,
+    POLICY_DENIED_ERROR_CODE,
+    ToolExecutionOutcome,
+)
+from reflexor.security.policy.enforcement.utils import _coerce_uuid4_str
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolContext, ToolResult
 
-POLICY_DENIED_ERROR_CODE = "policy_denied"
-APPROVAL_REQUIRED_ERROR_CODE = "approval_required"
-EXECUTION_DELAYED_ERROR_CODE = "execution_delayed"
-
-
 _logger = structlog.get_logger(__name__)
-
-
-class ToolExecutionOutcome(BaseModel):
-    """Outcome of a tool-call execution attempt enforced by policy."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    tool_call_id: str
-    tool_name: str
-    decision: PolicyDecision
-    result: ToolResult
-    guard_decision: GuardDecision | None = None
-    approval_id: str | None = None
-    approval_status: ApprovalStatus | None = None
 
 
 class PolicyEnforcedToolRunner:
@@ -696,18 +684,3 @@ class PolicyEnforcedToolRunner:
             decision=decision,
             result=result,
         )
-
-
-def _coerce_uuid4_str(value: str | None) -> str | None:
-    if value is None:
-        return None
-    trimmed = value.strip()
-    if not trimmed:
-        return None
-    try:
-        parsed = UUID(trimmed)
-    except ValueError:
-        return None
-    if parsed.version != 4:
-        return None
-    return str(parsed)
