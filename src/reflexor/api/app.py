@@ -16,10 +16,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from reflexor.api.container import AppContainer
 from reflexor.api.errors import install_error_handlers
 from reflexor.api.middleware import install_middleware
 from reflexor.api.routes import approvals, events, health, metrics, runs, suppressions, tasks
+from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.observability.logging import configure_logging
 from reflexor.version import __version__

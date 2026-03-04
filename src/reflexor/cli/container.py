@@ -32,7 +32,7 @@ def build_api_client(settings: ReflexorSettings) -> ApiClient:
 
 def build_local_client(settings: ReflexorSettings) -> LocalClient:
     # Import lazily to avoid importing DB/infra on CLI help and simple commands.
-    from reflexor.api.container import AppContainer
+    from reflexor.bootstrap.container import AppContainer
 
     app = AppContainer.build(settings=settings)
     return LocalClient(

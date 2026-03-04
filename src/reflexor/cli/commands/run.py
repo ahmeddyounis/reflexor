@@ -99,7 +99,7 @@ async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) ->
     import asyncio
     import logging
 
-    from reflexor.api.container import AppContainer
+    from reflexor.bootstrap.container import AppContainer
     from reflexor.observability.logging import configure_logging
     from reflexor.worker.runner import WorkerRunner
 

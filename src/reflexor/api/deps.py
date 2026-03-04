@@ -10,7 +10,6 @@ from typing import Annotated, cast
 
 from fastapi import Depends, Request
 
-from reflexor.api.container import AppContainer
 from reflexor.application.approvals_service import ApprovalCommandService
 from reflexor.application.services import (
     ApprovalsService,
@@ -23,6 +22,7 @@ from reflexor.application.suppressions_service import (
     EventSuppressionCommandService,
     EventSuppressionQueryService,
 )
+from reflexor.bootstrap.container import AppContainer
 
 
 def get_container(request: Request) -> AppContainer:
