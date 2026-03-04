@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall
@@ -41,13 +41,11 @@ from reflexor.executor.state import (
     mark_waiting_approval,
     start_execution,
 )
-from reflexor.guards import GuardAction
 from reflexor.observability.audit_sanitize import sanitize_tool_output
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue
-from reflexor.security.policy.context import tool_spec_from_tool
 from reflexor.security.policy.decision import PolicyAction, PolicyDecision
 from reflexor.security.policy.enforcement import (
     EXECUTION_DELAYED_ERROR_CODE,
@@ -200,23 +198,34 @@ class ExecutorService:
             if cached is not None:
                 return cached
 
-            if await self._should_start_execution(tool_call=tool_call):
-                started = await self._persist_started(task=task, tool_call=tool_call)
-                task = started.task
-                tool_call = started.tool_call
-
             ctx = tool_context_from_settings(
                 self._policy_runner.gate.settings,
                 timeout_s=float(task.timeout_s),
             )
 
+            async def on_before_execute() -> None:
+                nonlocal task, tool_call
+                if task.status == TaskStatus.RUNNING and tool_call.status == ToolCallStatus.RUNNING:
+                    return
+                started = await self._persist_started(task=task, tool_call=tool_call)
+                task = started.task
+                tool_call = started.tool_call
+
             async with self._limiter.limit(tool_call.tool_name):
                 tool_latency_s: float | None = None
                 if self._metrics is None:
-                    outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
+                    outcome = await self._policy_runner.execute_tool_call(
+                        tool_call,
+                        ctx=ctx,
+                        on_before_execute=on_before_execute,
+                    )
                 else:
                     started_s = time.perf_counter()
-                    outcome = await self._policy_runner.execute_tool_call(tool_call, ctx=ctx)
+                    outcome = await self._policy_runner.execute_tool_call(
+                        tool_call,
+                        ctx=ctx,
+                        on_before_execute=on_before_execute,
+                    )
                     tool_latency_s = time.perf_counter() - started_s
 
             if outcome.result.error_code == EXECUTION_DELAYED_ERROR_CODE:
@@ -229,6 +238,32 @@ class ExecutorService:
                     except ValueError:
                         parsed_delay_s = 0.0
                     delay_s = max(0.0, parsed_delay_s)
+
+                will_retry = int(task.attempts) < int(task.max_attempts)
+                uow = self._uow_factory()
+                async with uow:
+                    session = uow.session
+                    approval_repo = self._repos.approval_repo(session)
+                    run_packet_repo = self._repos.run_packet_repo(session)
+
+                    if outcome.approval_id is not None:
+                        await self._persist_approval(
+                            approval_id=outcome.approval_id,
+                            approval_repo=approval_repo,
+                        )
+
+                    await self._append_audit(
+                        run_packet_repo=run_packet_repo,
+                        task=task,
+                        tool_call=tool_call,
+                        decision=outcome.decision,
+                        result=outcome.result,
+                        disposition=ExecutionDisposition.FAILED_TRANSIENT,
+                        retry_after_s=delay_s,
+                        will_retry=will_retry,
+                        approval_id=outcome.approval_id,
+                        approval_status=outcome.approval_status,
+                    )
 
                 return ExecutionReport(
                     task_id=task.task_id,
@@ -430,49 +465,6 @@ class ExecutorService:
                 decision=decision,
                 result=cached.result,
             )
-
-    async def _should_start_execution(self, *, tool_call: ToolCall) -> bool:
-        """Return True if this task should transition to RUNNING before tool execution."""
-
-        tool = self._try_get_tool(tool_call.tool_name)
-        if tool is None:
-            return False
-
-        try:
-            parsed_args = tool.ArgsModel.model_validate(tool_call.args)
-        except ValidationError:
-            return False
-
-        now_ms = int(self._clock.now_ms())
-        tool_spec = tool_spec_from_tool(tool)
-        guard = self._policy_runner.evaluate_guards(
-            tool_call=tool_call,
-            tool_spec=tool_spec,
-            parsed_args=parsed_args,
-            approval_status=None,
-            emit_metrics=False,
-            now_ms=now_ms,
-        )
-
-        if guard.action == GuardAction.ALLOW:
-            return True
-
-        if guard.action == GuardAction.REQUIRE_APPROVAL:
-            approval = await self._policy_runner.approvals.get_by_tool_call(tool_call.tool_call_id)
-            if approval is None or approval.status != ApprovalStatus.APPROVED:
-                return False
-
-            post_approval = self._policy_runner.evaluate_guards(
-                tool_call=tool_call,
-                tool_spec=tool_spec,
-                parsed_args=parsed_args,
-                approval_status=ApprovalStatus.APPROVED,
-                emit_metrics=False,
-                now_ms=now_ms,
-            )
-            return post_approval.action == GuardAction.ALLOW
-
-        return False
 
     async def _persist_started(self, *, task: Task, tool_call: ToolCall) -> ExecutionState:
         now_ms = int(self._clock.now_ms())

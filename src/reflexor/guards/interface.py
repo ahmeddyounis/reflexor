@@ -13,7 +13,7 @@ from reflexor.security.policy.context import ToolSpec
 class ExecutionGuard(Protocol):
     """A pre-execution check that can allow/deny/delay/require approval."""
 
-    def check(
+    async def check(
         self,
         tool_call: ToolCall,
         tool_spec: ToolSpec,

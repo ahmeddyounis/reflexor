@@ -17,7 +17,7 @@ class PolicyGuard:
     def __init__(self, *, gate: PolicyGate) -> None:
         self._gate = gate
 
-    def check(
+    async def check(
         self,
         tool_call: ToolCall,
         tool_spec: ToolSpec,

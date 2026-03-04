@@ -34,7 +34,10 @@ from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
-from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
+from reflexor.security.policy.enforcement import (
+    EXECUTION_DELAYED_ERROR_CODE,
+    PolicyEnforcedToolRunner,
+)
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
 from reflexor.storage.ports import RunRecord
@@ -110,6 +113,26 @@ class _AlwaysTimeoutTool:
         return ToolResult(ok=False, error_code="TIMEOUT", error_message="timed out")
 
 
+class _AlwaysOkTool:
+    manifest = ToolManifest(
+        name="tests.ok",
+        version="0.1.0",
+        description="Tool that always succeeds (rate limit tests).",
+        permission_scope="fs.read",
+        idempotent=False,
+        max_output_bytes=10_000,
+    )
+    ArgsModel = _Args
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, args: _Args, ctx: ToolContext) -> ToolResult:
+        _ = (args, ctx)
+        self.calls += 1
+        return ToolResult(ok=True, data={"ok": True})
+
+
 @asynccontextmanager
 async def _sqlite_file_session_factory(
     tmp_path: Path,
@@ -133,6 +156,7 @@ def _policy_runner(
     registry: ToolRegistry,
     settings: ReflexorSettings,
     uow_factory: Callable[[], SqlAlchemyUnitOfWork],
+    now_ms: Callable[[], int] | None = None,
 ) -> PolicyEnforcedToolRunner:
     runner = ToolRunner(registry=registry, settings=settings)
     gate = PolicyGate(rules=[ScopeEnabledRule(), ApprovalRequiredRule()], settings=settings)
@@ -141,7 +165,11 @@ def _policy_runner(
         approval_repo=lambda session: SqlAlchemyApprovalRepo(cast(AsyncSession, session)),
     )
     return PolicyEnforcedToolRunner(
-        registry=registry, runner=runner, gate=gate, approvals=approvals
+        registry=registry,
+        runner=runner,
+        gate=gate,
+        approvals=approvals,
+        now_ms=now_ms,
     )
 
 
@@ -152,6 +180,7 @@ def _executor_service(
     registry: ToolRegistry,
     queue: InMemoryQueue,
     clock: Clock,
+    policy_now_ms: Callable[[], int] | None = None,
 ) -> ExecutorService:
     def uow_factory() -> SqlAlchemyUnitOfWork:
         return SqlAlchemyUnitOfWork(session_factory)
@@ -172,7 +201,12 @@ def _executor_service(
         uow_factory=uow_factory,
         repos=repos,
         queue=queue,
-        policy_runner=_policy_runner(registry=registry, settings=settings, uow_factory=uow_factory),
+        policy_runner=_policy_runner(
+            registry=registry,
+            settings=settings,
+            uow_factory=uow_factory,
+            now_ms=policy_now_ms,
+        ),
         tool_registry=registry,
         idempotency_ledger=ledger_factory,
         retry_policy=RetryPolicy(max_attempts=3, base_delay_s=1.0, max_delay_s=10.0, jitter=0.0),
@@ -295,6 +329,168 @@ async def test_transient_failure_schedules_delayed_retry_and_eventual_success(
             tool_call_row = await session.get(ToolCallRow, tool_call_id)
             assert tool_call_row is not None
             assert tool_call_row.status == ToolCallStatus.SUCCEEDED.value
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_guard_delays_execution_and_eventually_succeeds(tmp_path: Path) -> None:
+    clock = _MutableClock(now=1_000)
+    tool = _AlwaysOkTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["fs.read"],
+        rate_limits_enabled=True,
+        rate_limit_per_tool={
+            tool.manifest.name: {"capacity": 1.0, "refill_rate_per_s": 1.0, "burst": 0.0}
+        },
+    )
+    queue = InMemoryQueue(now_ms=clock.now_ms, default_visibility_timeout_s=60.0)
+
+    async with _sqlite_file_session_factory(tmp_path) as session_factory:
+        run_id_1 = _uuid()
+        tool_call_id_1 = _uuid()
+        task_id_1 = _uuid()
+        run_id_2 = _uuid()
+        tool_call_id_2 = _uuid()
+        task_id_2 = _uuid()
+
+        run_1 = RunRecord(
+            run_id=run_id_1,
+            parent_run_id=None,
+            created_at_ms=0,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        run_2 = RunRecord(
+            run_id=run_id_2,
+            parent_run_id=None,
+            created_at_ms=0,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+
+        tool_call_1 = ToolCall(
+            tool_call_id=tool_call_id_1,
+            tool_name=tool.manifest.name,
+            args={"text": "hello"},
+            permission_scope="fs.read",
+            idempotency_key="k-ok-1",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=0,
+        )
+        task_1 = Task(
+            task_id=task_id_1,
+            run_id=run_id_1,
+            name="rate-limit-allowed",
+            status=TaskStatus.QUEUED,
+            tool_call=tool_call_1,
+            max_attempts=3,
+            timeout_s=60,
+            created_at_ms=0,
+        )
+
+        tool_call_2 = ToolCall(
+            tool_call_id=tool_call_id_2,
+            tool_name=tool.manifest.name,
+            args={"text": "hello"},
+            permission_scope="fs.read",
+            idempotency_key="k-ok-2",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=0,
+        )
+        task_2 = Task(
+            task_id=task_id_2,
+            run_id=run_id_2,
+            name="rate-limit-delayed",
+            status=TaskStatus.QUEUED,
+            tool_call=tool_call_2,
+            max_attempts=3,
+            timeout_s=60,
+            created_at_ms=0,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            await SqlAlchemyRunRepo(session).create(run_1)
+            await SqlAlchemyRunRepo(session).create(run_2)
+            await SqlAlchemyTaskRepo(session).create(task_1)
+            await SqlAlchemyTaskRepo(session).create(task_2)
+
+        service = _executor_service(
+            session_factory,
+            settings=settings,
+            registry=registry,
+            queue=queue,
+            clock=clock,
+            policy_now_ms=clock.now_ms,
+        )
+
+        await queue.enqueue(_envelope(task_id=task_id_1, run_id=run_id_1))
+        await queue.enqueue(_envelope(task_id=task_id_2, run_id=run_id_2))
+
+        lease_1 = await queue.dequeue(wait_s=0.0)
+        assert lease_1 is not None
+        report_1 = await service.process_lease(cast(Lease, lease_1))
+        assert report_1.disposition == ExecutionDisposition.SUCCEEDED
+        assert tool.calls == 1
+
+        lease_2a = await queue.dequeue(wait_s=0.0)
+        assert lease_2a is not None
+        report_2a = await service.process_lease(cast(Lease, lease_2a))
+        assert report_2a.disposition == ExecutionDisposition.FAILED_TRANSIENT
+        assert report_2a.result.error_code == EXECUTION_DELAYED_ERROR_CODE
+        assert report_2a.retry_after_s is not None
+        assert report_2a.retry_after_s > 0
+        assert tool.calls == 1
+
+        uow_delayed = SqlAlchemyUnitOfWork(session_factory)
+        async with uow_delayed:
+            session = cast(AsyncSession, uow_delayed.session)
+            task_row = await session.get(TaskRow, task_id_2)
+            assert task_row is not None
+            assert task_row.status == TaskStatus.QUEUED.value
+            assert task_row.attempts == 0
+
+            tool_call_row = await session.get(ToolCallRow, tool_call_id_2)
+            assert tool_call_row is not None
+            assert tool_call_row.status == ToolCallStatus.PENDING.value
+
+            packet = await SqlAlchemyRunPacketRepo(session, settings=settings).get(run_id_2)
+            assert packet is not None
+            delayed_results = [
+                entry
+                for entry in packet.tool_results
+                if entry.get("task_id") == task_id_2
+                and entry.get("tool_call_id") == tool_call_id_2
+                and entry.get("error_code") == EXECUTION_DELAYED_ERROR_CODE
+            ]
+            assert len(delayed_results) == 1
+            delayed = delayed_results[0]
+            assert delayed.get("policy_decision", {}).get("reason_code") == "rate_limited"
+            assert delayed.get("retry", {}).get("retry_after_s") == pytest.approx(
+                float(report_2a.retry_after_s)
+            )
+
+        assert await queue.dequeue(wait_s=0.0) is None
+
+        clock.now += int((report_2a.retry_after_s or 0) * 1000)
+        lease_2b = await queue.dequeue(wait_s=0.0)
+        assert lease_2b is not None
+
+        report_2b = await service.process_lease(cast(Lease, lease_2b))
+        assert report_2b.disposition == ExecutionDisposition.SUCCEEDED
+        assert tool.calls == 2
+
+        uow_succeeded = SqlAlchemyUnitOfWork(session_factory)
+        async with uow_succeeded:
+            session = cast(AsyncSession, uow_succeeded.session)
+            task_row = await session.get(TaskRow, task_id_2)
+            assert task_row is not None
+            assert task_row.status == TaskStatus.SUCCEEDED.value
+            assert task_row.attempts == 1
 
 
 @pytest.mark.asyncio

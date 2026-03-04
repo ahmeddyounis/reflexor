@@ -142,6 +142,7 @@ class RateLimitPolicy:
         resolved_now_s = float(self._now_s()) if now_s is None else float(now_s)
 
         allowed = True
+        unsatisfiable = False
         retry_after_s: float | None = None
         for key, spec in checks:
             result = await self._limiter.consume(
@@ -154,6 +155,9 @@ class RateLimitPolicy:
                 continue
 
             allowed = False
+            if result.retry_after_s is None:
+                unsatisfiable = True
+                continue
             if result.retry_after_s is not None:
                 retry_after_s = (
                     float(result.retry_after_s)
@@ -161,7 +165,11 @@ class RateLimitPolicy:
                     else max(float(retry_after_s), float(result.retry_after_s))
                 )
 
-        return RateLimitResult(allowed=allowed, retry_after_s=retry_after_s)
+        if allowed:
+            return RateLimitResult(allowed=True, retry_after_s=None)
+        if unsatisfiable:
+            return RateLimitResult(allowed=False, retry_after_s=None)
+        return RateLimitResult(allowed=False, retry_after_s=retry_after_s)
 
 
 __all__ = ["RateLimitPolicy"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
@@ -19,12 +20,12 @@ class _StaticGuard:
     def __init__(self, decision: GuardDecision) -> None:
         self._decision = decision
 
-    def check(self, *_: object, **__: object) -> GuardDecision:
+    async def check(self, *_: object, **__: object) -> GuardDecision:
         return self._decision
 
 
 class _ExplodingGuard:
-    def check(self, *_: object, **__: object) -> GuardDecision:  # pragma: no cover
+    async def check(self, *_: object, **__: object) -> GuardDecision:  # pragma: no cover
         raise AssertionError("guard chain should have short-circuited before this guard")
 
 
@@ -53,13 +54,15 @@ def _inputs(tmp_path: Path) -> tuple[ToolCall, ToolSpec, _Args]:
     return tool_call, tool_spec, _Args.model_validate(tool_call.args)
 
 
-def test_guard_chain_defaults_to_allow_when_empty(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_guard_chain_defaults_to_allow_when_empty(tmp_path: Path) -> None:
     tool_call, tool_spec, parsed = _inputs(tmp_path)
-    decision = GuardChain([]).check(tool_call, tool_spec, parsed, _ctx(tmp_path))
+    decision = await GuardChain([]).check(tool_call, tool_spec, parsed, _ctx(tmp_path))
     assert decision.action == GuardAction.ALLOW
 
 
-def test_guard_chain_delay_beats_allow(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_guard_chain_delay_beats_allow(tmp_path: Path) -> None:
     tool_call, tool_spec, parsed = _inputs(tmp_path)
     chain = GuardChain(
         [
@@ -67,12 +70,13 @@ def test_guard_chain_delay_beats_allow(tmp_path: Path) -> None:
             _StaticGuard(GuardDecision.delay(delay_s=1.0, reason_code="rate_limited")),
         ]
     )
-    decision = chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
+    decision = await chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
     assert decision.action == GuardAction.DELAY
     assert decision.reason_code == "rate_limited"
 
 
-def test_guard_chain_require_approval_beats_delay(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_guard_chain_require_approval_beats_delay(tmp_path: Path) -> None:
     tool_call, tool_spec, parsed = _inputs(tmp_path)
     chain = GuardChain(
         [
@@ -80,12 +84,13 @@ def test_guard_chain_require_approval_beats_delay(tmp_path: Path) -> None:
             _StaticGuard(GuardDecision.require_approval(reason_code="needs_human")),
         ]
     )
-    decision = chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
+    decision = await chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
     assert decision.action == GuardAction.REQUIRE_APPROVAL
     assert decision.reason_code == "needs_human"
 
 
-def test_guard_chain_deny_beats_require_approval_and_short_circuits(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_guard_chain_deny_beats_require_approval_and_short_circuits(tmp_path: Path) -> None:
     tool_call, tool_spec, parsed = _inputs(tmp_path)
     chain = GuardChain(
         [
@@ -94,12 +99,13 @@ def test_guard_chain_deny_beats_require_approval_and_short_circuits(tmp_path: Pa
             _ExplodingGuard(),
         ]
     )
-    decision = chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
+    decision = await chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
     assert decision.action == GuardAction.DENY
     assert decision.reason_code == "circuit_open"
 
 
-def test_guard_chain_is_deterministic_for_ties(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_guard_chain_is_deterministic_for_ties(tmp_path: Path) -> None:
     tool_call, tool_spec, parsed = _inputs(tmp_path)
     chain = GuardChain(
         [
@@ -107,6 +113,6 @@ def test_guard_chain_is_deterministic_for_ties(tmp_path: Path) -> None:
             _StaticGuard(GuardDecision.delay(delay_s=2.0, reason_code="delay_second")),
         ]
     )
-    decision = chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
+    decision = await chain.check(tool_call, tool_spec, parsed, _ctx(tmp_path))
     assert decision.action == GuardAction.DELAY
     assert decision.reason_code == "delay_first"

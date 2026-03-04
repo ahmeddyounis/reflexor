@@ -28,7 +28,7 @@ class GuardChain:
     def guards(self) -> tuple[ExecutionGuard, ...]:
         return tuple(self._guards)
 
-    def check(
+    async def check(
         self,
         tool_call: ToolCall,
         tool_spec: ToolSpec,
@@ -39,7 +39,7 @@ class GuardChain:
         best_rank = _ACTION_RANK[best.action]
 
         for guard in self._guards:
-            decision = guard.check(tool_call, tool_spec, parsed_args, ctx)
+            decision = await guard.check(tool_call, tool_spec, parsed_args, ctx)
             rank = _ACTION_RANK[decision.action]
 
             if decision.action == GuardAction.DENY:

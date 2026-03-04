@@ -17,6 +17,7 @@ class GuardContext:
     now_ms: int
     emit_metrics: bool = True
     approval_status: ApprovalStatus | None = None
+    run_id: str | None = None
 
 
 __all__ = ["GuardContext"]

@@ -13,7 +13,7 @@ The policy layer must not import infrastructure/framework layers.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from uuid import UUID, uuid4
 
 import structlog
@@ -22,6 +22,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
 from reflexor.guards import GuardAction, GuardChain, GuardContext, GuardDecision, PolicyGuard
+from reflexor.guards.rate_limit import InMemoryRateLimiter
+from reflexor.guards.rate_limit.guard import RateLimitGuard
+from reflexor.guards.rate_limit.policy import RateLimitPolicy
+from reflexor.observability.context import get_correlation_ids
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.approvals import ApprovalBuilder, ApprovalStore
 from reflexor.security.policy.context import PolicyContext, ToolSpec, tool_spec_from_tool
@@ -81,7 +85,16 @@ class PolicyEnforcedToolRunner:
         self._approval_builder = approval_builder or ApprovalBuilder(settings=gate.settings)
         self._metrics = metrics
         self._policy_ctx = PolicyContext.from_settings(gate.settings)
-        self._guard_chain = guard_chain or GuardChain([PolicyGuard(gate=gate)])
+        if guard_chain is None:
+            rate_limiter = InMemoryRateLimiter()
+            rate_limit_policy = RateLimitPolicy(settings=gate.settings, limiter=rate_limiter)
+            guard_chain = GuardChain(
+                [
+                    PolicyGuard(gate=gate),
+                    RateLimitGuard(policy=rate_limit_policy),
+                ]
+            )
+        self._guard_chain = guard_chain
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
 
     @property
@@ -112,7 +125,7 @@ class PolicyEnforcedToolRunner:
     def guard_chain(self) -> GuardChain:
         return self._guard_chain
 
-    def evaluate_guards(
+    async def evaluate_guards(
         self,
         *,
         tool_call: ToolCall,
@@ -123,13 +136,15 @@ class PolicyEnforcedToolRunner:
         now_ms: int | None = None,
     ) -> GuardDecision:
         resolved_now_ms = int(self._now_ms()) if now_ms is None else int(now_ms)
+        correlation_ids = get_correlation_ids()
         ctx = GuardContext(
             policy=self._policy_ctx,
             now_ms=resolved_now_ms,
             emit_metrics=bool(emit_metrics),
             approval_status=approval_status,
+            run_id=correlation_ids.get("run_id"),
         )
-        return self._guard_chain.check(
+        return await self._guard_chain.check(
             tool_call=tool_call,
             tool_spec=tool_spec,
             parsed_args=parsed_args,
@@ -198,6 +213,7 @@ class PolicyEnforcedToolRunner:
         *,
         ctx: ToolContext,
         decided_by: str | None = None,
+        on_before_execute: Callable[[], Awaitable[None]] | None = None,
     ) -> ToolExecutionOutcome:
         _ = decided_by
 
@@ -251,7 +267,7 @@ class PolicyEnforcedToolRunner:
                 result=result,
             )
 
-        guard_decision = self.evaluate_guards(
+        guard_decision = await self.evaluate_guards(
             tool_call=tool_call,
             tool_spec=tool_spec,
             parsed_args=parsed_args,
@@ -333,7 +349,7 @@ class PolicyEnforcedToolRunner:
                     )
 
                 if existing.status == ApprovalStatus.APPROVED:
-                    post_approval_guard = self.evaluate_guards(
+                    post_approval_guard = await self.evaluate_guards(
                         tool_call=tool_call,
                         tool_spec=tool_spec,
                         parsed_args=parsed_args,
@@ -397,6 +413,8 @@ class PolicyEnforcedToolRunner:
                         },
                     )
                     self._emit_decision_metric(override)
+                    if on_before_execute is not None:
+                        await on_before_execute()
                     result = await self._runner.run_tool(
                         tool_call.tool_name,
                         tool_call.args,
@@ -486,7 +504,7 @@ class PolicyEnforcedToolRunner:
                 self._metrics.approvals_pending_total.inc()
 
             if created.status == ApprovalStatus.APPROVED:
-                post_approval_guard = self.evaluate_guards(
+                post_approval_guard = await self.evaluate_guards(
                     tool_call=tool_call,
                     tool_spec=tool_spec,
                     parsed_args=parsed_args,
@@ -550,6 +568,8 @@ class PolicyEnforcedToolRunner:
                     },
                 )
                 self._emit_decision_metric(override)
+                if on_before_execute is not None:
+                    await on_before_execute()
                 result = await self._runner.run_tool(tool_call.tool_name, tool_call.args, ctx=ctx)
                 return ToolExecutionOutcome(
                     tool_call_id=tool_call.tool_call_id,
@@ -615,6 +635,8 @@ class PolicyEnforcedToolRunner:
                 approval_status=created.status,
             )
 
+        if on_before_execute is not None:
+            await on_before_execute()
         result = await self._runner.run_tool(tool_call.tool_name, tool_call.args, ctx=ctx)
         return ToolExecutionOutcome(
             tool_call_id=tool_call.tool_call_id,

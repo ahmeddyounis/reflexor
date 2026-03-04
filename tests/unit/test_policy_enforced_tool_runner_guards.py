@@ -42,7 +42,7 @@ class _CountingTool:
 
 
 class _DenyGuard:
-    def check(self, *_: object, **__: object) -> GuardDecision:
+    async def check(self, *_: object, **__: object) -> GuardDecision:
         return GuardDecision.deny(
             reason_code="test_guard_denied",
             message="blocked by test guard",
