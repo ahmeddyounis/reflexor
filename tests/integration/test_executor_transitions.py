@@ -43,7 +43,11 @@ from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
 from reflexor.security.policy.gate import PolicyGate
-from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
+from reflexor.security.policy.rules import (
+    ApprovalRequiredRule,
+    ScopeEnabledRule,
+    ScopeMatchesManifestRule,
+)
 from reflexor.storage.ports import RunRecord
 from reflexor.storage.uow import DatabaseSession
 from reflexor.tools.registry import ToolRegistry
@@ -150,7 +154,14 @@ def _policy_runner(
     uow_factory: Callable[[], SqlAlchemyUnitOfWork],
 ) -> PolicyEnforcedToolRunner:
     runner = ToolRunner(registry=registry, settings=settings)
-    gate = PolicyGate(rules=[ScopeEnabledRule(), ApprovalRequiredRule()], settings=settings)
+    gate = PolicyGate(
+        rules=[
+            ScopeMatchesManifestRule(),
+            ScopeEnabledRule(),
+            ApprovalRequiredRule(),
+        ],
+        settings=settings,
+    )
     approvals = DbApprovalStore(
         uow_factory=uow_factory,
         approval_repo=lambda session: SqlAlchemyApprovalRepo(cast(AsyncSession, session)),
@@ -277,6 +288,88 @@ async def test_executor_persists_succeeded_statuses_and_timestamps(tmp_path: Pat
             ledger_row = await session.get(IdempotencyLedgerRow, "k1")
             assert ledger_row is not None
             assert ledger_row.status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_executor_denies_when_tool_call_scope_mismatched(tmp_path: Path) -> None:
+    clock = _MutableClock(now=1_000)
+    tool = _AdvancingTool(clock=clock)
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    # Enable the (tampered) scope so the denial comes from the manifest mismatch rule.
+    settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["net.http"])
+
+    async with _sqlite_file_session_factory(tmp_path) as (session_factory, _db_path):
+        run_id = _uuid()
+        tool_call_id = _uuid()
+        task_id = _uuid()
+
+        run = RunRecord(
+            run_id=run_id,
+            parent_run_id=None,
+            created_at_ms=0,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        tool_call = ToolCall(
+            tool_call_id=tool_call_id,
+            tool_name=tool.manifest.name,
+            args={"text": "hello"},
+            permission_scope="net.http",
+            idempotency_key="k-scope-mismatch",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=0,
+        )
+        task = Task(
+            task_id=task_id,
+            run_id=run_id,
+            name="scope-mismatch",
+            status=TaskStatus.QUEUED,
+            tool_call=tool_call,
+            max_attempts=3,
+            timeout_s=60,
+            created_at_ms=0,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            await SqlAlchemyRunRepo(session).create(run)
+            await SqlAlchemyTaskRepo(session).create(task)
+
+        service = _executor_service(
+            session_factory,
+            settings=settings,
+            registry=registry,
+            clock=clock,
+        )
+
+        report = await service.execute_task(task_id)
+        assert report.disposition == ExecutionDisposition.DENIED
+        assert report.decision is not None
+        assert report.decision.reason_code == "scope_mismatch"
+        assert tool.calls == 0
+
+        uow2 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow2:
+            session = cast(AsyncSession, uow2.session)
+
+            tool_call_row = await session.get(ToolCallRow, tool_call_id)
+            assert tool_call_row is not None
+            assert tool_call_row.status == ToolCallStatus.DENIED.value
+            assert tool_call_row.started_at_ms is None
+            assert tool_call_row.completed_at_ms == 1_000
+
+            task_row = await session.get(TaskRow, task_id)
+            assert task_row is not None
+            assert task_row.status == TaskStatus.CANCELED.value
+            assert task_row.attempts == 0
+            assert task_row.started_at_ms is None
+            assert task_row.completed_at_ms == 1_000
+
+            ledger_row = await session.get(IdempotencyLedgerRow, "k-scope-mismatch")
+            assert ledger_row is None
 
 
 @pytest.mark.asyncio
