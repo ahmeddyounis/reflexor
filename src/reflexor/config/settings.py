@@ -269,6 +269,13 @@ class ReflexorSettings(BaseSettings):
     net_safety_dns_timeout_s: float = 0.5
     workspace_root: Path = Field(default_factory=Path.cwd)
 
+    # Tool sandboxing (best-effort subprocess isolation). Disabled by default.
+    sandbox_enabled: bool = False
+    sandbox_tools: list[str] = Field(default_factory=list)
+    sandbox_env_allowlist: list[str] = Field(default_factory=list)
+    sandbox_max_memory_mb: int | None = None
+    sandbox_python_executable: str | None = None
+
     reflex_rules_path: Path | None = None
 
     database_url: str = "sqlite+aiosqlite:///./reflexor.db"
@@ -368,6 +375,16 @@ class ReflexorSettings(BaseSettings):
             return None
         return trimmed
 
+    @field_validator("sandbox_python_executable")
+    @classmethod
+    def _normalize_sandbox_python_executable(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        if not trimmed:
+            return None
+        return trimmed
+
     @field_validator("log_level")
     @classmethod
     def _normalize_log_level(cls, value: str) -> str:
@@ -396,6 +413,8 @@ class ReflexorSettings(BaseSettings):
         "approval_required_scopes",
         "http_allowed_domains",
         "webhook_allowed_targets",
+        "sandbox_tools",
+        "sandbox_env_allowlist",
         mode="before",
     )
     @classmethod
@@ -443,6 +462,16 @@ class ReflexorSettings(BaseSettings):
         parsed = int(value)
         if parsed <= 0:
             raise ValueError("event_suppression_threshold must be > 0")
+        return parsed
+
+    @field_validator("sandbox_max_memory_mb")
+    @classmethod
+    def _validate_sandbox_max_memory_mb(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("sandbox_max_memory_mb must be > 0")
         return parsed
 
     @field_validator("executor_per_tool_concurrency", mode="before")

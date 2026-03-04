@@ -102,6 +102,7 @@ from reflexor.tools.fs_tool import FsListDirTool, FsReadTextTool, FsWriteTextToo
 from reflexor.tools.http_tool import HttpTool
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
+from reflexor.tools.sandbox_policy import SandboxPolicy, SandboxPolicyBackend
 from reflexor.tools.webhook_tool import WebhookEmitTool
 
 logger = logging.getLogger(__name__)
@@ -272,7 +273,13 @@ class AppContainer:
         effective_queue = queue or build_queue(effective_settings, observer=queue_observer)
 
         registry = tool_registry or _build_default_tool_registry(effective_settings)
-        tool_runner = ToolRunner(registry=registry, settings=effective_settings)
+        sandbox_policy = SandboxPolicy.from_settings(effective_settings)
+        sandbox_backend = SandboxPolicyBackend(policy=sandbox_policy)
+        tool_runner = ToolRunner(
+            registry=registry,
+            settings=effective_settings,
+            backend=sandbox_backend,
+        )
 
         policy_gate = PolicyGate(
             rules=[

@@ -73,6 +73,7 @@ class SubprocessSandboxBackend:
     env_allowlist: Sequence[str] = field(default_factory=tuple)
     extra_env: Mapping[str, str] = field(default_factory=dict)
     python_executable: str = field(default_factory=lambda: sys.executable)
+    max_memory_mb: int | None = None
     module: str = "reflexor.tools.sandbox_runner"
     protocol_version: int = 1
     max_request_bytes: int = 256_000
@@ -92,6 +93,8 @@ class SubprocessSandboxBackend:
 
         if int(self.protocol_version) != 1:
             raise ValueError("unsupported protocol_version")
+        if self.max_memory_mb is not None and int(self.max_memory_mb) <= 0:
+            raise ValueError("max_memory_mb must be > 0 when set")
         if int(self.max_request_bytes) <= 0:
             raise ValueError("max_request_bytes must be > 0")
         if int(self.max_stdout_bytes_cap) <= 0:
@@ -119,6 +122,7 @@ class SubprocessSandboxBackend:
             ),
             settings=_sandbox_settings_payload(settings),
             registry_factory=self.registry_factory,
+            max_memory_mb=self.max_memory_mb,
         )
 
         request_bytes = json.dumps(
@@ -414,6 +418,7 @@ class _SandboxRequest(BaseModel):
     ctx: _SandboxToolContext
     settings: dict[str, object]
     registry_factory: str | None = None
+    max_memory_mb: int | None = None
 
 
 class _SandboxResponse(BaseModel):

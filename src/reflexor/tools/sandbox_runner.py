@@ -41,6 +41,7 @@ class SandboxRequest(BaseModel):
     ctx: SandboxToolContext
     settings: dict[str, object] = Field(default_factory=dict)
     registry_factory: str | None = None
+    max_memory_mb: int | None = None
 
 
 class SandboxResponse(BaseModel):
@@ -111,6 +112,35 @@ def _protocol_error(*, message: str, debug: dict[str, object] | None = None) -> 
     )
 
 
+def _apply_best_effort_memory_limit(max_memory_mb: int | None) -> None:
+    """Apply a best-effort memory limit.
+
+    This uses `resource.setrlimit` when available (POSIX). On some platforms (or under some
+    container runtimes) limits may be unsupported or not strictly enforced.
+    """
+
+    if max_memory_mb is None:
+        return
+
+    try:
+        import resource  # type: ignore[import-not-found]
+    except Exception:
+        return
+
+    limit_bytes = int(max_memory_mb) * 1024 * 1024
+    if limit_bytes <= 0:
+        return
+
+    for name in ("RLIMIT_AS", "RLIMIT_DATA"):
+        limit = getattr(resource, name, None)
+        if limit is None:
+            continue
+        try:
+            resource.setrlimit(limit, (limit_bytes, limit_bytes))
+        except Exception:
+            continue
+
+
 async def _run_request(request: SandboxRequest) -> ToolResult:
     if int(request.protocol_version) != _PROTOCOL_VERSION:
         return ToolResult(
@@ -119,6 +149,8 @@ async def _run_request(request: SandboxRequest) -> ToolResult:
             error_message="unsupported protocol version",
             debug={"protocol_version": int(request.protocol_version)},
         )
+
+    _apply_best_effort_memory_limit(request.max_memory_mb)
 
     try:
         settings = ReflexorSettings.model_validate(request.settings)
