@@ -48,6 +48,7 @@ def test_healthz_and_metrics_endpoints(tmp_path: Path) -> None:
         payload = health.json()
         assert payload["ok"] is True
         assert payload["db_ok"] is True
+        assert payload["queue_ok"] is True
         assert payload["profile"] == "dev"
         assert isinstance(payload["time_ms"], int)
 

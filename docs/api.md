@@ -22,8 +22,14 @@ OpenAPI / Swagger UI:
 ### Important: in-memory queue limitation
 
 The default queue backend is `inmemory`, which is **single-process only**. Running the API and the
-worker/executor in separate processes will not share the queue. A durable queue backend is needed
-for multi-process deployments (not implemented yet).
+worker/executor in separate processes will not share the queue.
+
+For multi-process deployments, use the Redis Streams backend:
+
+- Install: `pip install "reflexor[redis]"` (or `pip install -e ".[redis]"` from the repo)
+- Configure:
+  - `REFLEXOR_QUEUE_BACKEND=redis_streams`
+  - `REFLEXOR_REDIS_URL=redis://...`
 
 ## Authentication
 
@@ -55,8 +61,8 @@ List endpoints return a `Page[T]` object:
 ### Health
 
 - `GET /healthz`
-  - Returns `{ok, version, profile, time_ms, db_ok}`
-  - If DB connectivity fails, returns `503` and `ok=false`
+  - Returns `{ok, version, profile, time_ms, db_ok, queue_ok, queue_backend}`
+  - Returns `503` and `ok=false` if either DB or queue connectivity fails
 
 ### Metrics
 
@@ -134,4 +140,3 @@ Errors use a stable shape:
   "details": {"errors": []}
 }
 ```
-

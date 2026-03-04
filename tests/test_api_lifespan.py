@@ -28,6 +28,7 @@ def test_create_app_lifespan_startup_and_shutdown(tmp_path: Path) -> None:
         assert payload["profile"] == "dev"
         assert isinstance(payload["time_ms"], int)
         assert payload["db_ok"] is True
+        assert payload["queue_ok"] is True
 
         container = app.state.container
         assert isinstance(container, AppContainer)

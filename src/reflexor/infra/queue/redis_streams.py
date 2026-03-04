@@ -335,6 +335,21 @@ class RedisStreamsQueue:
             },
         )
 
+    async def ping(self, *, timeout_s: float = 0.2) -> bool:
+        """Return True if Redis is reachable.
+
+        This is intended for fast health checks and does not create streams/groups.
+        """
+
+        if self._closed:
+            return False
+
+        try:
+            await asyncio.wait_for(self._redis.ping(), timeout=float(timeout_s))
+        except Exception:
+            return False
+        return True
+
     async def _promote_delayed(self, *, now_ms: int) -> None:
         maxlen = "" if self._stream_maxlen is None else str(int(self._stream_maxlen))
         await self._redis.eval(

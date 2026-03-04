@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -86,6 +87,8 @@ from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.webhook_tool import WebhookEmitTool
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class RepoProviders:
@@ -129,9 +132,18 @@ class AppContainer:
 
         ensure_ready = getattr(self.queue, "ensure_ready", None)
         if ensure_ready is not None:
-            result = ensure_ready()
-            if inspect.isawaitable(result):
-                await result
+            try:
+                result = ensure_ready()
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(result, timeout=1.0)
+            except Exception:
+                logger.exception(
+                    "queue ensure_ready failed",
+                    extra={
+                        "event_type": "queue.ensure_ready.failed",
+                        "queue_backend": self.settings.queue_backend,
+                    },
+                )
 
         self.orchestrator_engine.start()
 
@@ -145,6 +157,20 @@ class AppContainer:
         except Exception:
             return False
         return True
+
+    async def ping_queue(self, *, timeout_s: float = 0.2) -> bool:
+        if self.settings.queue_backend == "inmemory":
+            return True
+
+        from reflexor.infra.queue.redis_streams import RedisStreamsQueue
+
+        if not isinstance(self.queue, RedisStreamsQueue):
+            return False
+
+        try:
+            return bool(await self.queue.ping(timeout_s=float(timeout_s)))
+        except Exception:
+            return False
 
     async def count_pending_approvals(self, *, timeout_s: float = 1.0) -> int | None:
         async def _count() -> int:
