@@ -325,23 +325,47 @@ class AppContainer:
     _owns_engine: bool = True
     _owns_queue: bool = True
 
+    async def ensure_queue_ready(
+        self,
+        *,
+        timeout_s: float | None = 1.0,
+        required: bool = False,
+        log: logging.Logger | None = None,
+    ) -> bool:
+        """Best-effort queue initialization for first-run deployments."""
+
+        effective_logger = logger if log is None else log
+
+        ensure_ready = getattr(self.queue, "ensure_ready", None)
+        if ensure_ready is None:
+            return True
+
+        try:
+            result = ensure_ready()
+            if inspect.isawaitable(result):
+                if timeout_s is None:
+                    await result
+                else:
+                    await asyncio.wait_for(result, timeout=float(timeout_s))
+        except Exception:
+            effective_logger.exception(
+                "queue ensure_ready failed",
+                extra={
+                    "event_type": "queue.ensure_ready.failed",
+                    "queue_backend": self.settings.queue_backend,
+                    "required": required,
+                },
+            )
+            if required:
+                raise
+            return False
+
+        return True
+
     async def start(self) -> None:
         """Start any background application tasks."""
 
-        ensure_ready = getattr(self.queue, "ensure_ready", None)
-        if ensure_ready is not None:
-            try:
-                result = ensure_ready()
-                if inspect.isawaitable(result):
-                    await asyncio.wait_for(result, timeout=1.0)
-            except Exception:
-                logger.exception(
-                    "queue ensure_ready failed",
-                    extra={
-                        "event_type": "queue.ensure_ready.failed",
-                        "queue_backend": self.settings.queue_backend,
-                    },
-                )
+        await self.ensure_queue_ready(timeout_s=1.0, required=False)
 
         self.orchestrator_engine.start()
 

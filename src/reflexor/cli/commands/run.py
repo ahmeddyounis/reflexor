@@ -97,7 +97,6 @@ __all__ = ["register"]
 
 async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) -> None:
     import asyncio
-    import inspect
     import logging
 
     from reflexor.api.container import AppContainer
@@ -109,11 +108,7 @@ async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) ->
 
     app = AppContainer.build(settings=settings)
     try:
-        ensure_ready = getattr(app.queue, "ensure_ready", None)
-        if ensure_ready is not None:
-            result = ensure_ready()
-            if inspect.isawaitable(result):
-                await result
+        await app.ensure_queue_ready(timeout_s=1.0, required=True, log=logger)
 
         executor, effective_concurrency = app.build_executor_service(concurrency=concurrency)
 
