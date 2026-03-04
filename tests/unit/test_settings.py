@@ -218,8 +218,11 @@ def test_prod_requires_redis_url_for_redis_streams_queue(
     with pytest.raises(ValueError, match="REFLEXOR_REDIS_URL"):
         ReflexorSettings(profile="prod", queue_backend="redis_streams")
 
-    settings = ReflexorSettings(profile="prod", queue_backend="redis_streams", redis_url="redis://x")
+    settings = ReflexorSettings(
+        profile="prod", queue_backend="redis_streams", redis_url="redis://x"
+    )
     assert settings.redis_url == "redis://x"
+
 
 def test_orchestrator_settings_reject_non_positive_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

@@ -496,10 +496,7 @@ class ReplayRunner:
             approvals=approvals,
         )
 
-        engine = create_async_engine(
-            replay_settings.database_url,
-            echo=bool(replay_settings.db_echo),
-        )
+        engine = create_async_engine(replay_settings)
         session_factory = create_async_session_factory(engine)
 
         def uow_factory() -> UnitOfWork:

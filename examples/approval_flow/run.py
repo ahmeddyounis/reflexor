@@ -11,6 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_EXAMPLE_DIR = Path(__file__).resolve().parent
+_DB_PATH = _EXAMPLE_DIR / "reflexor.db"
 _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
@@ -21,7 +23,11 @@ from reflexor.domain.models_event import Event  # noqa: E402
 from reflexor.executor.concurrency import ConcurrencyLimiter  # noqa: E402
 from reflexor.executor.idempotency import IdempotencyLedger  # noqa: E402
 from reflexor.executor.retries import RetryPolicy  # noqa: E402
-from reflexor.executor.service import ExecutionDisposition, ExecutorRepoFactory, ExecutorService  # noqa: E402
+from reflexor.executor.service import (  # noqa: E402
+    ExecutionDisposition,
+    ExecutorRepoFactory,
+    ExecutorService,
+)
 from reflexor.infra.db.models import Base  # noqa: E402
 from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger  # noqa: E402
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter  # noqa: E402
@@ -68,8 +74,8 @@ def _build_executor(container: AppContainer) -> ExecutorService:
 
 
 async def main() -> None:
-    example_dir = Path(__file__).resolve().parent
-    db_path = example_dir / "reflexor.db"
+    example_dir = _EXAMPLE_DIR
+    db_path = _DB_PATH
     _create_schema(db_path)
 
     settings = ReflexorSettings(

@@ -181,10 +181,7 @@ class AppContainer:
         effective_metrics = ApiMetrics.build() if metrics is None else metrics
 
         owns_engine = engine is None
-        effective_engine = engine or create_async_engine(
-            effective_settings.database_url,
-            echo=bool(effective_settings.db_echo),
-        )
+        effective_engine = engine or create_async_engine(effective_settings)
         effective_session_factory = session_factory or create_async_session_factory(
             effective_engine
         )

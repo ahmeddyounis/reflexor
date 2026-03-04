@@ -18,7 +18,12 @@ if str(_SRC_ROOT) not in sys.path:
 from reflexor.domain.models_event import Event  # noqa: E402
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue  # noqa: E402
 from reflexor.orchestrator.engine import OrchestratorEngine  # noqa: E402
-from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask, ReflexDecision  # noqa: E402
+from reflexor.orchestrator.plans import (  # noqa: E402
+    Plan,
+    PlanningInput,
+    ProposedTask,
+    ReflexDecision,
+)
 from reflexor.orchestrator.validation import compute_idempotency_key  # noqa: E402
 from reflexor.tools.mock_tool import MockTool  # noqa: E402
 from reflexor.tools.registry import ToolRegistry  # noqa: E402
@@ -113,7 +118,12 @@ class _InstrumentedQueue:
     async def ack(self, lease: Any) -> None:
         await self._inner.ack(lease)
 
-    async def nack(self, lease: Any, delay_s: float | None = None, reason: str | None = None) -> None:
+    async def nack(
+        self,
+        lease: Any,
+        delay_s: float | None = None,
+        reason: str | None = None,
+    ) -> None:
         await self._inner.nack(lease, delay_s=delay_s, reason=reason)
 
     async def aclose(self) -> None:
@@ -143,7 +153,11 @@ class _NeedsPlanningRouter:
     async def route(self, event: Event, ctx: PlanningInput) -> ReflexDecision:
         _ = event
         _ = ctx
-        return ReflexDecision(action="needs_planning", reason="benchmark_needs_planning", proposed_tasks=[])
+        return ReflexDecision(
+            action="needs_planning",
+            reason="benchmark_needs_planning",
+            proposed_tasks=[],
+        )
 
 
 class _OneTaskPerEventPlanner:
@@ -225,7 +239,13 @@ async def _run_benchmark(*, events: int, concurrency: int, planner: str) -> dict
 
     tool_name = "mock.bench"
     registry = ToolRegistry()
-    registry.register(MockTool(tool_name=tool_name, permission_scope="fs.read", side_effects=False))
+    registry.register(
+        MockTool(
+            tool_name=tool_name,
+            permission_scope="fs.read",
+            side_effects=False,
+        )
+    )
 
     now_ms = int(time.time() * 1000)
     batch: list[Event] = [
@@ -288,7 +308,11 @@ async def _run_benchmark(*, events: int, concurrency: int, planner: str) -> dict
                 f"timed out waiting for enqueues (missing={missing}, timeout_s={timeout_s})"
             ) from exc
 
-        end_s = max(recorder.enqueue_times_s.values()) if recorder.enqueue_times_s else time.perf_counter()
+        end_s = (
+            max(recorder.enqueue_times_s.values())
+            if recorder.enqueue_times_s
+            else time.perf_counter()
+        )
 
         latencies_s = [recorder.enqueue_times_s[key] - start_times[key] for key in expected_keys]
         summary_ms = _latency_summary_ms(latencies_s)
@@ -349,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
     assert isinstance(latency, dict)
     sys.stdout.write("== event_to_enqueue benchmark ==\n")
     sys.stdout.write(
-        f"planner={report['planner']} events={report['events']} concurrency={report['concurrency']}\n"
+        f"planner={report['planner']} events={report['events']} "
+        f"concurrency={report['concurrency']}\n"
     )
     sys.stdout.write(
         f"latency_ms p50={latency['p50']:.3f} p95={latency['p95']:.3f} "

@@ -91,10 +91,7 @@ async def export_run_packet(
     path = Path(out_path)
     resolved_settings = get_settings() if settings is None else settings
 
-    engine = create_async_engine(
-        resolved_settings.database_url,
-        echo=bool(resolved_settings.db_echo),
-    )
+    engine = create_async_engine(resolved_settings)
     session_factory = create_async_session_factory(engine)
     try:
         async with async_session_scope(session_factory) as session:

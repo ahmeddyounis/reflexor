@@ -133,10 +133,7 @@ async def import_run_packet(
         completed_at_ms=packet.completed_at_ms,
     )
 
-    engine = create_async_engine(
-        resolved_settings.database_url,
-        echo=bool(resolved_settings.db_echo),
-    )
+    engine = create_async_engine(resolved_settings)
     session_factory = create_async_session_factory(engine)
     try:
         async with async_session_scope(session_factory) as session:

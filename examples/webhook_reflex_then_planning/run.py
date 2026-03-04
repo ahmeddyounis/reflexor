@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_EXAMPLE_DIR = Path(__file__).resolve().parent
+_DB_PATH = _EXAMPLE_DIR / "reflexor.db"
 _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
@@ -70,8 +72,8 @@ async def _drain_envelopes(container: AppContainer) -> list[dict[str, object]]:
 
 
 async def main() -> None:
-    example_dir = Path(__file__).resolve().parent
-    db_path = example_dir / "reflexor.db"
+    example_dir = _EXAMPLE_DIR
+    db_path = _DB_PATH
     _create_schema(db_path)
 
     settings = ReflexorSettings(
@@ -128,7 +130,11 @@ async def main() -> None:
         packets = await sink.list_recent(limit=20)
 
         print("== Webhook Reflex → Planning Example ==")
-        print(json.dumps({"reflex_run_id": reflex_outcome.run_id, "planning_run_id": planning_outcome.run_id}))
+        summary = {
+            "reflex_run_id": reflex_outcome.run_id,
+            "planning_run_id": planning_outcome.run_id,
+        }
+        print(json.dumps(summary))
         print()
         print("== Queued Envelopes ==")
         print(json.dumps(envelopes, indent=2, sort_keys=True))
