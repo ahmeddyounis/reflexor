@@ -36,6 +36,10 @@ from reflexor.application.suppressions_service import (
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.executor.approval_store import DbApprovalStore
+from reflexor.executor.concurrency import ConcurrencyLimiter
+from reflexor.executor.idempotency import IdempotencyLedger
+from reflexor.executor.retries import RetryPolicy
+from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
 from reflexor.guards import GuardChain, PolicyGuard
 from reflexor.guards.circuit_breaker import (
     CircuitBreakerGuard,
@@ -55,6 +59,7 @@ from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyEventRepo,
     SqlAlchemyEventSuppressionRepo,
+    SqlAlchemyIdempotencyLedger,
     SqlAlchemyRunPacketRepo,
     SqlAlchemyRunRepo,
     SqlAlchemyTaskRepo,
@@ -221,6 +226,63 @@ class AppContainer:
                 await self.queue.aclose()
             if self._owns_engine:
                 await self.engine.dispose()
+
+    def build_executor_service(
+        self,
+        *,
+        concurrency: int | None = None,
+    ) -> tuple[ExecutorService, int]:
+        """Build an `ExecutorService` wired to this container's ports/adapters.
+
+        This is intended for outer-layer composition roots (e.g. CLI `run worker`) so they can
+        reuse the same wiring as the API container while keeping executor construction in one place.
+        """
+
+        effective_concurrency = int(self.settings.executor_max_concurrency)
+        if concurrency is not None:
+            effective_concurrency = int(concurrency)
+        if effective_concurrency <= 0:
+            raise ValueError("concurrency must be > 0")
+
+        per_tool = {
+            name: min(int(limit), effective_concurrency)
+            for name, limit in self.settings.executor_per_tool_concurrency.items()
+        }
+        limiter = ConcurrencyLimiter(max_global=effective_concurrency, per_tool=per_tool)
+
+        retry_policy = RetryPolicy(
+            base_delay_s=float(self.settings.executor_retry_base_delay_s),
+            max_delay_s=float(self.settings.executor_retry_max_delay_s),
+            jitter=float(self.settings.executor_retry_jitter),
+        )
+
+        repos = ExecutorRepoFactory(
+            task_repo=self.repos.task_repo,
+            tool_call_repo=self.repos.tool_call_repo,
+            approval_repo=self.repos.approval_repo,
+            run_packet_repo=self.repos.run_packet_repo,
+        )
+
+        def ledger_factory(session: DatabaseSession) -> IdempotencyLedger:
+            return SqlAlchemyIdempotencyLedger(
+                cast(AsyncSession, session),
+                settings=self.settings,
+            )
+
+        executor = ExecutorService(
+            uow_factory=self.uow_factory,
+            repos=repos,
+            queue=self.queue,
+            policy_runner=self.policy_runner,
+            tool_registry=self.tool_registry,
+            idempotency_ledger=ledger_factory,
+            retry_policy=retry_policy,
+            limiter=limiter,
+            clock=self.orchestrator_engine.clock,
+            metrics=self.metrics,
+            circuit_breaker=self.circuit_breaker,
+        )
+        return executor, effective_concurrency
 
     @classmethod
     def build(

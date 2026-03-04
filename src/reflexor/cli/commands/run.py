@@ -99,30 +99,13 @@ async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) ->
     import asyncio
     import inspect
     import logging
-    from typing import cast
-
-    from sqlalchemy.ext.asyncio import AsyncSession
 
     from reflexor.api.container import AppContainer
-    from reflexor.executor.concurrency import ConcurrencyLimiter
-    from reflexor.executor.idempotency import IdempotencyLedger
-    from reflexor.executor.retries import RetryPolicy
-    from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
-    from reflexor.infra.db.repos import SqlAlchemyIdempotencyLedger
     from reflexor.observability.logging import configure_logging
-    from reflexor.orchestrator.clock import SystemClock
-    from reflexor.storage.uow import DatabaseSession
     from reflexor.worker.runner import WorkerRunner
 
     configure_logging(settings)
     logger = logging.getLogger("reflexor.cli.worker")
-
-    effective_concurrency = int(settings.executor_max_concurrency)
-    if concurrency is not None:
-        effective_concurrency = int(concurrency)
-
-    if effective_concurrency <= 0:
-        raise ValueError("concurrency must be > 0")
 
     app = AppContainer.build(settings=settings)
     try:
@@ -132,44 +115,7 @@ async def _run_worker(*, settings: ReflexorSettings, concurrency: int | None) ->
             if inspect.isawaitable(result):
                 await result
 
-        per_tool = {
-            name: min(int(limit), effective_concurrency)
-            for name, limit in settings.executor_per_tool_concurrency.items()
-        }
-        limiter = ConcurrencyLimiter(max_global=effective_concurrency, per_tool=per_tool)
-
-        retry_policy = RetryPolicy(
-            base_delay_s=float(settings.executor_retry_base_delay_s),
-            max_delay_s=float(settings.executor_retry_max_delay_s),
-            jitter=float(settings.executor_retry_jitter),
-        )
-
-        repos = ExecutorRepoFactory(
-            task_repo=app.repos.task_repo,
-            tool_call_repo=app.repos.tool_call_repo,
-            approval_repo=app.repos.approval_repo,
-            run_packet_repo=app.repos.run_packet_repo,
-        )
-
-        def ledger_factory(session: DatabaseSession) -> IdempotencyLedger:
-            return SqlAlchemyIdempotencyLedger(
-                cast(AsyncSession, session),
-                settings=settings,
-            )
-
-        executor = ExecutorService(
-            uow_factory=app.uow_factory,
-            repos=repos,
-            queue=app.queue,
-            policy_runner=app.policy_runner,
-            tool_registry=app.tool_registry,
-            idempotency_ledger=ledger_factory,
-            retry_policy=retry_policy,
-            limiter=limiter,
-            clock=SystemClock(),
-            metrics=app.metrics,
-            circuit_breaker=app.circuit_breaker,
-        )
+        executor, effective_concurrency = app.build_executor_service(concurrency=concurrency)
 
         logger.info("worker starting", extra={"concurrency": effective_concurrency})
 
