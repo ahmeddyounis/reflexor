@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
+
+JSON_TYPE = sa.JSON().with_variant(postgresql.JSONB, "postgresql")
 
 revision = "0004_idempotency_ledger_table"
 down_revision = "0003_run_packets_packet_version"
@@ -22,7 +25,7 @@ def upgrade() -> None:
         sa.Column("idempotency_key", sa.String(), primary_key=True),
         sa.Column("tool_name", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
-        sa.Column("result_json", sa.JSON(), nullable=False),
+        sa.Column("result_json", JSON_TYPE, nullable=False),
         sa.Column("created_at_ms", sa.Integer(), nullable=False),
         sa.Column("updated_at_ms", sa.Integer(), nullable=False),
         sa.Column("expires_at_ms", sa.Integer(), nullable=True),

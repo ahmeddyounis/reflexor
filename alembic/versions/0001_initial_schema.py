@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
+
+JSON_TYPE = sa.JSON().with_variant(postgresql.JSONB, "postgresql")
 
 revision = "0001_initial_schema"
 down_revision = None
@@ -23,7 +26,7 @@ def upgrade() -> None:
         sa.Column("type", sa.String(), nullable=False),
         sa.Column("source", sa.String(), nullable=False),
         sa.Column("received_at_ms", sa.Integer(), nullable=False),
-        sa.Column("payload", sa.JSON(), nullable=False),
+        sa.Column("payload", JSON_TYPE, nullable=False),
         sa.Column("dedupe_key", sa.String(), nullable=True),
     )
     op.create_index("ix_events_type", "events", ["type"])
@@ -42,7 +45,7 @@ def upgrade() -> None:
         "tool_calls",
         sa.Column("tool_call_id", sa.String(), primary_key=True),
         sa.Column("tool_name", sa.String(), nullable=False),
-        sa.Column("args", sa.JSON(), nullable=False),
+        sa.Column("args", JSON_TYPE, nullable=False),
         sa.Column("permission_scope", sa.String(), nullable=False),
         sa.Column("idempotency_key", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
@@ -63,12 +66,12 @@ def upgrade() -> None:
         sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("max_attempts", sa.Integer(), nullable=False),
         sa.Column("timeout_s", sa.Integer(), nullable=False),
-        sa.Column("depends_on", sa.JSON(), nullable=False),
+        sa.Column("depends_on", JSON_TYPE, nullable=False),
         sa.Column("created_at_ms", sa.Integer(), nullable=False),
         sa.Column("started_at_ms", sa.Integer(), nullable=True),
         sa.Column("completed_at_ms", sa.Integer(), nullable=True),
-        sa.Column("labels", sa.JSON(), nullable=False),
-        sa.Column("metadata", sa.JSON(), nullable=False),
+        sa.Column("labels", JSON_TYPE, nullable=False),
+        sa.Column("metadata", JSON_TYPE, nullable=False),
     )
     op.create_index("ix_tasks_run_id", "tasks", ["run_id"])
     op.create_index("ix_tasks_status", "tasks", ["status"])
@@ -97,7 +100,7 @@ def upgrade() -> None:
         "run_packets",
         sa.Column("run_id", sa.String(), sa.ForeignKey("runs.run_id"), primary_key=True),
         sa.Column("created_at_ms", sa.Integer(), nullable=False),
-        sa.Column("packet", sa.JSON(), nullable=False),
+        sa.Column("packet", JSON_TYPE, nullable=False),
     )
 
 

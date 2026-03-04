@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from sqlalchemy import JSON, ForeignKey, Index, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+JSON_VARIANT = JSON().with_variant(JSONB, "postgresql")
 
 
 class Base(DeclarativeBase):
@@ -16,7 +19,7 @@ class EventRow(Base):
     type: Mapped[str] = mapped_column(String, index=True)
     source: Mapped[str] = mapped_column(String)
     received_at_ms: Mapped[int] = mapped_column(Integer)
-    payload: Mapped[dict[str, object]] = mapped_column(JSON)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
     dedupe_key: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
@@ -35,7 +38,7 @@ class ToolCallRow(Base):
 
     tool_call_id: Mapped[str] = mapped_column(String, primary_key=True)
     tool_name: Mapped[str] = mapped_column(String)
-    args: Mapped[dict[str, object]] = mapped_column(JSON)
+    args: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
     permission_scope: Mapped[str] = mapped_column(String)
     idempotency_key: Mapped[str] = mapped_column(String, index=True)
     status: Mapped[str] = mapped_column(String)
@@ -58,12 +61,12 @@ class TaskRow(Base):
     attempts: Mapped[int] = mapped_column(Integer)
     max_attempts: Mapped[int] = mapped_column(Integer)
     timeout_s: Mapped[int] = mapped_column(Integer)
-    depends_on: Mapped[list[str]] = mapped_column(JSON)
+    depends_on: Mapped[list[str]] = mapped_column(JSON_VARIANT)
     created_at_ms: Mapped[int] = mapped_column(Integer)
     started_at_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completed_at_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    labels: Mapped[list[str]] = mapped_column(JSON)
-    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSON)
+    labels: Mapped[list[str]] = mapped_column(JSON_VARIANT)
+    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSON_VARIANT)
 
 
 class ApprovalRow(Base):
@@ -87,7 +90,7 @@ class RunPacketRow(Base):
     run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.run_id"), primary_key=True)
     packet_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at_ms: Mapped[int] = mapped_column(Integer)
-    packet: Mapped[dict[str, object]] = mapped_column(JSON)
+    packet: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
 
 
 class IdempotencyLedgerRow(Base):
@@ -96,7 +99,7 @@ class IdempotencyLedgerRow(Base):
     idempotency_key: Mapped[str] = mapped_column(String, primary_key=True)
     tool_name: Mapped[str] = mapped_column(String, index=True)
     status: Mapped[str] = mapped_column(String, index=True)
-    result_json: Mapped[dict[str, object]] = mapped_column(JSON)
+    result_json: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
     created_at_ms: Mapped[int] = mapped_column(Integer)
     updated_at_ms: Mapped[int] = mapped_column(Integer, index=True)
     expires_at_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
