@@ -40,8 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SQLAlchemy repos split into smaller modules under `reflexor.infra.db.repos` (public API preserved).
 - Queue backends converted into packages under `reflexor.infra.queue.in_memory_queue` and
   `reflexor.infra.queue.redis_streams` (import paths preserved).
+- Redis Streams queue backend internals split into helper modules under
+  `reflexor.infra.queue.redis_streams` (public API preserved).
 - Policy enforcement implementation split into modules under `reflexor.security.policy.enforcement`
   (public API preserved).
+- CLI client implementations split into modules under `reflexor.cli.client` (public API preserved).
 
 ### Deprecated
 
