@@ -71,6 +71,8 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [API](docs/api.md)
 - [CLI](docs/cli.md)
 - [Production Deployment (v0.2)](docs/production_v0.2.md)
+- [Threat Model](docs/threat_model.md)
+- [Hardening Checklist](docs/hardening_checklist.md)
 - [Observability](docs/observability.md)
 - [Replay](docs/replay.md)
 - [Policy & Approvals](docs/policy.md)

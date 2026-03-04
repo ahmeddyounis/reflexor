@@ -74,6 +74,11 @@ allowed to provide tools:
 
 Refusals are logged as structured warnings with `message="tool_entrypoint_refused"`.
 
+Examples (JSON array strings):
+
+- `REFLEXOR_TRUSTED_TOOL_PACKAGES='["reflexor-tools-acme"]'`
+- `REFLEXOR_BLOCKED_TOOL_PACKAGES='["some-bad-package"]'`
+
 ### ToolContext
 
 `ToolContext` (see `reflexor.tools.sdk.tool.ToolContext`) contains:
