@@ -91,6 +91,7 @@ from reflexor.security.policy.rules import (
     ApprovalRequiredRule,
     NetworkAllowlistRule,
     ScopeEnabledRule,
+    ScopeMatchesManifestRule,
     WorkspaceRule,
 )
 from reflexor.storage.ports import (
@@ -345,6 +346,7 @@ class AppContainer:
 
         policy_gate = PolicyGate(
             rules=[
+                ScopeMatchesManifestRule(),
                 ScopeEnabledRule(),
                 NetworkAllowlistRule(),
                 WorkspaceRule(),

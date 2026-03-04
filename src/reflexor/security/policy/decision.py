@@ -27,6 +27,7 @@ class PolicyAction(StrEnum):
 
 REASON_OK = "ok"
 REASON_ALLOWED = REASON_OK
+REASON_SCOPE_MISMATCH = "scope_mismatch"
 REASON_SCOPE_DISABLED = "scope_disabled"
 REASON_TOOL_UNKNOWN = "tool_unknown"
 REASON_ARGS_INVALID = "args_invalid"

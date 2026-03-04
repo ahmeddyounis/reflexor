@@ -56,6 +56,7 @@ from reflexor.security.policy.rules import (
     ApprovalRequiredRule,
     NetworkAllowlistRule,
     ScopeEnabledRule,
+    ScopeMatchesManifestRule,
     WorkspaceRule,
 )
 from reflexor.security.scopes import Scope
@@ -480,6 +481,7 @@ class ReplayRunner:
         tool_runner = ToolRunner(registry=registry, settings=replay_settings)
         policy_gate = PolicyGate(
             rules=[
+                ScopeMatchesManifestRule(),
                 ScopeEnabledRule(),
                 NetworkAllowlistRule(),
                 WorkspaceRule(),

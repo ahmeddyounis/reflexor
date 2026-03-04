@@ -29,6 +29,7 @@ from reflexor.security.policy.decision import (
     REASON_DOMAIN_NOT_ALLOWLISTED,
     REASON_PROFILE_GUARDRAIL,
     REASON_SCOPE_DISABLED,
+    REASON_SCOPE_MISMATCH,
     REASON_SSRF_BLOCKED,
     REASON_WORKSPACE_VIOLATION,
     PolicyAction,
@@ -52,6 +53,43 @@ class PolicyRule(Protocol):
 
 NETWORK_SCOPES: frozenset[str] = frozenset({Scope.NET_HTTP.value, Scope.WEBHOOK_EMIT.value})
 FILESYSTEM_SCOPES: frozenset[str] = frozenset({Scope.FS_READ.value, Scope.FS_WRITE.value})
+
+
+class ScopeMatchesManifestRule:
+    """Deny if tool_call.permission_scope does not match the tool manifest.
+
+    This prevents policy bypass if a persisted tool call is tampered with (or created incorrectly)
+    such that its scope no longer matches the tool being executed.
+    """
+
+    rule_id = "scope_matches_manifest"
+
+    def evaluate(
+        self,
+        *,
+        tool_call: ToolCall,
+        tool_spec: ToolSpec,
+        parsed_args: BaseModel,
+        ctx: PolicyContext,
+    ) -> PolicyDecision | None:
+        _ = parsed_args
+        _ = ctx
+
+        expected = tool_spec.manifest.permission_scope
+        actual = tool_call.permission_scope
+        if expected == actual:
+            return None
+
+        return PolicyDecision.deny(
+            reason_code=REASON_SCOPE_MISMATCH,
+            message="tool_call permission_scope does not match tool manifest",
+            rule_id=self.rule_id,
+            metadata={
+                "tool_name": tool_spec.tool_name,
+                "expected_scope": expected,
+                "actual_scope": actual,
+            },
+        )
 
 
 class ScopeEnabledRule:

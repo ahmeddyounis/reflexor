@@ -13,6 +13,7 @@ from reflexor.security.policy.decision import (
     REASON_DOMAIN_NOT_ALLOWLISTED,
     REASON_PROFILE_GUARDRAIL,
     REASON_SCOPE_DISABLED,
+    REASON_SCOPE_MISMATCH,
     REASON_SSRF_BLOCKED,
     REASON_WORKSPACE_VIOLATION,
     PolicyAction,
@@ -21,6 +22,7 @@ from reflexor.security.policy.rules import (
     ApprovalRequiredRule,
     NetworkAllowlistRule,
     ScopeEnabledRule,
+    ScopeMatchesManifestRule,
     WorkspaceRule,
 )
 from reflexor.tools.sdk import ToolManifest
@@ -72,6 +74,57 @@ def test_scope_enabled_rule_denies_when_scope_disabled(tmp_path: Path) -> None:
     assert decision.action == PolicyAction.DENY
     assert decision.reason_code == REASON_SCOPE_DISABLED
     assert decision.metadata["scope"] == "fs.write"
+
+
+def test_scope_matches_manifest_rule_denies_when_scope_mismatched(tmp_path: Path) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read", "net.http"])
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.http",
+        version="0.1.0",
+        description="http tool",
+        permission_scope="net.http",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = ScopeMatchesManifestRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="fs.read"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://example.com/"),
+        ctx=ctx,
+    )
+
+    assert decision is not None
+    assert decision.action == PolicyAction.DENY
+    assert decision.reason_code == REASON_SCOPE_MISMATCH
+    assert decision.metadata["expected_scope"] == "net.http"
+    assert decision.metadata["actual_scope"] == "fs.read"
+
+
+def test_scope_matches_manifest_rule_allows_when_scope_matches(tmp_path: Path) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read", "net.http"])
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.http",
+        version="0.1.0",
+        description="http tool",
+        permission_scope="net.http",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = ScopeMatchesManifestRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="net.http"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://example.com/"),
+        ctx=ctx,
+    )
+    assert decision is None
 
 
 def test_scope_enabled_rule_allows_when_scope_enabled(tmp_path: Path) -> None:
