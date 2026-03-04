@@ -12,11 +12,16 @@ Clean Architecture:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+import inspect
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 from reflexor.cli.client import ApiClient, CliClient, LocalClient
 from reflexor.config import ReflexorSettings, get_settings
+
+T = TypeVar("T")
 
 
 def build_api_client(settings: ReflexorSettings) -> ApiClient:
@@ -39,6 +44,7 @@ def build_local_client(settings: ReflexorSettings) -> LocalClient:
         suppression_queries=app.suppression_queries,
         suppression_commands=app.suppression_commands,
         tool_registry=app.tool_registry,
+        aclose_callback=app.aclose,
     )
 
 
@@ -62,6 +68,7 @@ class CliContainer:
     output_pretty: bool = False
     assume_yes: bool = False
     _client: CliClient | None = field(default=None, init=False, repr=False)
+    _owns_client: bool = field(default=False, init=False, repr=False)
     _client_factory: Callable[[ReflexorSettings], CliClient] = field(
         default=build_cli_client, repr=False
     )
@@ -69,7 +76,33 @@ class CliContainer:
     def get_client(self) -> CliClient:
         if self._client is None:
             self._client = self._client_factory(self.settings)
+            self._owns_client = True
         return self._client
+
+    async def aclose(self) -> None:
+        if self._client is None or not self._owns_client:
+            return
+
+        client = self._client
+        self._client = None
+        self._owns_client = False
+
+        aclose = getattr(client, "aclose", None)
+        if aclose is None:
+            return
+        result = aclose()
+        if inspect.isawaitable(result):
+            await result
+
+    def run(self, coro_factory: Callable[[CliClient], Awaitable[T]]) -> T:
+        async def _runner() -> T:
+            client = self.get_client()
+            try:
+                return await coro_factory(client)
+            finally:
+                await self.aclose()
+
+        return asyncio.run(_runner())
 
     @classmethod
     def build(
@@ -85,6 +118,7 @@ class CliContainer:
             container._client_factory = client_factory
         if client is not None:
             container._client = client
+            container._owns_client = False
         return container
 
 

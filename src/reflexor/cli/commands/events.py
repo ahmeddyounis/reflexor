@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from pathlib import Path
@@ -155,8 +154,7 @@ def register(app: typer.Typer) -> None:
             output.abort(message, exit_code=2)
             return
 
-        client = container.get_client()
-        result = asyncio.run(client.submit_event(event))
+        result = container.run(lambda client: client.submit_event(event))
 
         if json_enabled:
             output.print_json(result, pretty=pretty_enabled)

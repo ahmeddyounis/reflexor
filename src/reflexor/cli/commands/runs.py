@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import cast
 
@@ -134,9 +133,10 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        client = container.get_client()
-        page = asyncio.run(
-            client.list_runs(limit=limit, offset=offset, status=status, since_ms=since_ms)
+        page = container.run(
+            lambda client: client.list_runs(
+                limit=limit, offset=offset, status=status, since_ms=since_ms
+            )
         )
 
         pretty_enabled = bool(container.output_pretty or pretty)
@@ -157,8 +157,7 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        client = container.get_client()
-        result = asyncio.run(_build_run_show_payload(client, run_id))
+        result = container.run(lambda client: _build_run_show_payload(client, run_id))
 
         pretty_enabled = bool(container.output_pretty or pretty)
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
@@ -209,9 +208,8 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        client = container.get_client()
         try:
-            result = asyncio.run(client.export_run_packet(run_id, out_path))
+            result = container.run(lambda client: client.export_run_packet(run_id, out_path))
         except NotImplementedError:
             pretty_enabled = bool(container.output_pretty or pretty)
             json_enabled = bool(container.output_json or json_output or pretty_enabled)
@@ -248,9 +246,8 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        client = container.get_client()
         try:
-            result = asyncio.run(client.import_run_packet(file_path))
+            result = container.run(lambda client: client.import_run_packet(file_path))
         except NotImplementedError:
             pretty_enabled = bool(container.output_pretty or pretty)
             json_enabled = bool(container.output_json or json_output or pretty_enabled)
@@ -312,10 +309,11 @@ def register(app: typer.Typer) -> None:
                 raise typer.Exit(2) from None
             output.abort(message, exit_code=2)
 
-        client = container.get_client()
         replay_mode = cast(ReplayModeStr, normalized_mode)
         try:
-            result = asyncio.run(client.replay_run_packet(file_path, mode=replay_mode))
+            result = container.run(
+                lambda client: client.replay_run_packet(file_path, mode=replay_mode)
+            )
         except NotImplementedError:
             if json_enabled:
                 output.print_json(

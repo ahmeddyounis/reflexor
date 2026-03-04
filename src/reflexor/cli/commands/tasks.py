@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import typer
 
 from reflexor.cli import output
@@ -36,9 +34,10 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        client = container.get_client()
-        page = asyncio.run(
-            client.list_tasks(limit=limit, offset=offset, run_id=run_id, status=status)
+        page = container.run(
+            lambda client: client.list_tasks(
+                limit=limit, offset=offset, run_id=run_id, status=status
+            )
         )
 
         pretty_enabled = bool(container.output_pretty or pretty)

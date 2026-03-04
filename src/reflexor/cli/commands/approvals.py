@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import sys
 from typing import Any, cast
 
@@ -166,13 +165,12 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        client = container.get_client()
         if pending_only and status is not None and status != ApprovalStatus.PENDING:
             output.abort("--pending-only conflicts with --status", exit_code=2)
         effective_status = ApprovalStatus.PENDING if pending_only else status
 
-        page = asyncio.run(
-            _list_approvals_with_scope(
+        page = container.run(
+            lambda client: _list_approvals_with_scope(
                 client,
                 limit=limit,
                 offset=offset,
@@ -207,8 +205,7 @@ def register(app: typer.Typer) -> None:
             container, json_enabled=json_enabled, pretty_enabled=pretty_enabled
         )
 
-        client = container.get_client()
-        result = asyncio.run(client.approve(approval_id, decided_by=decided_by))
+        result = container.run(lambda client: client.approve(approval_id, decided_by=decided_by))
 
         if json_enabled:
             output.print_json(result, pretty=pretty_enabled)
@@ -227,8 +224,7 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        client = container.get_client()
-        result = asyncio.run(client.deny(approval_id, decided_by=decided_by))
+        result = container.run(lambda client: client.deny(approval_id, decided_by=decided_by))
 
         pretty_enabled = bool(container.output_pretty or pretty)
         json_enabled = bool(container.output_json or json_output or pretty_enabled)

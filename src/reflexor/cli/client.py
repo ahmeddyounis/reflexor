@@ -9,7 +9,7 @@ Commands should depend on the `CliClient` protocol and avoid direct ORM/database
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, TypeAlias, cast
@@ -114,6 +114,8 @@ class CliClient(Protocol):
         self, signature_hash: str, *, cleared_by: str | None = None
     ) -> dict[str, object]: ...
 
+    async def aclose(self) -> None: ...
+
 
 def _page(
     *,
@@ -213,6 +215,9 @@ class LocalClient:
     suppression_queries: EventSuppressionQueryService
     suppression_commands: EventSuppressionCommandService
     tool_registry: ToolRegistry
+    aclose_callback: Callable[[], Awaitable[None]] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     async def submit_event(self, event: Event) -> dict[str, object]:
         outcome = await self.submitter.submit_event(event)
@@ -299,6 +304,11 @@ class LocalClient:
 
     async def health(self) -> dict[str, object]:
         return {"ok": True}
+
+    async def aclose(self) -> None:
+        if self.aclose_callback is None:
+            return
+        await self.aclose_callback()
 
     async def export_run_packet(
         self,
@@ -514,6 +524,16 @@ class ApiClient:
         data = await self._request_json("GET", "/healthz")
         return cast(dict[str, object], data)
 
+    async def aclose(self) -> None:
+        if not self._owns_http:
+            return
+        http = self.http
+        if http is None:
+            return
+        await http.aclose()
+        self.http = None
+        self._owns_http = False
+
     async def export_run_packet(
         self,
         run_id: str,
@@ -560,10 +580,6 @@ class ApiClient:
             json_body=json_body,
         )
         return cast(dict[str, object], data)
-
-    async def aclose(self) -> None:
-        if self._owns_http and self.http is not None:
-            await self.http.aclose()
 
 
 __all__ = ["ApiClient", "CliClient", "LocalClient", "ReplayModeStr"]
