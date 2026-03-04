@@ -5,6 +5,7 @@ This package is intentionally pure and storage-agnostic:
 - persistence/locking concerns are modeled as narrow ports (Protocols)
 """
 
+from reflexor.guards.rate_limit.in_memory import InMemoryRateLimiter
 from reflexor.guards.rate_limit.key import RateLimitKey
 from reflexor.guards.rate_limit.limiter import RateLimiter, RateLimitResult
 from reflexor.guards.rate_limit.locks import (
@@ -19,6 +20,7 @@ from reflexor.guards.rate_limit.token_bucket_limiter import TokenBucketRateLimit
 
 __all__ = [
     "AsyncioKeyedLockStrategy",
+    "InMemoryRateLimiter",
     "InMemoryTokenBucketStore",
     "KeyedLockStrategy",
     "NoopKeyedLockStrategy",
