@@ -1,0 +1,7 @@
+{
+  "tool_name": "mock.tick",
+  "permission_scope": "fs.read",
+  "side_effects": false,
+  "idempotent": true
+}
+

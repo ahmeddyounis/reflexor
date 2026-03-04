@@ -1,0 +1,28 @@
+{
+  "rules": [
+    {
+      "rule_id": "needs_planning_on_flag",
+      "match": {
+        "event_type": "webhook",
+        "payload_equals": { "plan": true }
+      },
+      "action": { "kind": "needs_planning" }
+    },
+    {
+      "rule_id": "reflex_echo",
+      "match": { "event_type": "webhook" },
+      "action": {
+        "kind": "fast_tool",
+        "tool_name": "debug.echo",
+        "args_template": {
+          "kind": "reflex",
+          "message": "${payload.message}",
+          "plan": "${payload.plan}",
+          "event_type": "${event.type}",
+          "event_id": "${event.event_id}"
+        }
+      }
+    }
+  ]
+}
+
