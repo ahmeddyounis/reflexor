@@ -396,16 +396,12 @@ class InMemoryQueue:
     async def _delayed_promoter_loop(self) -> None:
         try:
             while True:
-                redeliver: list[QueueRedeliverObservation] = []
                 async with self._lock:
                     if self._closed:
                         return
                     now = int(self._now_ms())
                     self._promote_delayed(now=now)
                     next_due = self._delayed[0][0] if self._delayed else None
-
-                for observation in redeliver:
-                    self._observer.on_redeliver(observation)
 
                 await self._sleep_until_next(now_ms=now, next_ms=next_due)
         except asyncio.CancelledError:
