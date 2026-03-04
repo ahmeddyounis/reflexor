@@ -6,12 +6,20 @@ internal churn reduction.
 
 from __future__ import annotations
 
+import warnings
+
 from reflexor.security.fs_safety import (
     atomic_write_bytes,
     atomic_write_text,
     read_bytes_limited,
     read_text_limited,
     resolve_path_in_workspace,
+)
+
+warnings.warn(
+    "reflexor.tools.fs_safety is deprecated; import from reflexor.security.fs_safety instead",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
 __all__ = [
