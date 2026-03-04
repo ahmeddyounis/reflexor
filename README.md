@@ -68,6 +68,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 ## Operator docs
 
 - [Configuration & Profiles](docs/configuration.md)
+- [Upgrade to v1.0](docs/upgrade_to_v1.md)
 - [API](docs/api.md)
 - [CLI](docs/cli.md)
 - [Production Deployment (v0.2)](docs/production_v0.2.md)
