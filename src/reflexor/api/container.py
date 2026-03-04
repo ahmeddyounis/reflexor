@@ -452,6 +452,7 @@ def _build_default_tool_registry(settings: ReflexorSettings) -> ToolRegistry:
     registry.register(FsListDirTool(settings=settings))
     registry.register(HttpTool(settings=settings))
     registry.register(WebhookEmitTool(settings=settings))
+    registry.load_entrypoints(settings=settings)
     return registry
 
 

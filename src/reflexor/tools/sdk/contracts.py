@@ -4,6 +4,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
+TOOL_SDK_VERSION = 1
+
 
 def _require_non_empty_str(value: str, *, field_name: str) -> str:
     trimmed = value.strip()
@@ -38,6 +40,7 @@ class ToolManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    sdk_version: int = TOOL_SDK_VERSION
     name: str
     version: str
     description: str
@@ -47,6 +50,14 @@ class ToolManifest(BaseModel):
     default_timeout_s: int = 60
     max_output_bytes: int = 64_000
     tags: list[str] = Field(default_factory=list)
+
+    @field_validator("sdk_version")
+    @classmethod
+    def _validate_sdk_version(cls, value: int) -> int:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("sdk_version must be > 0")
+        return parsed
 
     @field_validator("name", "version", "description", "permission_scope")
     @classmethod

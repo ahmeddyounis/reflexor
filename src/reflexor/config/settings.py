@@ -257,6 +257,8 @@ class ReflexorSettings(BaseSettings):
 
     log_level: str = "INFO"
 
+    enable_tool_entrypoints: bool = False
+
     admin_api_key: str | None = None
     events_require_admin: bool = False
     api_url: str | None = None

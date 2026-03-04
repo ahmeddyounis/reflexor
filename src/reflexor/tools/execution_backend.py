@@ -345,6 +345,7 @@ def _sandbox_settings_payload(settings: ReflexorSettings) -> dict[str, object]:
         "dry_run": bool(settings.dry_run),
         "allow_side_effects_in_prod": bool(settings.allow_side_effects_in_prod),
         "allow_wildcards": bool(settings.allow_wildcards),
+        "enable_tool_entrypoints": bool(settings.enable_tool_entrypoints),
         "enabled_scopes": list(settings.enabled_scopes),
         "approval_required_scopes": list(settings.approval_required_scopes),
         "http_allowed_domains": list(settings.http_allowed_domains),
