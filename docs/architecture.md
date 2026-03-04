@@ -15,10 +15,11 @@ should point **inward**.
 | Application | `reflexor.application`, `reflexor.executor`, `reflexor.orchestrator` | Use-cases/workflows that orchestrate domain behavior | `domain`, ports/boundaries |
 | Ports (boundaries) | `reflexor.storage.ports`, `reflexor.orchestrator.queue`, `reflexor.tools.sdk` | Protocols/contracts that isolate core from I/O | `domain` (and small shared utilities) |
 | Infrastructure (adapters) | `reflexor.infra`, `reflexor.tools` | Concrete implementations (DB, queues, tool adapters, etc.) | ports, application, domain |
+| Bootstrap (composition root) | `reflexor.bootstrap` | Application wiring (concrete adapters -> services) | infrastructure, ports, application, domain |
 | Runtime (drivers) | `reflexor.api`, `reflexor.worker`, `reflexor.cli`, `reflexor.replay` | Entrypoints, HTTP surface area, and long-running loops | infrastructure, ports, application, domain |
 
-Note: `reflexor.interfaces` is currently reserved; most ports live close to their subsystem (e.g.
-`reflexor.storage.ports`, `reflexor.orchestrator.queue`, `reflexor.tools.sdk`).
+Note: ports live close to their subsystem (e.g. `reflexor.storage.ports`, `reflexor.orchestrator.queue`,
+`reflexor.tools.sdk`) rather than in a single “interfaces” package.
 
 ### Application boundaries (ports)
 
@@ -45,7 +46,8 @@ Some subsystems define explicit boundary interfaces ("ports") that infrastructur
 ### Examples
 
 - ✅ `reflexor.application.*` imports `reflexor.domain.*`
-- ✅ `reflexor.infra.*` imports `reflexor.interfaces.*`
+- ✅ `reflexor.infra.*` imports `reflexor.storage.ports` / `reflexor.orchestrator.queue` / `reflexor.tools.sdk`
+- ✅ `reflexor.bootstrap.*` imports `reflexor.infra.*` + `reflexor.application.*`
 - ❌ `reflexor.domain.*` imports `fastapi` / `sqlalchemy` / `reflexor.infra.*`
 
 ## SOLID principles (pragmatic)
@@ -62,4 +64,6 @@ We keep lightweight pytest guardrails that check for import-layer violations:
 
 - `tests/test_architecture_guardrails.py`: coarse checks for `reflexor.domain` and `reflexor.guards`.
 - `tests/unit/test_*_architecture.py`: focused checks for orchestrator/executor/policy/queue/tools/worker.
+- `tests/unit/test_bootstrap_architecture.py`: focused checks for `reflexor.bootstrap` direction.
+- `tests/unit/test_infra_architecture.py`: focused checks for `reflexor.infra` direction.
 - `tests/unit/test_domain_purity.py`: an import-time “loaded modules” sanity check for domain purity.
