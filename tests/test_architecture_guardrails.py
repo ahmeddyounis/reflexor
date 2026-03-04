@@ -21,6 +21,7 @@ def test_domain_imports_are_pure() -> None:
         "sqlalchemy",
         "reflexor.application",
         "reflexor.api",
+        "reflexor.bootstrap",
         "reflexor.executor",
         "reflexor.infra",
         "reflexor.interfaces",
@@ -86,6 +87,7 @@ def test_guards_do_not_import_outer_layers_or_concrete_tools() -> None:
         "reflexor.worker",
         "reflexor.cli",
         "reflexor.replay",
+        "reflexor.bootstrap",
         # Concrete tool implementations (guards should depend on boundaries only)
         "reflexor.tools.fs_tool",
         "reflexor.tools.http_tool",

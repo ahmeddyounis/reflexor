@@ -55,6 +55,7 @@ def test_security_and_policy_layers_do_not_import_framework_or_outer_layers() ->
         # Outer application layers (not yet implemented, but reserved).
         "reflexor.api",
         "reflexor.application",
+        "reflexor.bootstrap",
         "reflexor.cli",
         "reflexor.executor",
         "reflexor.infra",

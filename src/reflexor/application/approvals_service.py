@@ -17,9 +17,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
+from reflexor.domain.execution_state import complete_canceled, complete_denied
 from reflexor.domain.lifecycle import transition_task
 from reflexor.domain.models import Approval
-from reflexor.executor.state import complete_canceled, complete_denied
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.queue import Queue, TaskEnvelope

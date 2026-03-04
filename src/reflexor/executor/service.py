@@ -21,6 +21,15 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
+from reflexor.domain.execution_state import (
+    ExecutionState,
+    complete_canceled,
+    complete_denied,
+    complete_failed,
+    complete_succeeded,
+    mark_waiting_approval,
+    start_execution,
+)
 from reflexor.domain.models import Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
@@ -31,15 +40,6 @@ from reflexor.executor.retries import (
     RetryDisposition,
     RetryPolicy,
     exponential_backoff_s,
-)
-from reflexor.executor.state import (
-    ExecutionState,
-    complete_canceled,
-    complete_denied,
-    complete_failed,
-    complete_succeeded,
-    mark_waiting_approval,
-    start_execution,
 )
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
 from reflexor.guards.circuit_breaker.resolver import key_for_tool_call

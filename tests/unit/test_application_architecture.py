@@ -5,13 +5,13 @@ from pathlib import Path
 from tests.architecture_utils import collect_forbidden_imports, iter_python_files
 
 
-def test_executor_layer_does_not_import_frameworks_or_outer_entrypoints() -> None:
+def test_application_layer_does_not_import_frameworks_or_outer_entrypoints() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     src_root = repo_root / "src"
-    executor_root = src_root / "reflexor" / "executor"
+    application_root = src_root / "reflexor" / "application"
 
     forbidden_prefixes = {
-        # Frameworks / infra libraries should not leak into executor app-layer code.
+        # Framework/infra libraries should not leak into application services.
         "fastapi",
         "starlette",
         "sqlalchemy",
@@ -23,18 +23,22 @@ def test_executor_layer_does_not_import_frameworks_or_outer_entrypoints() -> Non
         "reflexor.cli",
         "reflexor.replay",
         "reflexor.worker",
-        # Executor should depend on ports, not infrastructure adapters.
+        # Infrastructure adapters.
         "reflexor.infra",
+        # Executor/worker loops are separate runtime boundaries.
+        "reflexor.executor",
+        # Concrete tool implementations should not be imported by application services.
+        "reflexor.tools.impl",
     }
 
     offenders = collect_forbidden_imports(
-        iter_python_files(executor_root),
+        iter_python_files(application_root),
         src_root=src_root,
         repo_root=repo_root,
         forbidden_prefixes=forbidden_prefixes,
     )
 
     assert not offenders, (
-        "Forbidden imports detected in `reflexor.executor` (Clean Architecture violation). "
+        "Forbidden imports detected in `reflexor.application` (Clean Architecture violation). "
         f"Offenders (file -> imports): {offenders}"
     )

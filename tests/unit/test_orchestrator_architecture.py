@@ -28,6 +28,7 @@ def test_orchestrator_layer_does_not_import_frameworks_or_outer_layers() -> None
         "redis",
         # Outer entrypoints / process boundaries.
         "reflexor.api",
+        "reflexor.bootstrap",
         "reflexor.cli",
         "reflexor.executor",
         "reflexor.replay",
