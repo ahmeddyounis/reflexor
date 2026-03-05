@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
-import importlib.util
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol
 
 from reflexor.guards.rate_limit.key import RateLimitKey
 from reflexor.guards.rate_limit.limiter import RateLimiter, RateLimitResult
 from reflexor.guards.rate_limit.spec import RateLimitSpec
+from reflexor.infra.redis import RedisEvalClient, import_redis_asyncio
 
 _TOKENS_FIELD = "tokens"
 _LAST_REFILL_MS_FIELD = "last_refill_ms"
@@ -69,16 +67,6 @@ return {{allowed, retry_after_ms}}
 """
 
 
-def _import_redis_asyncio() -> Any:
-    if importlib.util.find_spec("redis") is None:
-        raise RuntimeError(
-            "Missing optional dependency redis.\n"
-            "- If working from the repo: pip install -e '.[redis]'\n"
-            "- If installing the package: pip install 'reflexor[redis]'"
-        )
-    return importlib.import_module("redis.asyncio")
-
-
 def _canonical_key_json(key: RateLimitKey) -> str:
     payload: dict[str, str] = {}
     if key.scope is not None:
@@ -124,12 +112,6 @@ class RedisRateLimiterConfig:
         object.__setattr__(self, "ttl_s", ttl_s)
 
 
-class RedisClient(Protocol):
-    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> Any: ...
-
-    async def aclose(self, *, close_connection_pool: bool = ...) -> None: ...
-
-
 class RedisRateLimiter(RateLimiter):
     """Distributed RateLimiter backed by Redis (atomic consume via Lua)."""
 
@@ -137,11 +119,11 @@ class RedisRateLimiter(RateLimiter):
         self,
         *,
         config: RedisRateLimiterConfig,
-        client: RedisClient | None = None,
+        client: RedisEvalClient | None = None,
     ) -> None:
         self._config = config
         if client is None:
-            redis_asyncio = _import_redis_asyncio()
+            redis_asyncio = import_redis_asyncio()
             self._redis = redis_asyncio.Redis.from_url(
                 config.redis_url,
                 decode_responses=True,

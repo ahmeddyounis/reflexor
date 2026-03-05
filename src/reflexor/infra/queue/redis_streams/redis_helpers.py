@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import importlib
-import importlib.util
 from typing import Any
+
+from reflexor.infra.redis import import_redis_asyncio
 
 
 def _is_unknown_command_error(exc: Exception, *, command: str) -> bool:
@@ -12,13 +12,7 @@ def _is_unknown_command_error(exc: Exception, *, command: str) -> bool:
 
 
 def _import_redis_asyncio() -> Any:
-    if importlib.util.find_spec("redis") is None:
-        raise RuntimeError(
-            "Missing optional dependency redis.\n"
-            "- If working from the repo: pip install -e '.[redis]'\n"
-            "- If installing the package: pip install 'reflexor[redis]'"
-        )
-    return importlib.import_module("redis.asyncio")
+    return import_redis_asyncio()
 
 
 def _extract_stream_entries(response: Any) -> list[tuple[str, dict[str, str]]]:
