@@ -1,8 +1,10 @@
 # Reflexor
 
-Reflexor is an early-stage Python package intended for building *safe*, policy-controlled agent
-workflows (reflex → plan → execute). It currently provides core contracts and safety primitives;
-end-to-end orchestration is still evolving.
+Reflexor is a safe-by-default runtime for policy-controlled workflows (reflex → plan → execute).
+It provides typed domain contracts, a tool registry/runner boundary, and a policy + approvals
+enforcement layer, with API/worker/CLI entrypoints.
+
+Current release: **1.0.0** (see [CHANGELOG.md](CHANGELOG.md)).
 
 ## What it is / is not
 
@@ -10,16 +12,20 @@ end-to-end orchestration is still evolving.
 
 - A Python 3.11+ codebase with a clean `src/` layout and reproducible dev tooling.
 - Typed domain contracts (Pydantic v2) for events, tool calls, tasks, approvals, and run packets.
+- An API + worker runtime with persistence (SQLite/Postgres) and queue backends (in-memory/Redis
+  Streams).
 - Safety primitives: deny-by-default scopes, allowlist validation, redaction/truncation, correlation
   IDs.
 - Tool boundary contracts + registry/runner and a policy/approval enforcement layer.
+- Optional execution hardening controls (rate limiting, circuit breaker delays, event suppression,
+  sandboxed tool execution).
 
 **Reflexor is not (yet):**
 
-- A finished agent framework or a stable API.
+- A batteries-included “agent framework” (bring your own planners, reflex rules, and tools).
 - A hosted service or production-ready automation system.
 
-## Key concepts (planned)
+## Key concepts
 
 - **Reflex**: a small, focused decision unit (given state/context, decide what to do next).
 - **Planner**: turns goals into an ordered set of steps.
@@ -33,6 +39,7 @@ Reflexor ships with safe-by-default runtime configuration in `reflexor.config.Re
 
 - **Dry-run by default**: `REFLEXOR_DRY_RUN` defaults to `true`.
 - **Deny-by-default scopes**: `REFLEXOR_ENABLED_SCOPES` defaults to empty (`[]`).
+- **Tool plugin discovery is opt-in**: `REFLEXOR_ENABLE_TOOL_ENTRYPOINTS` defaults to `false`.
 - **Allowlist normalization**: domains/targets are trimmed and normalized; wildcards and IP literals are
   rejected by default.
 - **Workspace root**: `REFLEXOR_WORKSPACE_ROOT` is normalized to an absolute path; relative paths are
@@ -69,9 +76,10 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 
 - [Configuration & Profiles](docs/configuration.md)
 - [Upgrade to v1.0](docs/upgrade_to_v1.md)
+- [Architecture](docs/architecture.md)
 - [API](docs/api.md)
 - [CLI](docs/cli.md)
-- [Production Deployment (v0.2)](docs/production_v0.2.md)
+- [Production Deployment (Postgres + Redis Streams)](docs/production_v0.2.md)
 - [Threat Model](docs/threat_model.md)
 - [Hardening Checklist](docs/hardening_checklist.md)
 - [Observability](docs/observability.md)
@@ -90,8 +98,14 @@ Using `make`:
 
 ```sh
 make venv
-make ci
+make db-upgrade
 source .venv/bin/activate
+```
+
+Run CI checks:
+
+```sh
+make ci
 ```
 
 Run the API locally:
@@ -116,7 +130,11 @@ reflexor --api-url http://localhost:8000 runs list
 reflexor --api-url http://localhost:8000 tasks list
 ```
 
-Start the worker (dev wrapper):
+To execute queued tasks, run a worker against a **shared** queue backend (e.g. Redis Streams). The
+default `inmemory` queue backend is **single-process only** (API and worker in separate processes
+will not share the queue). For an end-to-end local stack, use Docker Compose below.
+
+Start the worker (dev wrapper, when using `REFLEXOR_QUEUE_BACKEND=redis_streams`):
 
 ```sh
 reflexor run worker --concurrency 1
@@ -128,11 +146,6 @@ Approvals (when required by policy):
 reflexor --api-url http://localhost:8000 approvals list --pending-only
 reflexor --api-url http://localhost:8000 approvals approve <approval_id>
 ```
-
-Important: the default queue backend is `inmemory`, which is **single-process only**. Running the
-API and a worker in separate processes will not share the queue. For multi-process deployments,
-use `REFLEXOR_QUEUE_BACKEND=redis_streams` (see `docs/production_v0.2.md` and
-`docker/docker-compose.yml`).
 
 For an end-to-end offline demo (including an approval-required execution path), run:
 
@@ -147,10 +160,11 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[dev]"
+python scripts/db_upgrade.py
 pytest
 ```
 
-## Production Quickstart (v0.2)
+## Production-shaped Quickstart (Docker Compose)
 
 For a production-shaped local stack (API + worker + Postgres + Redis Streams):
 
