@@ -14,7 +14,8 @@ Reflexor currently wires the worker/executor primarily in tests. A dev convenien
 Code:
 
 - Worker loop: `src/reflexor/worker/runner.py`
-- Executor pipeline: `src/reflexor/executor/service/core.py` (types: `src/reflexor/executor/service/types.py`)
+- Executor pipeline: `src/reflexor/executor/service/core.py` (helpers: `cache.py`, `loading.py`,
+  `persistence.py`, `circuit_breaker.py`; types: `src/reflexor/executor/service/types.py`)
 - Retry classification/backoff: `src/reflexor/executor/retries.py`
 - Idempotency ledger port: `src/reflexor/storage/idempotency.py` (shim: `src/reflexor/executor/idempotency.py`)
 - Policy enforcement boundary: `src/reflexor/security/policy/enforcement/runner.py` (shim:

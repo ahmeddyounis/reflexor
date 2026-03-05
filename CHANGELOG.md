@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI client implementations split into modules under `reflexor.cli.client` (public API preserved).
 - Orchestrator engine internals split into helper modules under `reflexor.orchestrator.engine`
   (public API preserved).
+- Tool execution backends split into modules under `reflexor.tools.execution_backend` (public API
+  preserved).
+- Run repo summary query helpers extracted under `reflexor.infra.db.repos.runs` (public API
+  preserved).
 
 ### Deprecated
 

@@ -164,6 +164,17 @@ When tools are executed through `reflexor.tools.runner.ToolRunner`, tool output 
 - Sensitive fields and token-like strings are redacted (replacement `<redacted>`).
 - Oversized outputs are truncated deterministically (marker `<truncated>`).
 
+## Execution backends
+
+`ToolRunner` can be wired with different execution backends (`ToolExecutionBackend`):
+
+- In-process: `reflexor.tools.execution_backend.InProcessBackend`
+- Subprocess sandbox (best-effort isolation): `reflexor.tools.execution_backend.SubprocessSandboxBackend`
+
+The subprocess backend runs tools via `reflexor.tools.sandbox_runner` using a JSON stdin/stdout
+protocol, with conservative defaults (empty env unless allowlisted, cwd set to `workspace_root`,
+and strict timeouts).
+
 ## Running tools
 
 Tools are registered explicitly:
