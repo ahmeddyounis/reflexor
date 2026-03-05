@@ -8,7 +8,7 @@ enqueues work for a future executor/worker.
 
 ## Responsibilities
 
-**`OrchestratorEngine`** (`src/reflexor/orchestrator/engine.py`) is responsible for:
+**`OrchestratorEngine`** (`src/reflexor/orchestrator/engine/core.py`) is responsible for:
 
 - Routing incoming `Event` objects through a `ReflexRouter` (fast reflex decisions).
 - Running planning cycles through a `Planner` (slower, batchable decisions).

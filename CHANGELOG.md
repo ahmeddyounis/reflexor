@@ -24,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delegating to it).
 - `AppContainer` fields grouped into resource/policy/service structs (public API preserved via
   properties).
-- `ReflexorSettings` implementation split into modules under `reflexor.config.settings` (public API
-  preserved).
+- `ReflexorSettings` implementation split into modules under `reflexor.config.settings.model`
+  (public API preserved).
 - Internal code now uses `ReflexorMetrics` consistently (with `reflexor.api.metrics` remaining as a
   shim).
 - Tests/examples now prefer importing `AppContainer` from `reflexor.bootstrap.container`.
@@ -44,7 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reflexor.infra.queue.redis_streams` (public API preserved).
 - Policy enforcement implementation split into modules under `reflexor.security.policy.enforcement`
   (public API preserved).
+- Replay runner internals split into helper modules under `reflexor.replay.runner` (public API
+  preserved).
 - CLI client implementations split into modules under `reflexor.cli.client` (public API preserved).
+- Orchestrator engine internals split into helper modules under `reflexor.orchestrator.engine`
+  (public API preserved).
 
 ### Deprecated
 
