@@ -183,7 +183,7 @@ Tools are registered explicitly:
 from pathlib import Path
 
 from reflexor.config import ReflexorSettings
-from reflexor.tools.http_tool import HttpTool
+from reflexor.tools.impl.http import HttpTool
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolContext
@@ -254,7 +254,7 @@ Module: `reflexor.tools.impl.echo.EchoTool`
 
 ### `net.http`
 
-Module: `reflexor.tools.http_tool.HttpTool`
+Module: `reflexor.tools.impl.http.HttpTool` (shim: `reflexor.tools.http_tool.HttpTool`)
 
 MVP supports `GET` and `POST`.
 
@@ -276,7 +276,7 @@ Result (shape):
 
 ### `fs.read_text`
 
-Module: `reflexor.tools.fs_tool.FsReadTextTool`
+Module: `reflexor.tools.impl.fs.FsReadTextTool` (shim: `reflexor.tools.fs_tool.FsReadTextTool`)
 
 Args:
 
@@ -290,7 +290,7 @@ Result (shape):
 
 ### `fs.write_text` (atomic)
 
-Module: `reflexor.tools.fs_tool.FsWriteTextTool`
+Module: `reflexor.tools.impl.fs.FsWriteTextTool` (shim: `reflexor.tools.fs_tool.FsWriteTextTool`)
 
 Args:
 
@@ -308,7 +308,7 @@ Result (shape):
 
 ### `fs.list_dir`
 
-Module: `reflexor.tools.fs_tool.FsListDirTool`
+Module: `reflexor.tools.impl.fs.FsListDirTool` (shim: `reflexor.tools.fs_tool.FsListDirTool`)
 
 Args:
 
@@ -322,7 +322,7 @@ Result (shape):
 
 ### `webhook.emit`
 
-Module: `reflexor.tools.webhook_tool.WebhookEmitTool`
+Module: `reflexor.tools.impl.webhook.WebhookEmitTool` (shim: `reflexor.tools.webhook_tool.WebhookEmitTool`)
 
 Args (selected):
 
