@@ -6,18 +6,18 @@ import time
 from collections.abc import Callable
 
 from reflexor.config import ReflexorSettings
+from reflexor.infra.queue.redis_streams.claiming import try_claim_expired
 from reflexor.infra.queue.redis_streams.codec import (
     _FIELD_ENVELOPE,
     _canonical_envelope_json,
-    _decode_envelope,
 )
-from reflexor.infra.queue.redis_streams.lua import _ACK_AND_REQUEUE_LUA, _PROMOTE_DELAYED_LUA
+from reflexor.infra.queue.redis_streams.delayed import promote_delayed
+from reflexor.infra.queue.redis_streams.depth import queue_depth
+from reflexor.infra.queue.redis_streams.leasing import lease_from_entry
+from reflexor.infra.queue.redis_streams.lua import _ACK_AND_REQUEUE_LUA
 from reflexor.infra.queue.redis_streams.redis_helpers import (
-    _extract_autoclaim_response,
     _extract_stream_entries,
-    _extract_times_delivered,
     _import_redis_asyncio,
-    _is_unknown_command_error,
 )
 from reflexor.orchestrator.queue import Lease, QueueClosed, TaskEnvelope
 from reflexor.orchestrator.queue.interface import system_now_ms
@@ -199,50 +199,6 @@ class RedisStreamsQueue:
             return False
         return True
 
-    async def _promote_delayed(self, *, now_ms: int) -> None:
-        maxlen = "" if self._stream_maxlen is None else str(int(self._stream_maxlen))
-        await self._redis.eval(
-            _PROMOTE_DELAYED_LUA,
-            2,
-            self._delayed_zset_key,
-            self._stream_key,
-            str(int(now_ms)),
-            str(int(self._promote_batch_size)),
-            _FIELD_ENVELOPE,
-            maxlen,
-        )
-
-    async def _queue_depth(self) -> int:
-        try:
-            groups = await self._redis.xinfo_groups(self._stream_key)
-        except Exception:
-            groups = []
-
-        pending = 0
-        lag = 0
-        for group in groups or []:
-            if not isinstance(group, dict):
-                continue
-            name = group.get("name")
-            if name != self._group:
-                continue
-            try:
-                pending = int(group.get("pending") or 0)
-            except (TypeError, ValueError):
-                pending = 0
-            raw_lag = group.get("lag")
-            if raw_lag is None:
-                lag = 0
-            else:
-                try:
-                    lag = int(raw_lag)
-                except (TypeError, ValueError):
-                    lag = 0
-            break
-
-        delayed = int(await self._redis.zcard(self._delayed_zset_key))
-        return int(pending + lag + delayed)
-
     async def enqueue(self, envelope: TaskEnvelope) -> None:
         if self._closed:
             raise QueueClosed("queue is closed")
@@ -265,7 +221,7 @@ class RedisStreamsQueue:
                 approximate=True,
             )
 
-        depth = await self._queue_depth()
+        depth = await queue_depth(self)
         self._observer.on_enqueue(
             QueueEnqueueObservation(
                 envelope=envelope,
@@ -273,146 +229,6 @@ class RedisStreamsQueue:
                 now_ms=now_ms,
                 queue_depth=depth,
             )
-        )
-
-    async def _try_claim_expired(
-        self,
-        *,
-        claim_idle_ms: int,
-    ) -> tuple[str, dict[str, str]] | None:
-        try:
-            return self._claimed_buffer.get_nowait()
-        except asyncio.QueueEmpty:
-            pass
-
-        async with self._autoclaim_lock:
-            try:
-                return self._claimed_buffer.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-
-            if self._autoclaim_supported is not False:
-                try:
-                    response = await self._redis.xautoclaim(
-                        self._stream_key,
-                        self._group,
-                        self._consumer,
-                        min_idle_time=int(claim_idle_ms),
-                        start_id=self._autoclaim_start_id,
-                        count=int(self._claim_batch_size),
-                        justid=False,
-                    )
-                except Exception as exc:
-                    if _is_unknown_command_error(exc, command="XAUTOCLAIM"):
-                        self._autoclaim_supported = False
-                    else:
-                        raise
-                else:
-                    self._autoclaim_supported = True
-                    next_start, entries = _extract_autoclaim_response(response)
-                    self._autoclaim_start_id = next_start
-                    for entry in entries:
-                        self._claimed_buffer.put_nowait(entry)
-
-            if self._claimed_buffer.empty() and self._autoclaim_supported is False:
-                await self._try_claim_expired_fallback(claim_idle_ms=int(claim_idle_ms))
-
-        try:
-            return self._claimed_buffer.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
-
-    async def _try_claim_expired_fallback(self, *, claim_idle_ms: int) -> None:
-        pending = await self._redis.execute_command(
-            "XPENDING",
-            self._stream_key,
-            self._group,
-            "-",
-            "+",
-            int(self._claim_batch_size),
-        )
-
-        candidate_ids: list[str] = []
-        for entry in pending or []:
-            if not isinstance(entry, (list, tuple)) or len(entry) < 3:
-                continue
-            message_id = entry[0]
-            idle_ms = entry[2]
-            try:
-                if int(idle_ms) < int(claim_idle_ms):
-                    continue
-            except (TypeError, ValueError):
-                continue
-            candidate_ids.append(message_id if isinstance(message_id, str) else str(message_id))
-
-        if not candidate_ids:
-            return
-
-        claimed = await self._redis.execute_command(
-            "XCLAIM",
-            self._stream_key,
-            self._group,
-            self._consumer,
-            int(claim_idle_ms),
-            *candidate_ids,
-        )
-
-        for item in claimed or []:
-            if not isinstance(item, (list, tuple)) or len(item) != 2:
-                continue
-
-            raw_id, raw_fields = item
-            message_id = raw_id if isinstance(raw_id, str) else str(raw_id)
-
-            fields: dict[str, str] = {}
-            if isinstance(raw_fields, dict):
-                for key, value in raw_fields.items():
-                    fields[key if isinstance(key, str) else str(key)] = (
-                        value if isinstance(value, str) else str(value)
-                    )
-            elif isinstance(raw_fields, (list, tuple)):
-                for i in range(0, len(raw_fields), 2):
-                    if i + 1 >= len(raw_fields):
-                        break
-                    key = raw_fields[i]
-                    value = raw_fields[i + 1]
-                    fields[key if isinstance(key, str) else str(key)] = (
-                        value if isinstance(value, str) else str(value)
-                    )
-
-            self._claimed_buffer.put_nowait((message_id, fields))
-
-    async def _lease_from_entry(
-        self,
-        *,
-        message_id: str,
-        fields: dict[str, str],
-        leased_at_ms: int,
-        visibility_timeout_s: float,
-    ) -> Lease:
-        payload = fields.get(_FIELD_ENVELOPE)
-        if payload is None:
-            raise ValueError("missing envelope field in stream entry")
-
-        envelope = _decode_envelope(payload)
-
-        pending = await self._redis.xpending_range(
-            self._stream_key,
-            self._group,
-            min=message_id,
-            max=message_id,
-            count=1,
-        )
-        times_delivered = _extract_times_delivered(pending, default=1)
-        computed_attempt = int(envelope.attempt) + max(0, int(times_delivered) - 1)
-
-        leased_envelope = envelope.model_copy(update={"attempt": computed_attempt})
-        return Lease(
-            lease_id=message_id,
-            envelope=leased_envelope,
-            leased_at_ms=leased_at_ms,
-            visibility_timeout_s=float(visibility_timeout_s),
-            attempt=computed_attempt,
         )
 
     async def dequeue(
@@ -447,19 +263,20 @@ class RedisStreamsQueue:
 
         while True:
             now_ms = int(self._now_ms())
-            await self._promote_delayed(now_ms=now_ms)
+            await promote_delayed(self, now_ms=now_ms)
 
-            expired = await self._try_claim_expired(claim_idle_ms=claim_idle_ms)
+            expired = await try_claim_expired(self, claim_idle_ms=claim_idle_ms)
             if expired is not None:
                 message_id, fields = expired
-                lease = await self._lease_from_entry(
+                lease = await lease_from_entry(
+                    self,
                     message_id=message_id,
                     fields=fields,
                     leased_at_ms=now_ms,
                     visibility_timeout_s=visibility_timeout_s,
                 )
 
-                depth = await self._queue_depth()
+                depth = await queue_depth(self)
                 self._observer.on_redeliver(
                     QueueRedeliverObservation(
                         envelope=lease.envelope,
@@ -493,7 +310,7 @@ class RedisStreamsQueue:
                     remaining_s = min(remaining_s, block_step_s)
 
                 if remaining_s <= 0:
-                    depth = await self._queue_depth()
+                    depth = await queue_depth(self)
                     self._observer.on_dequeue(
                         QueueDequeueObservation(
                             lease=None, correlation_ids=None, now_ms=now_ms, queue_depth=depth
@@ -514,7 +331,7 @@ class RedisStreamsQueue:
             entries = _extract_stream_entries(response)
             if not entries:
                 if wait_s is not None and float(wait_s) == 0.0:
-                    depth = await self._queue_depth()
+                    depth = await queue_depth(self)
                     self._observer.on_dequeue(
                         QueueDequeueObservation(
                             lease=None, correlation_ids=None, now_ms=now_ms, queue_depth=depth
@@ -524,7 +341,8 @@ class RedisStreamsQueue:
                 continue
 
             message_id, fields = entries[0]
-            lease = await self._lease_from_entry(
+            lease = await lease_from_entry(
+                self,
                 message_id=message_id,
                 fields=fields,
                 leased_at_ms=now_ms,
@@ -550,7 +368,7 @@ class RedisStreamsQueue:
                 )
                 continue
 
-            depth = await self._queue_depth()
+            depth = await queue_depth(self)
             self._observer.on_dequeue(
                 QueueDequeueObservation(
                     lease=lease,
@@ -572,7 +390,7 @@ class RedisStreamsQueue:
             return
 
         now_ms = int(self._now_ms())
-        depth = await self._queue_depth()
+        depth = await queue_depth(self)
         self._observer.on_ack(
             QueueAckObservation(
                 lease=lease,
@@ -623,7 +441,7 @@ class RedisStreamsQueue:
             maxlen,
         )
 
-        depth = await self._queue_depth()
+        depth = await queue_depth(self)
         self._observer.on_nack(
             QueueNackObservation(
                 lease=lease,
