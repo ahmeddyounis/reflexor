@@ -15,27 +15,17 @@ import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from reflexor.application.approvals_service import ApprovalCommandService
-from reflexor.application.services import (
-    ApprovalsService,
-    EventSubmissionService,
-    QueryService,
-    RunQueryService,
-    TaskQueryService,
-)
-from reflexor.application.suppressions_service import (
-    EventSuppressionCommandService,
-    EventSuppressionQueryService,
-)
 from reflexor.bootstrap.executor import build_executor_service
 from reflexor.bootstrap.orchestrator import build_orchestrator_engine
 from reflexor.bootstrap.policy import build_policy_gate, build_policy_runner
 from reflexor.bootstrap.queue import build_queue
 from reflexor.bootstrap.repos import RepoProviders, build_repo_providers
+from reflexor.bootstrap.services import AppServices, build_app_services
 from reflexor.bootstrap.tools import build_tool_runner
 from reflexor.bootstrap.uow import build_uow_factory
 from reflexor.config import ReflexorSettings, get_settings
@@ -62,6 +52,63 @@ from reflexor.tools.runner import ToolRunner
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from reflexor.application.approvals_service import ApprovalCommandService
+    from reflexor.application.services import (
+        ApprovalsService,
+        EventSubmissionService,
+        QueryService,
+        RunQueryService,
+        TaskQueryService,
+    )
+    from reflexor.application.suppressions_service import (
+        EventSuppressionCommandService,
+        EventSuppressionQueryService,
+    )
+
+
+def _engine_from_session_factory(session_factory: AsyncSessionFactory) -> AsyncEngine | None:
+    """Best-effort extraction of an engine from an async_sessionmaker."""
+
+    kw = getattr(session_factory, "kw", None)
+    if not isinstance(kw, dict):
+        return None
+
+    bind = kw.get("bind")
+    if isinstance(bind, AsyncEngine):
+        return bind
+
+    return None
+
+
+def _resolve_engine_and_session_factory(
+    *,
+    settings: ReflexorSettings,
+    engine: AsyncEngine | None,
+    session_factory: AsyncSessionFactory | None,
+) -> tuple[AsyncEngine, AsyncSessionFactory, bool]:
+    if engine is not None:
+        if session_factory is not None:
+            bound_engine = _engine_from_session_factory(session_factory)
+            if bound_engine is not None and bound_engine is not engine:
+                raise ValueError("engine and session_factory must use the same AsyncEngine")
+
+        effective_session_factory = session_factory or create_async_session_factory(engine)
+        return engine, effective_session_factory, False
+
+    if session_factory is not None:
+        bound_engine = _engine_from_session_factory(session_factory)
+        if bound_engine is None:
+            raise ValueError(
+                "session_factory provided without engine, but its bound AsyncEngine could not "
+                "be determined"
+            )
+        return bound_engine, session_factory, False
+
+    effective_engine = create_async_engine(settings)
+    effective_session_factory = create_async_session_factory(effective_engine)
+    return effective_engine, effective_session_factory, True
+
 
 @dataclass(frozen=True, slots=True)
 class _AppResources:
@@ -82,18 +129,6 @@ class _AppPolicy:
     circuit_breaker: CircuitBreaker
 
 
-@dataclass(frozen=True, slots=True)
-class _AppServices:
-    submit_events: EventSubmissionService
-    approvals: ApprovalsService
-    approval_commands: ApprovalCommandService
-    queries: QueryService
-    run_queries: RunQueryService
-    task_queries: TaskQueryService
-    suppression_queries: EventSuppressionQueryService
-    suppression_commands: EventSuppressionCommandService
-
-
 @dataclass(slots=True)
 class AppContainer:
     """Application container stored on `app.state.container`."""
@@ -104,7 +139,7 @@ class AppContainer:
     repos: RepoProviders
     policy: _AppPolicy
     orchestrator_engine: OrchestratorEngine
-    services: _AppServices
+    services: AppServices
 
     @property
     def engine(self) -> AsyncEngine:
@@ -313,10 +348,12 @@ class AppContainer:
         effective_settings = get_settings() if settings is None else settings
         effective_metrics = ReflexorMetrics.build() if metrics is None else metrics
 
-        owns_engine = engine is None
-        effective_engine = engine or create_async_engine(effective_settings)
-        effective_session_factory = session_factory or create_async_session_factory(
-            effective_engine
+        effective_engine, effective_session_factory, owns_engine = (
+            _resolve_engine_and_session_factory(
+                settings=effective_settings,
+                engine=engine,
+                session_factory=session_factory,
+            )
         )
 
         uow_factory = build_uow_factory(effective_session_factory)
@@ -351,41 +388,11 @@ class AppContainer:
             run_sink=run_sink,
         )
 
-        submit_events = EventSubmissionService(
-            orchestrator=orchestrator_engine,
+        services = build_app_services(
+            orchestrator_engine=orchestrator_engine,
             uow_factory=uow_factory,
-            event_repo=repos.event_repo,
-            run_packet_repo=repos.run_packet_repo,
-        )
-        approvals = ApprovalsService(uow_factory=uow_factory, approval_repo=repos.approval_repo)
-        approval_commands = ApprovalCommandService(
-            uow_factory=uow_factory,
-            approval_repo=repos.approval_repo,
-            task_repo=repos.task_repo,
-            tool_call_repo=repos.tool_call_repo,
+            repos=repos,
             queue=effective_queue,
-            clock=orchestrator_engine.clock,
-        )
-        queries = QueryService(
-            uow_factory=uow_factory,
-            task_repo=repos.task_repo,
-            run_packet_repo=repos.run_packet_repo,
-        )
-        run_queries = RunQueryService(
-            uow_factory=uow_factory,
-            run_repo=repos.run_repo,
-            run_packet_repo=repos.run_packet_repo,
-        )
-        task_queries = TaskQueryService(uow_factory=uow_factory, task_repo=repos.task_repo)
-        suppression_queries = EventSuppressionQueryService(
-            uow_factory=uow_factory,
-            repo=repos.event_suppression_repo,
-            clock=orchestrator_engine.clock,
-        )
-        suppression_commands = EventSuppressionCommandService(
-            uow_factory=uow_factory,
-            repo=repos.event_suppression_repo,
-            clock=orchestrator_engine.clock,
         )
 
         resources = _AppResources(
@@ -402,16 +409,6 @@ class AppContainer:
             policy_gate=policy_gate,
             policy_runner=policy_runner,
             circuit_breaker=circuit_breaker,
-        )
-        services = _AppServices(
-            submit_events=submit_events,
-            approvals=approvals,
-            approval_commands=approval_commands,
-            queries=queries,
-            run_queries=run_queries,
-            task_queries=task_queries,
-            suppression_queries=suppression_queries,
-            suppression_commands=suppression_commands,
         )
 
         return cls(
