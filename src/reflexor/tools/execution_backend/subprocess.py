@@ -3,59 +3,23 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
+from reflexor.tools.execution_backend.env import _build_sandbox_env
+from reflexor.tools.execution_backend.protocol import (
+    _extract_sandbox_json,
+    _sandbox_settings_payload,
+    _SandboxRequest,
+    _SandboxResponse,
+    _SandboxToolContext,
+)
+from reflexor.tools.execution_backend.streams import _read_stream_limited, _StreamLimitExceeded
 from reflexor.tools.sdk import Tool, ToolContext, ToolResult
-
-_SANDBOX_RESPONSE_MARKER = b"REFLEXOR_SANDBOX_RESPONSE_V1\n"
-
-
-class ToolExecutionBackend(Protocol):
-    async def execute(
-        self,
-        *,
-        tool: Tool[BaseModel],
-        args: BaseModel,
-        ctx: ToolContext,
-        settings: ReflexorSettings,
-    ) -> ToolResult: ...
-
-
-@dataclass(frozen=True, slots=True)
-class InProcessBackend:
-    """Execute tools directly in the current Python process."""
-
-    async def execute(
-        self,
-        *,
-        tool: Tool[BaseModel],
-        args: BaseModel,
-        ctx: ToolContext,
-        settings: ReflexorSettings,
-    ) -> ToolResult:
-        _ = settings
-        try:
-            return await asyncio.wait_for(tool.run(args, ctx), timeout=ctx.timeout_s)
-        except TimeoutError:
-            return ToolResult(
-                ok=False,
-                error_code="TIMEOUT",
-                error_message=f"tool execution exceeded timeout_s={ctx.timeout_s}",
-            )
-        except Exception as exc:
-            return ToolResult(
-                ok=False,
-                error_code="TOOL_ERROR",
-                error_message=f"tool raised {type(exc).__name__}",
-                debug={"exception": repr(exc)},
-            )
 
 
 @dataclass(slots=True)
@@ -328,112 +292,3 @@ class SubprocessSandboxBackend:
             result = ToolResult.model_validate(payload)
 
         return result
-
-
-def _extract_sandbox_json(stdout_bytes: bytes) -> bytes | None:
-    idx = stdout_bytes.rfind(_SANDBOX_RESPONSE_MARKER)
-    if idx < 0:
-        return None
-    start = idx + len(_SANDBOX_RESPONSE_MARKER)
-    return stdout_bytes[start:].strip()
-
-
-def _sandbox_settings_payload(settings: ReflexorSettings) -> dict[str, object]:
-    # Keep this payload minimal: avoid leaking DB/redis credentials to the sandbox by default.
-    return {
-        "profile": settings.profile,
-        "dry_run": bool(settings.dry_run),
-        "allow_side_effects_in_prod": bool(settings.allow_side_effects_in_prod),
-        "allow_wildcards": bool(settings.allow_wildcards),
-        "enable_tool_entrypoints": bool(settings.enable_tool_entrypoints),
-        "allow_unsupported_tools": bool(settings.allow_unsupported_tools),
-        "trusted_tool_packages": list(settings.trusted_tool_packages),
-        "blocked_tool_packages": list(settings.blocked_tool_packages),
-        "enabled_scopes": list(settings.enabled_scopes),
-        "approval_required_scopes": list(settings.approval_required_scopes),
-        "http_allowed_domains": list(settings.http_allowed_domains),
-        "webhook_allowed_targets": list(settings.webhook_allowed_targets),
-        "workspace_root": str(settings.workspace_root),
-        "max_event_payload_bytes": int(settings.max_event_payload_bytes),
-        "max_tool_output_bytes": int(settings.max_tool_output_bytes),
-        "net_safety_resolve_dns": bool(settings.net_safety_resolve_dns),
-        "net_safety_dns_timeout_s": float(settings.net_safety_dns_timeout_s),
-    }
-
-
-def _build_sandbox_env(
-    *,
-    allowlist: Sequence[str],
-    extra_env: Mapping[str, str],
-) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for key in allowlist:
-        value = os.environ.get(key)
-        if value is not None:
-            env[key] = value
-    env.update({k: str(v) for k, v in extra_env.items()})
-    return env
-
-
-class _StreamLimitExceeded(RuntimeError):
-    def __init__(self, stream_name: str, *, limit_bytes: int) -> None:
-        super().__init__(f"{stream_name} exceeded limit_bytes={limit_bytes}")
-        self.stream_name = stream_name
-        self.limit_bytes = int(limit_bytes)
-
-
-async def _read_stream_limited(
-    stream: asyncio.StreamReader,
-    *,
-    limit_bytes: int,
-    stream_name: str,
-    chunk_size: int = 16_384,
-) -> bytes:
-    limit = int(limit_bytes)
-    if limit <= 0:
-        raise ValueError("limit_bytes must be > 0")
-
-    data = bytearray()
-    while True:
-        chunk = await stream.read(chunk_size)
-        if not chunk:
-            break
-        data.extend(chunk)
-        if len(data) > limit:
-            raise _StreamLimitExceeded(stream_name, limit_bytes=limit)
-    return bytes(data)
-
-
-class _SandboxToolContext(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    workspace_root: str
-    dry_run: bool = True
-    timeout_s: float
-    correlation_ids: dict[str, str | None] = Field(default_factory=dict)
-
-
-class _SandboxRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    protocol_version: int = 1
-    tool_name: str
-    args: dict[str, object]
-    ctx: _SandboxToolContext
-    settings: dict[str, object]
-    registry_factory: str | None = None
-    max_memory_mb: int | None = None
-
-
-class _SandboxResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    protocol_version: int = 1
-    tool_result: ToolResult
-
-
-__all__ = [
-    "InProcessBackend",
-    "SubprocessSandboxBackend",
-    "ToolExecutionBackend",
-]
