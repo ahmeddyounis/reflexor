@@ -42,6 +42,7 @@ These rules are enforced by tests (see `tests/unit/test_orchestrator_architectur
    - `fast_tasks`: validate + build domain `Task` / `ToolCall` models and enqueue them.
    - `needs_planning`: add the event to a backlog for planning.
    - `drop`: record the reflex decision and do nothing else.
+   - `flag`: record an auditable flagged-event decision without creating tasks.
 4. Emits a `RunPacket` containing the reflex decision, any built tasks, and any errors.
 
 The reflex path is intended to be fast and deterministic.
@@ -57,6 +58,9 @@ The reflex path is intended to be fast and deterministic.
 5. Removes the planned events from the backlog **only after** successful validation + queueing.
 6. Emits a `RunPacket` containing the plan summary, resulting tasks, and any validation/budget
    errors.
+
+Planner inputs include the triggering events, effective limits, canonical tool schemas, and recent
+memory summaries when configured.
 
 ## Trigger strategy (debounce + tick)
 
@@ -85,9 +89,19 @@ nothing for that run.
 The backlog is an internal `deque[Event]` protected by an async lock and drained only after
 successful planning.
 
+## Dependency semantics
+
+Planner-created task graphs are validated as DAGs.
+
+- `depends_on` references are declared by task **name** in planner output.
+- Validation resolves those names to persisted task IDs.
+- Only root tasks (`depends_on=[]`) are queued immediately.
+- Dependents remain `pending` until every prerequisite task succeeds.
+- If an upstream task fails permanently or is canceled/denied, blocked dependents are canceled.
+
 ## Reflex rule schema (RuleBasedReflexRouter)
 
-The rule-based router (`src/reflexor/orchestrator/reflex_rules.py`) evaluates an ordered list of
+The rule-based router (`src/reflexor/orchestrator/reflex_rules/`) evaluates an ordered list of
 rules and returns the first match.
 
 Each rule has:
@@ -102,6 +116,15 @@ Each rule has:
   - `{"kind": "fast_tool", "tool_name": "...", "args_template": {...}}`
   - `{"kind": "needs_planning"}`
   - `{"kind": "drop"}`
+  - `{"kind": "flag", "severity": "low|medium|high", "note_template": "...", "tags": [...]}`
+
+Rules can be loaded from either JSON or YAML (`.json`, `.yaml`, `.yml`).
+
+Optional classifier fallback:
+
+- deterministic rules always run first,
+- if no rule matches, `RuleBasedReflexRouter` can delegate to an injected constrained classifier,
+- classifier outputs must still be `ReflexDecision` objects (no direct tool execution).
 
 ### Safe templating (`args_template`)
 
@@ -137,6 +160,11 @@ Rules:
   }
 ]
 ```
+
+See also:
+
+- [Planning](planning.md)
+- [Example YAML rules](../examples/webhook_reflex_then_planning/reflex_rules.yaml)
 
 ## In-process example
 

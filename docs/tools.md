@@ -36,6 +36,22 @@ The tool boundary types live in `reflexor.tools.sdk`:
 - `default_timeout_s`: suggested execution timeout.
 - `max_output_bytes`: maximum tool output size (used by sanitation).
 - `tags`: optional taxonomy strings.
+- `input_schema`: optional manifest-level JSON Schema override.
+- `output_schema`: optional manifest-level JSON Schema override.
+
+If `input_schema` / `output_schema` are omitted, Reflexor derives canonical JSON Schemas from the
+tool `ArgsModel` and `ToolResult`.
+
+### Schema export
+
+`ToolRegistry.list_specs()` returns self-describing tool specs for planner prompts and external
+tooling.
+
+Each spec contains:
+
+- the manifest,
+- canonical `input_schema`,
+- canonical `output_schema`.
 
 ## SDK compatibility policy (plugins)
 

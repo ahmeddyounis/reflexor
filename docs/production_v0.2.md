@@ -13,7 +13,7 @@ For a one-command local stack that matches this shape, see `docker/docker-compos
 
 - **API**: FastAPI service that ingests events and enqueues tasks.
 - **Worker**: long-running queue consumer that executes tasks and persists outcomes.
-- **Postgres**: stores events, runs, tasks, tool calls, approvals, and run packets.
+- **Postgres**: stores events, runs, tasks, tool calls, approvals, run packets, and memory items.
 - **Redis**: stores queue state (streams + consumer groups + delayed ZSET).
 
 ## Safe defaults (do not disable lightly)
@@ -64,6 +64,18 @@ REFLEXOR_WORKSPACE_ROOT=/srv/reflexor/workspace
 # Without a reflex rule that produces "fast tasks" (or custom planner wiring),
 # events will not produce executable tasks.
 REFLEXOR_REFLEX_RULES_PATH=/etc/reflexor/reflex_rules.json
+
+# Planner (choose one backend)
+REFLEXOR_PLANNER_BACKEND=openai_compatible
+REFLEXOR_PLANNER_MODEL=gpt-4.1-mini
+REFLEXOR_PLANNER_API_KEY=<secret>
+REFLEXOR_PLANNER_BASE_URL=https://api.openai.com/v1
+REFLEXOR_PLANNER_MAX_MEMORY_ITEMS=5
+
+# Tracing (optional)
+REFLEXOR_OTEL_ENABLED=false
+REFLEXOR_OTEL_SERVICE_NAME=reflexor-api
+# REFLEXOR_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
 ```
 
 ## Migrations / schema management
@@ -173,4 +185,3 @@ To bound stream length, set:
 - Ensure each worker has a unique `REFLEXOR_REDIS_CONSUMER_NAME`.
 - Set `REFLEXOR_REDIS_STREAM_MAXLEN` if you need bounded Redis storage.
 - Use `/healthz` for readiness gates; use `docs/observability.md` for metrics/log context.
-

@@ -84,6 +84,8 @@ reflexor submit-event --type webhook --source demo --payload '{"hello":"world"}'
 
 ### Approvals (human-in-the-loop)
 
+The CLI is the primary built-in operator UI for approval workflows.
+
 - `reflexor approvals list [--pending-only] [--status <status>] [--run-id <run_id>] [--scope <scope>]`
 - `reflexor approvals approve <approval_id> [--decided-by <who>]`
 - `reflexor approvals deny <approval_id> [--decided-by <who>]`

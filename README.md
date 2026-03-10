@@ -17,12 +17,15 @@ Current release: **1.0.0** (see [CHANGELOG.md](CHANGELOG.md)).
 - Safety primitives: deny-by-default scopes, allowlist validation, redaction/truncation, correlation
   IDs.
 - Tool boundary contracts + registry/runner and a policy/approval enforcement layer.
+- Structured planning with heuristic and OpenAI-compatible backends, plus persisted planning memory.
+- Optional OpenTelemetry tracing hooks with queue propagation.
 - Optional execution hardening controls (rate limiting, circuit breaker delays, event suppression,
   sandboxed tool execution).
 
 **Reflexor is not (yet):**
 
-- A batteries-included “agent framework” (bring your own planners, reflex rules, and tools).
+- A free-form autonomous agent runtime; planning is constrained to structured plans and explicit
+  tool schemas.
 - A hosted service or production-ready automation system.
 
 ## Key concepts
@@ -75,6 +78,8 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 ## Operator docs
 
 - [Configuration & Profiles](docs/configuration.md)
+- [Planning](docs/planning.md)
+- [Memory](docs/memory.md)
 - [Upgrade to v1.0](docs/upgrade_to_v1.md)
 - [Architecture](docs/architecture.md)
 - [API](docs/api.md)
@@ -88,6 +93,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [Tools](docs/tools.md)
 - [Queue](docs/queue.md)
 - [Storage & Migrations](docs/storage.md)
+- [PRD Traceability](docs/prd_traceability.md)
 - [Security: Redaction & Truncation](docs/security_redaction.md)
 - [Examples](examples/README.md)
 - [Benchmark Script](scripts/benchmark_event_to_enqueue.py)
@@ -191,10 +197,6 @@ Docs:
 
 - `docs/production_v0.2.md`
 - `docker/README.md`
-
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md).
 
 ## Project files
 

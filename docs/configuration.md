@@ -56,6 +56,13 @@ Tool discovery via Python entry points is disabled by default.
 - `dev` (default)
 - `prod`
 
+## Reflex routing
+
+- `REFLEXOR_REFLEX_RULES_PATH` (default unset)
+  - Optional path to reflex rules.
+  - Supports `.json`, `.yaml`, and `.yml`.
+  - When unset, the default router falls back to `needs_planning`.
+
 ## API authentication (admin)
 
 The API supports a lightweight admin API key check for "admin" endpoints (runs, tasks, approvals).
@@ -233,6 +240,24 @@ These settings shape worker/executor behavior (concurrency, leasing, and retry b
 
 These values shape how often the planner runs and how much work a single run can admit.
 
+Planner backend:
+
+- `REFLEXOR_PLANNER_BACKEND` (default `noop`)
+  - Supported values: `noop` | `heuristic` | `openai_compatible`.
+- `REFLEXOR_PLANNER_MODEL` (default unset)
+  - Required when `planner_backend=openai_compatible`.
+- `REFLEXOR_PLANNER_API_KEY` (default unset)
+  - Optional bearer token for the OpenAI-compatible planner backend.
+- `REFLEXOR_PLANNER_BASE_URL` (default `https://api.openai.com/v1`)
+  - Normalized by trimming trailing `/`.
+- `REFLEXOR_PLANNER_TIMEOUT_S` (default `30`)
+- `REFLEXOR_PLANNER_TEMPERATURE` (default `0`)
+  - Must be in `[0, 2]`.
+- `REFLEXOR_PLANNER_SYSTEM_PROMPT` (default unset)
+  - Optional override for the planner system prompt.
+- `REFLEXOR_PLANNER_MAX_MEMORY_ITEMS` (default `5`)
+  - Maximum number of memory summaries injected into a planning call.
+
 Planner cadence:
 
 - `REFLEXOR_PLANNER_INTERVAL_S` (default `60`)
@@ -257,6 +282,21 @@ Note: In `prod`, be cautious with very small planner cadence values (e.g., sub-s
 which can cause excessive churn/cost. Validation enforces positivity but does not currently block
 "extreme" cadences.
 
+## Tracing
+
+Tracing is optional and requires the OTel extra if you want live exporters:
+
+```sh
+pip install -e ".[otel]"
+```
+
+Settings:
+
+- `REFLEXOR_OTEL_ENABLED` (default `false`)
+- `REFLEXOR_OTEL_SERVICE_NAME` (default `reflexor`)
+- `REFLEXOR_OTEL_EXPORTER_OTLP_ENDPOINT` (default unset)
+- `REFLEXOR_OTEL_CONSOLE_EXPORTER` (default `false`)
+
 ## Settings reference
 
 | Setting | Env var | Type | Default |
@@ -267,6 +307,7 @@ which can cause excessive churn/cost. Validation enforces positivity but does no
 | `allow_wildcards` | `REFLEXOR_ALLOW_WILDCARDS` | bool | `false` |
 | `admin_api_key` | `REFLEXOR_ADMIN_API_KEY` | str? | unset |
 | `events_require_admin` | `REFLEXOR_EVENTS_REQUIRE_ADMIN` | bool | `false` |
+| `reflex_rules_path` | `REFLEXOR_REFLEX_RULES_PATH` | path? | unset |
 | `enabled_scopes` | `REFLEXOR_ENABLED_SCOPES` | list[str] | `[]` |
 | `approval_required_scopes` | `REFLEXOR_APPROVAL_REQUIRED_SCOPES` | list[str] | `[]` |
 | `http_allowed_domains` | `REFLEXOR_HTTP_ALLOWED_DOMAINS` | list[str] | `[]` |
@@ -298,10 +339,22 @@ which can cause excessive churn/cost. Validation enforces positivity but does no
 | `executor_retry_base_delay_s` | `REFLEXOR_EXECUTOR_RETRY_BASE_DELAY_S` | float | `1` |
 | `executor_retry_max_delay_s` | `REFLEXOR_EXECUTOR_RETRY_MAX_DELAY_S` | float | `60` |
 | `executor_retry_jitter` | `REFLEXOR_EXECUTOR_RETRY_JITTER` | float | `0` |
+| `planner_backend` | `REFLEXOR_PLANNER_BACKEND` | `noop` \| `heuristic` \| `openai_compatible` | `noop` |
+| `planner_model` | `REFLEXOR_PLANNER_MODEL` | str? | unset |
+| `planner_api_key` | `REFLEXOR_PLANNER_API_KEY` | str? | unset |
+| `planner_base_url` | `REFLEXOR_PLANNER_BASE_URL` | str | `https://api.openai.com/v1` |
+| `planner_timeout_s` | `REFLEXOR_PLANNER_TIMEOUT_S` | float | `30` |
+| `planner_temperature` | `REFLEXOR_PLANNER_TEMPERATURE` | float | `0` |
+| `planner_system_prompt` | `REFLEXOR_PLANNER_SYSTEM_PROMPT` | str? | unset |
+| `planner_max_memory_items` | `REFLEXOR_PLANNER_MAX_MEMORY_ITEMS` | int | `5` |
 | `planner_interval_s` | `REFLEXOR_PLANNER_INTERVAL_S` | float | `60` |
 | `planner_debounce_s` | `REFLEXOR_PLANNER_DEBOUNCE_S` | float | `2` |
 | `event_backlog_max` | `REFLEXOR_EVENT_BACKLOG_MAX` | int | `200` |
 | `max_events_per_planning_cycle` | `REFLEXOR_MAX_EVENTS_PER_PLANNING_CYCLE` | int | `50` |
+| `otel_enabled` | `REFLEXOR_OTEL_ENABLED` | bool | `false` |
+| `otel_service_name` | `REFLEXOR_OTEL_SERVICE_NAME` | str | `reflexor` |
+| `otel_exporter_otlp_endpoint` | `REFLEXOR_OTEL_EXPORTER_OTLP_ENDPOINT` | str? | unset |
+| `otel_console_exporter` | `REFLEXOR_OTEL_CONSOLE_EXPORTER` | bool | `false` |
 | `max_tasks_per_run` | `REFLEXOR_MAX_TASKS_PER_RUN` | int | `50` |
 | `max_tool_calls_per_run` | `REFLEXOR_MAX_TOOL_CALLS_PER_RUN` | int | `50` |
 | `max_run_wall_time_s` | `REFLEXOR_MAX_RUN_WALL_TIME_S` | float | `30` |

@@ -108,6 +108,9 @@ curl -X POST http://localhost:8000/v1/events \\
 Approvals are created by the worker/executor when a queued tool call is evaluated by policy and
 requires human approval.
 
+Reflexor ships a CLI/API-first approval UX. There is no bundled standalone approval web UI; the
+documented admin endpoints below are the supported operator surface.
+
 - `GET /v1/approvals` (or `/approvals`)
   - Query params: `limit`, `offset`, optional `status`, optional `run_id`
 - `GET /v1/approvals/pending`

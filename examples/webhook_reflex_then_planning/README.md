@@ -35,4 +35,8 @@ Optional: export a run packet for sharing/replay:
 ## Files
 
 - `reflex_rules.json` contains the reflex rules used by the script.
+- `reflex_rules.yaml` contains the same rules in YAML form.
 - `reflexor.db` is created locally when you run the script (ignored by git).
+
+To exercise the planning path, send or adapt an event payload with planner hints such as
+`planner_tasks` and `depends_on` so the heuristic planner emits a multi-step DAG.

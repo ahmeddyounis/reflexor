@@ -1,7 +1,7 @@
 # Storage (SQLite/Postgres) & Migrations
 
-Reflexor persists **audit/replay artifacts** (run packets) and **execution state** (runs, tasks,
-tool calls, approvals) via SQLAlchemy async.
+Reflexor persists **audit/replay artifacts** (run packets), **planning memory** (`memory_items`),
+and **execution state** (runs, tasks, tool calls, approvals) via SQLAlchemy async.
 
 - Default (dev): SQLite (`sqlite+aiosqlite://...`)
 - Optional (prod): Postgres (`postgresql+asyncpg://...`)
@@ -88,10 +88,28 @@ Sanitized audit/replay envelope JSON for a run.
 - Key-based + regex-based redaction (e.g., Authorization/Bearer tokens)
 - Deterministic truncation with `<truncated>` markers to enforce size limits
 
+### `memory_items`
+
+Structured planning memory derived from sanitized run packets.
+
+- Primary key: `memory_id` (UUID string)
+- Foreign keys:
+  - `run_id` → `runs.run_id` (unique)
+  - `event_id` (nullable) → `events.event_id`
+- Key fields: `kind`, `event_type`, `event_source`, `summary`, `content` (JSON), `tags` (JSON),
+  `created_at_ms`, `updated_at_ms`
+- Indexes:
+  - `ix_memory_items_run_id`
+  - `ix_memory_items_kind`
+  - `ix_memory_items_event_type`
+  - `ix_memory_items_event_source`
+  - `ix_memory_items_created_at_ms`
+  - `ix_memory_items_updated_at_ms`
+
 ## Retention & growth expectations
 
 There is currently **no automatic retention/TTL**: the SQLite file will grow over time as events,
-runs, and run packets accumulate.
+runs, run packets, and memory summaries accumulate.
 
 Operational guidance today:
 

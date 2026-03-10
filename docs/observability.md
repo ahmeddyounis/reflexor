@@ -4,9 +4,8 @@ Reflexor’s observability surface is intentionally small and safe-by-default. I
 
 - Structured JSON logs (with correlation IDs + redaction/truncation).
 - Prometheus metrics (`/metrics`) for basic health/perf tracking.
+- Optional OpenTelemetry tracing hooks across API, orchestrator, queue propagation, and executor.
 - An offline benchmark script for event → enqueue latency.
-
-This doc describes what exists today (no dashboards/tracing are required).
 
 ## Logging (JSON)
 
@@ -92,6 +91,49 @@ Notes:
 | `api_requests_total` | counter | `method`, `route`, `status` | API request counts by route and status. |
 | `approvals_pending_total` | gauge | (none) | Pending approvals (refreshed on scrape). |
 
+## Tracing (OpenTelemetry)
+
+Tracing is optional and disabled by default.
+
+Install extras if you want real exporters:
+
+```bash
+pip install -e ".[otel]"
+```
+
+Settings:
+
+- `REFLEXOR_OTEL_ENABLED`
+- `REFLEXOR_OTEL_SERVICE_NAME`
+- `REFLEXOR_OTEL_EXPORTER_OTLP_ENDPOINT`
+- `REFLEXOR_OTEL_CONSOLE_EXPORTER`
+
+Current span coverage:
+
+- `api.request`
+- `orchestrator.reflex`
+- `orchestrator.planning`
+- `executor.process_lease`
+- `executor.execute_task`
+- `executor.tool_call`
+
+Queue propagation:
+
+- task envelopes can carry an `otel` carrier under `TaskEnvelope.trace`,
+- downstream queue releases (dependency satisfaction, approvals requeue) inject the current trace
+  carrier before enqueue.
+
+Example:
+
+```env
+REFLEXOR_OTEL_ENABLED=true
+REFLEXOR_OTEL_SERVICE_NAME=reflexor-api
+REFLEXOR_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
+```
+
+If tracing is enabled without the optional OTel packages installed, Reflexor continues to run
+normally but tracing remains unconfigured.
+
 ## Benchmark: event submit → first enqueue
 
 The script `scripts/benchmark_event_to_enqueue.py` measures the latency from the moment an event is
@@ -124,7 +166,5 @@ measures event → enqueue latency including the planning cycle that produces on
 python scripts/benchmark_event_to_enqueue.py --events 250 --concurrency 50 --planner on --json
 ```
 
-## Future work (explicitly not implemented yet)
-
-Potential future additions may include distributed tracing (e.g. OpenTelemetry) and dashboards. If
-added, they should remain optional and safe-by-default.
+Potential future additions may still include dashboards or richer cross-process visualizations, but
+the current runtime already exposes tracing hooks without making them mandatory.
