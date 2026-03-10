@@ -275,9 +275,7 @@ class ExecutorService:
             ):
                 uow = self._uow_factory()
                 async with uow:
-                    run_tasks = await self._repos.task_repo(uow.session).list_by_run(
-                        task.run_id
-                    )
+                    run_tasks = await self._repos.task_repo(uow.session).list_by_run(task.run_id)
                 if task.status in {
                     TaskStatus.PENDING,
                     TaskStatus.QUEUED,

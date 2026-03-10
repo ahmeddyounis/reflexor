@@ -130,9 +130,7 @@ class MemoryItemRow(Base):
     __tablename__ = "memory_items"
 
     memory_id: Mapped[str] = mapped_column(String, primary_key=True)
-    run_id: Mapped[str] = mapped_column(
-        String, ForeignKey("runs.run_id"), unique=True, index=True
-    )
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.run_id"), unique=True, index=True)
     event_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("events.event_id"), nullable=True
     )

@@ -57,7 +57,7 @@ packages = ["src/reflexor"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov-report=term-missing --cov-report=xml --cov-fail-under=91"
+addopts = "--import-mode=importlib --cov-report=term-missing --cov-report=xml --cov-fail-under=91"
 
 [tool.coverage.run]
 branch = true
@@ -82,6 +82,10 @@ warn_unused_ignores = true
 warn_unreachable = true
 strict_equality = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["yaml", "opentelemetry", "opentelemetry.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 target-version = "py311"

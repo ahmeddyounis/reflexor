@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from reflexor.bootstrap.executor import build_executor_service
 from reflexor.bootstrap.orchestrator import build_orchestrator_engine
-from reflexor.bootstrap.planner import build_planner
+from reflexor.bootstrap.planner import MemoryLoader, build_planner
 from reflexor.bootstrap.policy import build_policy_gate, build_policy_runner
 from reflexor.bootstrap.queue import build_queue
 from reflexor.bootstrap.repos import RepoProviders, build_repo_providers
@@ -118,7 +118,7 @@ def _memory_loader(
     settings: ReflexorSettings,
     uow_factory: Callable[[], UnitOfWork],
     repos: RepoProviders,
-) -> Callable[[object], Awaitable[list[dict[str, object]]]] | None:
+) -> MemoryLoader | None:
     if int(settings.planner_max_memory_items) <= 0:
         return None
 

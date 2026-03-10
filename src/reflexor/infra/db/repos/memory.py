@@ -27,16 +27,17 @@ class SqlAlchemyMemoryRepo:
         if existing is None:
             self._session.add(MemoryItemRow(**row_dict))
         else:
-            existing.memory_id = row_dict["memory_id"]
-            existing.event_id = row_dict["event_id"]
-            existing.kind = row_dict["kind"]
-            existing.event_type = row_dict["event_type"]
-            existing.event_source = row_dict["event_source"]
-            existing.summary = row_dict["summary"]
-            existing.content = row_dict["content"]
-            existing.tags = row_dict["tags"]
-            existing.created_at_ms = row_dict["created_at_ms"]
-            existing.updated_at_ms = row_dict["updated_at_ms"]
+            replacement = MemoryItemRow(**row_dict)
+            existing.memory_id = replacement.memory_id
+            existing.event_id = replacement.event_id
+            existing.kind = replacement.kind
+            existing.event_type = replacement.event_type
+            existing.event_source = replacement.event_source
+            existing.summary = replacement.summary
+            existing.content = replacement.content
+            existing.tags = replacement.tags
+            existing.created_at_ms = replacement.created_at_ms
+            existing.updated_at_ms = replacement.updated_at_ms
         await self._session.flush()
         refreshed = (await self._session.execute(existing_stmt)).scalar_one()
         return memory_item_from_orm(refreshed)

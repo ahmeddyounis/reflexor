@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -89,7 +89,7 @@ def start_span(
     *,
     attributes: Mapping[str, object] | None = None,
     carrier: Mapping[str, str] | None = None,
-):
+) -> Iterator[object | None]:
     if not _OTEL_AVAILABLE or not _enabled:
         yield None
         return

@@ -105,9 +105,7 @@ def _normalize_dependency_names(proposed_tasks: list[ProposedTask]) -> dict[str,
         seen: set[str] = set()
         for dependency_name in task.depends_on:
             if dependency_name == task.name:
-                raise PlanValidationError(
-                    f"task {task.name!r} cannot depend on itself"
-                )
+                raise PlanValidationError(f"task {task.name!r} cannot depend on itself")
             if dependency_name not in by_name:
                 raise PlanValidationError(
                     f"task {task.name!r} depends on unknown task {dependency_name!r}"
@@ -210,7 +208,9 @@ class PlanValidator:
         if proposed_task.priority is not None:
             planner_metadata["priority"] = proposed_task.priority
 
-        metadata = {"planner": planner_metadata} if planner_metadata else {}
+        metadata: dict[str, object] = {}
+        if planner_metadata:
+            metadata["planner"] = dict(planner_metadata)
         return Task(
             run_id=run_id,
             name=proposed_task.name,
@@ -247,16 +247,17 @@ class PlanValidator:
                 built_by_name[dependency_name].task_id
                 for dependency_name in dependency_names[proposed_task.name]
             ]
-            planner_metadata = dict(task.metadata.get("planner", {}))
+            planner_metadata: dict[str, object] = {}
+            existing_planner_metadata = task.metadata.get("planner")
+            if isinstance(existing_planner_metadata, dict):
+                planner_metadata.update(existing_planner_metadata)
             if dependency_names[proposed_task.name]:
                 planner_metadata["dependency_names"] = dependency_names[proposed_task.name]
             metadata = dict(task.metadata)
             if planner_metadata:
                 metadata["planner"] = planner_metadata
             tasks.append(
-                task.model_copy(
-                    update={"depends_on": resolved_depends_on, "metadata": metadata}
-                )
+                task.model_copy(update={"depends_on": resolved_depends_on, "metadata": metadata})
             )
         return tasks
 

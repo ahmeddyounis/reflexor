@@ -43,8 +43,8 @@ def memory_item_from_run_packet(packet: RunPacket) -> MemoryItem:
     tag_candidates = [event.type, event.source, *tool_names]
     tags: list[str] = []
     seen: set[str] = set()
-    for item in tag_candidates:
-        trimmed = str(item).strip()
+    for tag_candidate in tag_candidates:
+        trimmed = str(tag_candidate).strip()
         if not trimmed or trimmed in seen:
             continue
         seen.add(trimmed)
@@ -70,12 +70,17 @@ def memory_item_from_run_packet(packet: RunPacket) -> MemoryItem:
         "reflex_decision": packet.reflex_decision,
         "tasks": task_summaries,
     }
-    tool_result_times = [
-        int(item["recorded_at_ms"])
-        for item in packet.tool_results
-        if isinstance(item, dict) and isinstance(item.get("recorded_at_ms"), int)
-    ]
-    updated_at_ms = max(packet.created_at_ms, packet.completed_at_ms or 0, *tool_result_times)
+    tool_result_times: list[int] = []
+    for item in packet.tool_results:
+        recorded_at_ms = item.get("recorded_at_ms")
+        if isinstance(recorded_at_ms, int):
+            tool_result_times.append(recorded_at_ms)
+
+    updated_at_ms = max(
+        packet.created_at_ms,
+        packet.completed_at_ms or packet.created_at_ms,
+        *tool_result_times,
+    )
 
     return MemoryItem(
         run_id=packet.run_id,

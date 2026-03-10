@@ -18,6 +18,14 @@ DEFAULT_MAX_EXECUTION_RESULT_SUMMARY_BYTES = 8_000
 
 
 def new_fallback_packet(*, task: Task, now_ms: int) -> RunPacket:
+    packet_created_at_ms = min(
+        [
+            now_ms,
+            int(task.created_at_ms),
+            *([] if task.started_at_ms is None else [int(task.started_at_ms)]),
+            *([] if task.completed_at_ms is None else [int(task.completed_at_ms)]),
+        ]
+    )
     return RunPacket(
         run_id=task.run_id,
         event=Event(
@@ -28,7 +36,7 @@ def new_fallback_packet(*, task: Task, now_ms: int) -> RunPacket:
             payload={"task_id": task.task_id, "run_id": task.run_id},
         ),
         tasks=[task],
-        created_at_ms=now_ms,
+        created_at_ms=packet_created_at_ms,
     )
 
 

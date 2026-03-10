@@ -195,7 +195,9 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                                     engine._backlog.popleft()
                     except BudgetExceeded as exc:
                         if engine.metrics is not None:
-                            engine.metrics.orchestrator_rejections_total.labels(reason="budget").inc()
+                            engine.metrics.orchestrator_rejections_total.labels(
+                                reason="budget"
+                            ).inc()
                         policy_decisions.append(budget_exceeded_to_audit_dict(exc))
                     except PlanValidationError as exc:
                         if engine.metrics is not None:
