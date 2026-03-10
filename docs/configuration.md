@@ -257,6 +257,8 @@ Planner backend:
   - Optional override for the planner system prompt.
 - `REFLEXOR_PLANNER_MAX_MEMORY_ITEMS` (default `5`)
   - Maximum number of memory summaries injected into a planning call.
+- `REFLEXOR_PLANNER_MAX_TOKENS_PER_RUN` (default `4096`)
+  - Upper bound used when validating planner-declared token budgets.
 
 Planner cadence:
 
@@ -271,12 +273,21 @@ Backlog and per-cycle limits:
   - Maximum number of events buffered for planning.
 - `REFLEXOR_MAX_EVENTS_PER_PLANNING_CYCLE` (default `50`)
   - Maximum number of backlog events consumed by a single planning cycle.
+- `REFLEXOR_EVENT_DEDUPE_WINDOW_S` (default `86400`)
+  - Retention window for event dedupe keys.
 
 Budgets (per run):
 
 - `REFLEXOR_MAX_TASKS_PER_RUN` (default `50`)
 - `REFLEXOR_MAX_TOOL_CALLS_PER_RUN` (default `50`)
 - `REFLEXOR_MAX_RUN_WALL_TIME_S` (default `30`)
+
+Maintenance:
+
+- `REFLEXOR_MAINTENANCE_BATCH_SIZE` (default `200`)
+- `REFLEXOR_MEMORY_COMPACTION_AFTER_DAYS` (default `1`)
+- `REFLEXOR_MEMORY_RETENTION_DAYS` (default `30`)
+- `REFLEXOR_ARCHIVE_TERMINAL_TASKS_AFTER_DAYS` (default `30`)
 
 Note: In `prod`, be cautious with very small planner cadence values (e.g., sub-second intervals),
 which can cause excessive churn/cost. Validation enforces positivity but does not currently block
@@ -310,6 +321,8 @@ Settings:
 | `reflex_rules_path` | `REFLEXOR_REFLEX_RULES_PATH` | path? | unset |
 | `enabled_scopes` | `REFLEXOR_ENABLED_SCOPES` | list[str] | `[]` |
 | `approval_required_scopes` | `REFLEXOR_APPROVAL_REQUIRED_SCOPES` | list[str] | `[]` |
+| `approval_required_domains` | `REFLEXOR_APPROVAL_REQUIRED_DOMAINS` | list[str] | `[]` |
+| `approval_required_payload_keywords` | `REFLEXOR_APPROVAL_REQUIRED_PAYLOAD_KEYWORDS` | list[str] | `[]` |
 | `http_allowed_domains` | `REFLEXOR_HTTP_ALLOWED_DOMAINS` | list[str] | `[]` |
 | `webhook_allowed_targets` | `REFLEXOR_WEBHOOK_ALLOWED_TARGETS` | list[str] | `[]` |
 | `net_safety_resolve_dns` | `REFLEXOR_NET_SAFETY_RESOLVE_DNS` | bool | `false` |
@@ -347,10 +360,16 @@ Settings:
 | `planner_temperature` | `REFLEXOR_PLANNER_TEMPERATURE` | float | `0` |
 | `planner_system_prompt` | `REFLEXOR_PLANNER_SYSTEM_PROMPT` | str? | unset |
 | `planner_max_memory_items` | `REFLEXOR_PLANNER_MAX_MEMORY_ITEMS` | int | `5` |
+| `planner_max_tokens_per_run` | `REFLEXOR_PLANNER_MAX_TOKENS_PER_RUN` | int | `4096` |
 | `planner_interval_s` | `REFLEXOR_PLANNER_INTERVAL_S` | float | `60` |
 | `planner_debounce_s` | `REFLEXOR_PLANNER_DEBOUNCE_S` | float | `2` |
 | `event_backlog_max` | `REFLEXOR_EVENT_BACKLOG_MAX` | int | `200` |
 | `max_events_per_planning_cycle` | `REFLEXOR_MAX_EVENTS_PER_PLANNING_CYCLE` | int | `50` |
+| `event_dedupe_window_s` | `REFLEXOR_EVENT_DEDUPE_WINDOW_S` | float | `86400` |
+| `maintenance_batch_size` | `REFLEXOR_MAINTENANCE_BATCH_SIZE` | int | `200` |
+| `memory_compaction_after_days` | `REFLEXOR_MEMORY_COMPACTION_AFTER_DAYS` | int | `1` |
+| `memory_retention_days` | `REFLEXOR_MEMORY_RETENTION_DAYS` | int? | `30` |
+| `archive_terminal_tasks_after_days` | `REFLEXOR_ARCHIVE_TERMINAL_TASKS_AFTER_DAYS` | int? | `30` |
 | `otel_enabled` | `REFLEXOR_OTEL_ENABLED` | bool | `false` |
 | `otel_service_name` | `REFLEXOR_OTEL_SERVICE_NAME` | str | `reflexor` |
 | `otel_exporter_otlp_endpoint` | `REFLEXOR_OTEL_EXPORTER_OTLP_ENDPOINT` | str? | unset |

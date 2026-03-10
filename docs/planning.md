@@ -16,9 +16,12 @@ executes tools directly.
 Every planning call receives:
 
 - the selected triggering events,
-- effective run limits (`max_tasks`, `max_tool_calls`, `max_runtime_s`),
+- effective run limits (`max_tasks`, `max_tool_calls`, `max_tokens`, `max_runtime_s`),
 - canonical tool specs exported from `ToolRegistry.list_specs()`,
-- optional recent memory summaries (matched by event type/source first, then recent global items),
+- optional recent memory summaries:
+  - matched by event type/source first,
+  - then keyword search over summary text,
+  - then recent global items as fallback,
 - an optional system prompt override.
 
 Planner/tool boundary details are intentionally machine-readable. Tool specs include manifest
@@ -48,11 +51,20 @@ Each `ProposedTask` can declare:
 - `expected_side_effects`
 - `execution_class`
 
+`budget_assertions` are required. Plans must declare:
+
+- `max_tool_calls`
+- `max_runtime_s`
+- `max_tokens`
+- optional `max_tasks`
+
 Validation rejects:
 
 - unknown tools,
 - invalid tool args,
+- disabled scopes,
 - scope mismatches,
+- missing budget assertions,
 - duplicate task names,
 - unknown/self/cyclic dependencies,
 - planner budget assertions that exceed configured limits.
@@ -78,6 +90,7 @@ Key settings:
 - `REFLEXOR_PLANNER_TEMPERATURE`
 - `REFLEXOR_PLANNER_SYSTEM_PROMPT`
 - `REFLEXOR_PLANNER_MAX_MEMORY_ITEMS`
+- `REFLEXOR_PLANNER_MAX_TOKENS_PER_RUN`
 
 See [Configuration](configuration.md) for defaults and validation rules.
 

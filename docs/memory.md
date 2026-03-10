@@ -38,18 +38,39 @@ The planner loads at most `REFLEXOR_PLANNER_MAX_MEMORY_ITEMS` summaries per plan
 Retrieval strategy:
 
 1. recent summaries matching the incoming event `type` + `source`,
-2. recent global summaries as fallback.
+2. keyword search over `memory_items.summary` using normalized event types, sources, and payload
+   terms,
+3. recent global summaries as fallback.
 
-This keeps the MVP deterministic and simple while leaving room for optional vector retrieval later.
+This keeps the MVP deterministic and simple while satisfying the PRD’s keyword-search requirement
+without introducing a vector store.
 
-## Retention guidance
+## Maintenance and retention
 
-There is no built-in TTL/GC job yet. Treat memory as operator-managed state.
+Reflexor now ships a built-in maintenance job:
+
+```sh
+reflexor maintenance run
+```
+
+The maintenance pass:
+
+- recompacts older `run_packets` into refreshed `memory_items`,
+- prunes old `memory_items` rows by retention policy,
+- archives old terminal tasks,
+- removes expired event dedupe ledger entries.
+
+Relevant settings:
+
+- `REFLEXOR_MAINTENANCE_BATCH_SIZE`
+- `REFLEXOR_MEMORY_COMPACTION_AFTER_DAYS`
+- `REFLEXOR_MEMORY_RETENTION_DAYS`
+- `REFLEXOR_ARCHIVE_TERMINAL_TASKS_AFTER_DAYS`
 
 Recommended practice:
 
 - keep `REFLEXOR_PLANNER_MAX_MEMORY_ITEMS` small,
-- run DB retention jobs for old `memory_items` rows,
+- schedule `reflexor maintenance run` from cron/systemd/Kubernetes,
 - retain raw run packets according to audit needs and delete memory independently if desired.
 
 ## Data sensitivity

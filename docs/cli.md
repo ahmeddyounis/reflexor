@@ -8,6 +8,8 @@ The CLI supports:
 - **Local mode** (default): in-process calls into the application services (no HTTP).
 - **Remote mode**: HTTP calls to the FastAPI service when `REFLEXOR_API_URL` (or `--api-url`) is
   configured.
+- **Operator maintenance**: local-only retention/cleanup tasks for memory, archived tasks, and
+  dedupe state.
 
 ## Global options
 
@@ -41,6 +43,12 @@ If `REFLEXOR_API_URL` (or `--api-url`) is set, the CLI uses HTTP calls to the AP
 - `runs`/`tasks`/`approvals` → corresponding read/command endpoints
 
 Admin endpoints may require an API key depending on server settings (see `docs/api.md`).
+
+Local-only commands remain local even when `REFLEXOR_API_URL` is set:
+
+- `tools list`
+- `config show`
+- `maintenance run`
 
 ## JSON output
 
@@ -108,6 +116,14 @@ This prints the effective `ReflexorSettings` with secrets redacted:
 
 - `admin_api_key` is always redacted
 - any URL password (e.g., `postgresql://user:pass@...`) is redacted
+
+### Maintenance
+
+- `reflexor maintenance run [--now-ms <ms>]`
+
+This command is **local-mode only** and runs one maintenance pass against the configured database.
+It recompacts older run packets into memory summaries, prunes expired memory, archives old terminal
+tasks, and clears expired event dedupe ledger rows.
 
 ## End-to-end smoke demo (offline)
 

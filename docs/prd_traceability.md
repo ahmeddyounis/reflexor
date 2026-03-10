@@ -17,7 +17,7 @@ The PRD uses user-facing lifecycle terms that are slightly broader than the inte
 | `failed` | `TaskStatus.FAILED` | Task attempt finished unsuccessfully. |
 | `retry_scheduled` | `ExecutionDisposition.FAILED_TRANSIENT` plus queue `nack(..., delay_s=...)` | Reflexor represents retries via audit metadata and delayed requeue rather than a separate persisted status. |
 | `canceled` | `TaskStatus.CANCELED` | Terminal cancellation, including blocked dependents after upstream failure/denial. |
-| `archived` | persisted `run_packets`, `memory_items`, export/replay flows, and operator retention jobs | There is no separate runtime `archived` status. Archival is an operational retention concern. |
+| `archived` | `TaskStatus.ARCHIVED`; `RunStatus.ARCHIVED` once all tasks in a run are archived | Terminal work can be retained in audit/memory while leaving the live task set out of the hot path. |
 
 ## Approval UX decision
 
@@ -43,7 +43,8 @@ UI is intentionally deferred as optional future work rather than treated as the 
 ### v0.2
 
 - Postgres + Alembic + Redis Streams deployment path
-- `memory_items` summaries injected into planning context
+- `memory_items` summaries injected into planning context with keyword-search fallback
+- built-in maintenance job for compaction, memory retention, archived tasks, and dedupe expiry
 - OpenTelemetry tracing hooks with queue propagation
 - CLI/API approval workflow with filtering and idempotent decisions
 

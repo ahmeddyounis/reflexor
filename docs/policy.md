@@ -9,8 +9,8 @@ allowlists, workspace constraints) and returning a **deterministic** decision:
 - `deny` (tool must not execute)
 - `require_approval` (tool must not execute until approved)
 
-Reflexor does not ship a full agent/executor/CLI wiring yet, but the policy components are usable as
-a library today (primarily via `PolicyGate` and `PolicyEnforcedToolRunner`).
+The policy components are also wired into the shipped executor/runtime boundary via
+`PolicyEnforcedToolRunner`, with approval decisions surfaced through the API and CLI workflows.
 
 ## Key components
 
@@ -114,11 +114,13 @@ Paths are resolved conservatively using `reflexor.security.fs_safety.resolve_pat
 Requires approval when either:
 
 - `tool_call.permission_scope` is in `REFLEXOR_APPROVAL_REQUIRED_SCOPES`, or
+- the destination hostname matches `REFLEXOR_APPROVAL_REQUIRED_DOMAINS`, or
+- parsed tool args contain one of `REFLEXOR_APPROVAL_REQUIRED_PAYLOAD_KEYWORDS`, or
 - `REFLEXOR_PROFILE=prod` and the tool is marked `side_effects=true` and `REFLEXOR_DRY_RUN=false`.
 
 Reason codes:
 
-- `approval_required` for scope-based approvals
+- `approval_required` for scope/domain/payload approval triggers
 - `profile_guardrail` for prod side-effect guardrails
 
 ## Reason codes glossary
@@ -183,6 +185,8 @@ See `docs/configuration.md` for full details. Key settings:
 
 - `REFLEXOR_ENABLED_SCOPES`
 - `REFLEXOR_APPROVAL_REQUIRED_SCOPES`
+- `REFLEXOR_APPROVAL_REQUIRED_DOMAINS`
+- `REFLEXOR_APPROVAL_REQUIRED_PAYLOAD_KEYWORDS`
 - `REFLEXOR_HTTP_ALLOWED_DOMAINS`
 - `REFLEXOR_WEBHOOK_ALLOWED_TARGETS`
 - `REFLEXOR_WORKSPACE_ROOT`

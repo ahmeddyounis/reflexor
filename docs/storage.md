@@ -19,10 +19,21 @@ Incoming events (webhooks, internal ticks, etc.).
 - Key fields: `type`, `source`, `received_at_ms`, `payload` (JSON), `dedupe_key` (nullable)
 - Indexes:
   - `ix_events_type` on `type`
-  - `ux_events_source_dedupe_key` unique on (`source`, `dedupe_key`)
+
+### `event_dedupes`
+
+Retention-window dedupe ledger keyed by (`source`, `dedupe_key`).
+
+- Primary key: composite (`source`, `dedupe_key`)
+- Foreign keys:
+  - `event_id` → `events.event_id`
+- Key fields: `created_at_ms`, `updated_at_ms`, `expires_at_ms`
+- Indexes:
+  - `ix_event_dedupes_expires_at_ms`
 
 **Event dedupe:** when `dedupe_key` is set, `reflexor.storage.EventRepo.create_or_get_by_dedupe(...)`
-enforces idempotency using the unique index on (`source`, `dedupe_key`).
+looks up `event_dedupes`, only treats entries as duplicates until `expires_at_ms`, and rotates the
+ledger entry when the dedupe window has elapsed.
 
 ### `runs`
 
@@ -35,7 +46,7 @@ Run metadata (separate from `run_packets` blobs).
   - `ix_runs_created_at_ms` on `created_at_ms`
 
 Note: a run “status” is not currently stored as a column; it is derived by read-side queries from
-task counts/states.
+task counts/states, including archived-task rollups.
 
 ### `tool_calls`
 
@@ -108,15 +119,15 @@ Structured planning memory derived from sanitized run packets.
 
 ## Retention & growth expectations
 
-There is currently **no automatic retention/TTL**: the SQLite file will grow over time as events,
-runs, run packets, and memory summaries accumulate.
+Retention is managed by the built-in maintenance pass (`reflexor maintenance run`).
 
-Operational guidance today:
+Operational guidance:
 
 - Treat the DB as an **audit/debugging store** (sanitized, but still potentially large).
 - For local development, it is safe to delete the SQLite file and re-run migrations.
-- Size caps for persisted packets are controlled by settings (see `docs/configuration.md`), but a
-full retention policy will be added later.
+- Size caps for persisted packets are controlled by settings (see `docs/configuration.md`).
+- Schedule maintenance to prune old `memory_items`, archive terminal tasks, and clear expired
+  dedupe rows.
 
 ## Migrations workflow (Alembic)
 
