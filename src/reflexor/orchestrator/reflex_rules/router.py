@@ -5,10 +5,11 @@ from pathlib import Path
 from reflexor.domain.models_event import Event
 from reflexor.orchestrator.interfaces import ReflexRouter
 from reflexor.orchestrator.plans import PlanningInput, ProposedTask, ReflexDecision
-from reflexor.orchestrator.reflex_rules.loader import load_reflex_rules_json
+from reflexor.orchestrator.reflex_rules.loader import load_reflex_rules
 from reflexor.orchestrator.reflex_rules.models import (
     DropAction,
     FastToolAction,
+    FlagAction,
     NeedsPlanningAction,
     ReflexRule,
 )
@@ -27,7 +28,11 @@ class RuleBasedReflexRouter:
 
     @classmethod
     def from_json_file(cls, path: str | Path) -> RuleBasedReflexRouter:
-        return cls(load_reflex_rules_json(path))
+        return cls(load_reflex_rules(path))
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> RuleBasedReflexRouter:
+        return cls(load_reflex_rules(path))
 
     @classmethod
     def from_raw_rules(cls, rules: list[object]) -> RuleBasedReflexRouter:
@@ -49,6 +54,24 @@ class RuleBasedReflexRouter:
 
             if isinstance(rule.action, DropAction):
                 return ReflexDecision(action="drop", reason=rule.rule_id, proposed_tasks=[])
+
+            if isinstance(rule.action, FlagAction):
+                flag_payload: dict[str, object] = {
+                    "severity": rule.action.severity,
+                    "tags": list(rule.action.tags),
+                }
+                if rule.action.note_template is not None:
+                    try:
+                        rendered_note = render_template_value(
+                            rule.action.note_template,
+                            event=event,
+                        )
+                    except ReflexTemplateError as exc:
+                        raise TemplateResolutionError(f"rule {rule.rule_id}: {exc}") from exc
+                    if not isinstance(rendered_note, str):
+                        raise TemplateResolutionError("note_template must render to a string")
+                    flag_payload["note"] = rendered_note
+                return ReflexDecision(action="flag", reason=rule.rule_id, flag=flag_payload)
 
             if isinstance(rule.action, FastToolAction):
                 try:

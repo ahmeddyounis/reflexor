@@ -137,3 +137,74 @@ def test_seed_fallback_differs_between_reflex_and_planning() -> None:
     assert reflex_task.tool_call is not None
     assert planning_task.tool_call is not None
     assert reflex_task.tool_call.idempotency_key != planning_task.tool_call.idempotency_key
+
+
+def test_build_tasks_resolves_dependencies_to_task_ids() -> None:
+    registry = ToolRegistry()
+    registry.register(ExtraTool())
+    validator = PlanValidator(registry=registry)
+
+    tasks = validator.build_tasks(
+        [
+            ProposedTask(name="fetch", tool_name="tests.extra_plan", args={"x": 1}),
+            ProposedTask(
+                name="write",
+                tool_name="tests.extra_plan",
+                args={"x": 2},
+                depends_on=["fetch"],
+            ),
+        ],
+        run_id="00000000-0000-4000-8000-000000000000",
+        seed_source="planning",
+    )
+
+    by_name = {task.name: task for task in tasks}
+    assert by_name["fetch"].depends_on == []
+    assert by_name["write"].depends_on == [by_name["fetch"].task_id]
+    assert by_name["write"].metadata["planner"]["dependency_names"] == ["fetch"]
+
+
+def test_build_tasks_rejects_cycles() -> None:
+    registry = ToolRegistry()
+    registry.register(ExtraTool())
+    validator = PlanValidator(registry=registry)
+
+    with pytest.raises(PlanValidationError, match="cyclic dependency"):
+        validator.build_tasks(
+            [
+                ProposedTask(
+                    name="a",
+                    tool_name="tests.extra_plan",
+                    args={"x": 1},
+                    depends_on=["b"],
+                ),
+                ProposedTask(
+                    name="b",
+                    tool_name="tests.extra_plan",
+                    args={"x": 2},
+                    depends_on=["a"],
+                ),
+            ],
+            run_id="00000000-0000-4000-8000-000000000000",
+            seed_source="planning",
+        )
+
+
+def test_declared_permission_scope_must_match_manifest() -> None:
+    registry = ToolRegistry()
+    registry.register(StrictTool())
+    validator = PlanValidator(registry=registry)
+
+    proposed = ProposedTask(
+        name="t1",
+        tool_name="tests.strict_plan",
+        args={"count": 1},
+        declared_permission_scope="fs.write",
+    )
+
+    with pytest.raises(PlanValidationError, match="declared_permission_scope"):
+        validator.build_task(
+            proposed,
+            run_id="00000000-0000-4000-8000-000000000000",
+            seed_source="planning",
+        )

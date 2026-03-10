@@ -40,7 +40,7 @@ def resolve_reflex_router(
         from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
 
         try:
-            return RuleBasedReflexRouter.from_json_file(rules_path)
+            return RuleBasedReflexRouter.from_file(rules_path)
         except FileNotFoundError as exc:
             raise ValueError(f"reflex_rules_path not found: {rules_path}") from exc
         except Exception as exc:  # pragma: no cover
@@ -108,4 +108,5 @@ def build_orchestrator_engine(
         metrics=metrics,
         planner_debounce_s=float(settings.planner_debounce_s),
         planner_interval_s=float(settings.planner_interval_s),
+        approval_required_scopes=tuple(settings.approval_required_scopes),
     )

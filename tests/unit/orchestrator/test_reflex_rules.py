@@ -11,6 +11,7 @@ from reflexor.orchestrator.reflex_rules import (
     ReflexRule,
     RuleBasedReflexRouter,
     TemplateResolutionError,
+    load_reflex_rules,
     load_reflex_rules_json,
 )
 
@@ -138,6 +139,32 @@ async def test_missing_payload_key_raises_resolution_error() -> None:
         await router.route(_event(), PlanningInput(trigger="tick", now_ms=0))
 
 
+async def test_flag_action_returns_flagged_decision() -> None:
+    router = RuleBasedReflexRouter.from_raw_rules(
+        [
+            {
+                "rule_id": "r1",
+                "match": {"event_type": "webhook"},
+                "action": {
+                    "kind": "flag",
+                    "severity": "high",
+                    "note_template": "review ${payload.url}",
+                    "tags": ["security", "manual"],
+                },
+            }
+        ]
+    )
+
+    decision = await router.route(_event(), PlanningInput(trigger="tick", now_ms=0))
+    assert decision.action == "flag"
+    assert decision.reason == "r1"
+    assert decision.flag == {
+        "severity": "high",
+        "tags": ["security", "manual"],
+        "note": "review https://example.com",
+    }
+
+
 def test_load_reflex_rules_json(tmp_path) -> None:
     path = tmp_path / "rules.json"
     path.write_text(
@@ -156,5 +183,27 @@ def test_load_reflex_rules_json(tmp_path) -> None:
     )
 
     rules = load_reflex_rules_json(path)
+    assert len(rules) == 1
+    assert rules[0].rule_id == "r1"
+
+
+def test_load_reflex_rules_yaml(tmp_path) -> None:
+    path = tmp_path / "rules.yaml"
+    path.write_text(
+        """
+rules:
+  - rule_id: r1
+    match:
+      event_type: webhook
+    action:
+      kind: flag
+      severity: low
+      tags:
+        - triage
+""".strip(),
+        encoding="utf-8",
+    )
+
+    rules = load_reflex_rules(path)
     assert len(rules) == 1
     assert rules[0].rule_id == "r1"

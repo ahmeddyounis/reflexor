@@ -36,6 +36,10 @@ class ProposedTask(BaseModel):
     max_attempts: int = 1
     priority: int | None = None
     idempotency_seed: str | None = None
+    declared_permission_scope: str | None = None
+    approval_required: bool | None = None
+    expected_side_effects: bool | None = None
+    execution_class: str | None = None
 
     @field_validator("name", "tool_name")
     @classmethod
@@ -46,7 +50,7 @@ class ProposedTask(BaseModel):
             raise ValueError(f"{field_name} must be non-empty")
         return trimmed
 
-    @field_validator("idempotency_seed")
+    @field_validator("idempotency_seed", "declared_permission_scope", "execution_class")
     @classmethod
     def _normalize_idempotency_seed(cls, value: str | None) -> str | None:
         if value is None:
@@ -98,6 +102,36 @@ class ProposedTask(BaseModel):
         return value
 
 
+class BudgetAssertions(BaseModel):
+    """Planner-declared expectations about resource use."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_tasks: int | None = None
+    max_tool_calls: int | None = None
+    max_runtime_s: float | None = None
+
+    @field_validator("max_tasks", "max_tool_calls")
+    @classmethod
+    def _validate_optional_positive_ints(cls, value: int | None, info: object) -> int | None:
+        if value is None:
+            return None
+        field_name = getattr(info, "field_name", None) or "value"
+        if value <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+        return int(value)
+
+    @field_validator("max_runtime_s")
+    @classmethod
+    def _validate_optional_positive_float(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        runtime_s = float(value)
+        if runtime_s <= 0:
+            raise ValueError("max_runtime_s must be > 0")
+        return runtime_s
+
+
 class Plan(BaseModel):
     """Planner output: a concrete plan containing proposed tasks."""
 
@@ -106,6 +140,11 @@ class Plan(BaseModel):
     plan_id: str = Field(default_factory=lambda: str(uuid4()))
     summary: str
     tasks: list[ProposedTask] = Field(default_factory=list)
+    estimated_cost: float | None = None
+    required_approvals: list[str] = Field(default_factory=list)
+    budget_assertions: BudgetAssertions = Field(default_factory=BudgetAssertions)
+    planner_version: str | None = None
+    planning_notes: list[str] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("plan_id", mode="before")
@@ -136,6 +175,36 @@ class Plan(BaseModel):
         if not trimmed:
             raise ValueError("summary must be non-empty")
         return trimmed
+
+    @field_validator("planner_version")
+    @classmethod
+    def _normalize_planner_version(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        return trimmed or None
+
+    @field_validator("planning_notes", "required_approvals")
+    @classmethod
+    def _validate_string_lists(cls, value: list[str], info: object) -> list[str]:
+        field_name = getattr(info, "field_name", None) or "value"
+        normalized: list[str] = []
+        for item in value:
+            trimmed = str(item).strip()
+            if not trimmed:
+                raise ValueError(f"{field_name} entries must be non-empty")
+            normalized.append(trimmed)
+        return normalized
+
+    @field_validator("estimated_cost")
+    @classmethod
+    def _validate_estimated_cost(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        cost = float(value)
+        if cost < 0:
+            raise ValueError("estimated_cost must be >= 0")
+        return cost
 
     @field_validator("metadata")
     @classmethod
@@ -209,9 +278,10 @@ class ReflexDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    action: Literal["fast_tasks", "needs_planning", "drop"]
+    action: Literal["fast_tasks", "needs_planning", "drop", "flag"]
     reason: str
     proposed_tasks: list[ProposedTask] = Field(default_factory=list)
+    flag: dict[str, object] | None = None
 
     @field_validator("reason")
     @classmethod
@@ -221,8 +291,34 @@ class ReflexDecision(BaseModel):
             raise ValueError("reason must be non-empty")
         return trimmed
 
+    @field_validator("flag")
+    @classmethod
+    def _validate_flag_json(cls, value: dict[str, object] | None) -> dict[str, object] | None:
+        if value is None:
+            return None
+        try:
+            json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("flag must be JSON-serializable") from exc
+        return value
+
+    @model_validator(mode="after")
+    def _validate_action_payloads(self) -> ReflexDecision:
+        if self.action == "fast_tasks":
+            if not self.proposed_tasks:
+                raise ValueError("fast_tasks requires proposed_tasks")
+            return self
+        if self.proposed_tasks:
+            raise ValueError(f"{self.action} must not include proposed_tasks")
+        if self.action == "flag" and self.flag is None:
+            raise ValueError("flag action requires flag payload")
+        if self.action != "flag" and self.flag is not None:
+            raise ValueError(f"{self.action} must not include flag payload")
+        return self
+
 
 __all__ = [
+    "BudgetAssertions",
     "LimitsSnapshot",
     "Plan",
     "PlanningInput",

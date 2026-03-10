@@ -50,6 +50,7 @@ class OrchestratorEngine:
     metrics: ReflexorMetrics | None = None
     planner_debounce_s: float = 0.25
     planner_interval_s: float = 30.0
+    approval_required_scopes: tuple[str, ...] = ()
 
     _backlog: deque[Event] = field(default_factory=deque, init=False)
     _backlog_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
@@ -114,8 +115,8 @@ class OrchestratorEngine:
         source: str,
         trigger: PlanningTrigger | None = None,
         first_enqueue_started_s: float | None = None,
-    ) -> None:
-        await _enqueue_tasks(
+    ) -> list[str]:
+        return await _enqueue_tasks(
             self,
             tasks,
             reason=reason,

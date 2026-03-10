@@ -22,9 +22,11 @@ async def enqueue_tasks(
     source: str,
     trigger: PlanningTrigger | None = None,
     first_enqueue_started_s: float | None = None,
-) -> None:
+) -> list[str]:
     now_ms = int(engine.clock.now_ms())
-    for idx, task in enumerate(tasks):
+    ready_tasks = [task for task in tasks if not task.depends_on]
+    enqueued_task_ids: list[str] = []
+    for idx, task in enumerate(ready_tasks):
         tool_call = task.tool_call
         if tool_call is None:
             raise PlanValidationError("task.tool_call is required for queueing")
@@ -46,6 +48,7 @@ async def enqueue_tasks(
                 },
             )
             await engine.queue.enqueue(envelope)
+            enqueued_task_ids.append(task.task_id)
             if (
                 idx == 0
                 and first_enqueue_started_s is not None
@@ -56,3 +59,4 @@ async def enqueue_tasks(
                     time.perf_counter() - first_enqueue_started_s
                 )
                 first_enqueue_started_s = None
+    return enqueued_task_ids

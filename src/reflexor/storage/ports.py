@@ -177,6 +177,8 @@ class TaskRepo(Protocol):
 
     async def update(self, task: Task) -> Task: ...
 
+    async def list_by_run(self, run_id: str) -> list[Task]: ...
+
     async def list_summaries(
         self,
         *,

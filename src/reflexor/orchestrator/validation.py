@@ -91,11 +91,59 @@ def _validate_tool_args(
     return dumped
 
 
+def _normalize_dependency_names(proposed_tasks: list[ProposedTask]) -> dict[str, list[str]]:
+    by_name: dict[str, ProposedTask] = {}
+    normalized: dict[str, list[str]] = {}
+
+    for task in proposed_tasks:
+        if task.name in by_name:
+            raise PlanValidationError(f"duplicate task name in plan: {task.name!r}")
+        by_name[task.name] = task
+
+    for task in proposed_tasks:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for dependency_name in task.depends_on:
+            if dependency_name == task.name:
+                raise PlanValidationError(
+                    f"task {task.name!r} cannot depend on itself"
+                )
+            if dependency_name not in by_name:
+                raise PlanValidationError(
+                    f"task {task.name!r} depends on unknown task {dependency_name!r}"
+                )
+            if dependency_name in seen:
+                continue
+            seen.add(dependency_name)
+            deduped.append(dependency_name)
+        normalized[task.name] = deduped
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        if name in visiting:
+            raise PlanValidationError(f"cyclic dependency detected at task {name!r}")
+        visiting.add(name)
+        for dependency_name in normalized[name]:
+            visit(dependency_name)
+        visiting.remove(name)
+        visited.add(name)
+
+    for task_name in normalized:
+        visit(task_name)
+
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class PlanValidator:
     """Validate tasks against the tool registry and build domain models."""
 
     registry: ToolRegistry
+    approval_required_scopes: tuple[str, ...] = ()
 
     def build_task(
         self,
@@ -111,6 +159,26 @@ class PlanValidator:
             raise PlanValidationError(str(exc)) from exc
 
         permission_scope = _validate_permission_scope(tool.manifest.permission_scope)
+        if (
+            proposed_task.declared_permission_scope is not None
+            and proposed_task.declared_permission_scope != permission_scope
+        ):
+            raise PlanValidationError(
+                "declared_permission_scope does not match tool manifest permission_scope"
+            )
+        if (
+            proposed_task.expected_side_effects is not None
+            and proposed_task.expected_side_effects != bool(tool.manifest.side_effects)
+        ):
+            raise PlanValidationError(
+                "expected_side_effects does not match tool manifest side_effects"
+            )
+        if proposed_task.approval_required is not None:
+            requires_approval = permission_scope in set(self.approval_required_scopes)
+            if proposed_task.approval_required != requires_approval:
+                raise PlanValidationError(
+                    "approval_required does not match configured approval requirements"
+                )
         args = _validate_tool_args(tool.ArgsModel, proposed_task.args)
 
         seed = _resolve_idempotency_seed(
@@ -130,6 +198,19 @@ class PlanValidator:
         )
 
         timeout_s = proposed_task.timeout_s or tool.manifest.default_timeout_s
+        planner_metadata: dict[str, object] = {}
+        if proposed_task.declared_permission_scope is not None:
+            planner_metadata["declared_permission_scope"] = proposed_task.declared_permission_scope
+        if proposed_task.approval_required is not None:
+            planner_metadata["approval_required"] = proposed_task.approval_required
+        if proposed_task.expected_side_effects is not None:
+            planner_metadata["expected_side_effects"] = proposed_task.expected_side_effects
+        if proposed_task.execution_class is not None:
+            planner_metadata["execution_class"] = proposed_task.execution_class
+        if proposed_task.priority is not None:
+            planner_metadata["priority"] = proposed_task.priority
+
+        metadata = {"planner": planner_metadata} if planner_metadata else {}
         return Task(
             run_id=run_id,
             name=proposed_task.name,
@@ -137,6 +218,7 @@ class PlanValidator:
             max_attempts=proposed_task.max_attempts,
             timeout_s=timeout_s,
             depends_on=proposed_task.depends_on,
+            metadata=metadata,
         )
 
     def build_tasks(
@@ -147,15 +229,36 @@ class PlanValidator:
         seed_source: TaskSeedSource,
         event_id: str | None = None,
     ) -> list[Task]:
-        return [
-            self.build_task(
+        dependency_names = _normalize_dependency_names(proposed_tasks)
+
+        built_by_name: dict[str, Task] = {}
+        for proposed_task in proposed_tasks:
+            built_by_name[proposed_task.name] = self.build_task(
                 proposed_task,
                 run_id=run_id,
                 seed_source=seed_source,
                 event_id=event_id,
             )
-            for proposed_task in proposed_tasks
-        ]
+
+        tasks: list[Task] = []
+        for proposed_task in proposed_tasks:
+            task = built_by_name[proposed_task.name]
+            resolved_depends_on = [
+                built_by_name[dependency_name].task_id
+                for dependency_name in dependency_names[proposed_task.name]
+            ]
+            planner_metadata = dict(task.metadata.get("planner", {}))
+            if dependency_names[proposed_task.name]:
+                planner_metadata["dependency_names"] = dependency_names[proposed_task.name]
+            metadata = dict(task.metadata)
+            if planner_metadata:
+                metadata["planner"] = planner_metadata
+            tasks.append(
+                task.model_copy(
+                    update={"depends_on": resolved_depends_on, "metadata": metadata}
+                )
+            )
+        return tasks
 
 
 __all__ = [

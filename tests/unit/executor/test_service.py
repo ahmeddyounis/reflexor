@@ -101,6 +101,36 @@ class _NoopQueue(Queue):
         return None
 
 
+class _RecordingQueue(Queue):
+    def __init__(self) -> None:
+        self.enqueued: list[TaskEnvelope] = []
+
+    async def enqueue(self, envelope: TaskEnvelope) -> None:
+        self.enqueued.append(envelope)
+
+    async def dequeue(
+        self,
+        timeout_s: float | None = None,
+        *,
+        wait_s: float | None = 0.0,
+    ) -> Lease | None:  # pragma: no cover
+        _ = (timeout_s, wait_s)
+        raise NotImplementedError
+
+    async def ack(self, lease: Lease) -> None:  # pragma: no cover
+        _ = lease
+        raise NotImplementedError
+
+    async def nack(
+        self, lease: Lease, delay_s: float | None = None, reason: str | None = None
+    ) -> None:  # pragma: no cover
+        _ = (lease, delay_s, reason)
+        raise NotImplementedError
+
+    async def aclose(self) -> None:  # pragma: no cover
+        return None
+
+
 class _NullUnitOfWork(UnitOfWork):
     def __init__(self, session: object) -> None:
         self._session = session
@@ -142,6 +172,9 @@ class _InMemoryTaskRepo:
     async def update(self, task: Task) -> Task:
         self._tasks[task.task_id] = task
         return task
+
+    async def list_by_run(self, run_id: str) -> list[Task]:
+        return [task for task in self._tasks.values() if task.run_id == run_id]
 
 
 class _InMemoryToolCallRepo:
@@ -304,6 +337,7 @@ async def _build_service(
     packet_repo: _InMemoryRunPacketRepo,
     ledger: _FakeLedger,
     metrics: ReflexorMetrics | None = None,
+    queue: Queue | None = None,
 ) -> ExecutorService:
     registry = ToolRegistry()
     registry.register(tool)  # type: ignore[arg-type]
@@ -332,7 +366,7 @@ async def _build_service(
     return ExecutorService(
         uow_factory=uow_factory,
         repos=repos,
-        queue=_NoopQueue(),
+        queue=_NoopQueue() if queue is None else queue,
         policy_runner=runner,
         tool_registry=registry,
         idempotency_ledger=ledger_factory,
@@ -850,3 +884,143 @@ async def test_executor_metrics_transient_failure_increments_retry_counter(tmp_p
         )
         == 1.0
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_task_success_queues_newly_ready_dependents(tmp_path: Path) -> None:
+    tool = _RecordingTool(result=ToolResult(ok=True, data={"ok": True}), idempotent=True)
+
+    run_id = str(uuid4())
+    parent_tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "parent"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-parent",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    parent_task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="parent",
+        status=TaskStatus.QUEUED,
+        tool_call=parent_tool_call,
+        created_at_ms=0,
+    )
+    child_tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "child"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-child",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    child_task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="child",
+        status=TaskStatus.PENDING,
+        tool_call=child_tool_call,
+        depends_on=[parent_task.task_id],
+        created_at_ms=0,
+    )
+
+    task_repo = _InMemoryTaskRepo()
+    tool_call_repo = _InMemoryToolCallRepo()
+    queue = _RecordingQueue()
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
+        tool=tool,
+        task=parent_task,
+        task_repo=task_repo,
+        tool_call_repo=tool_call_repo,
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=_InMemoryRunPacketRepo(),
+        ledger=_FakeLedger(),
+        queue=queue,
+    )
+    await task_repo.create(child_task)
+    await tool_call_repo.create(child_tool_call)
+
+    report = await service.execute_task(parent_task.task_id)
+
+    assert report.disposition == ExecutionDisposition.SUCCEEDED
+    updated_child = await task_repo.get(child_task.task_id)
+    assert updated_child is not None
+    assert updated_child.status == TaskStatus.QUEUED
+    assert len(queue.enqueued) == 1
+    assert queue.enqueued[0].task_id == child_task.task_id
+
+
+@pytest.mark.asyncio
+async def test_execute_task_terminal_failure_cancels_blocked_dependents(tmp_path: Path) -> None:
+    tool = _RecordingTool(
+        result=ToolResult(ok=False, error_code="INVALID_ARGS", error_message="bad args"),
+        idempotent=True,
+    )
+
+    run_id = str(uuid4())
+    parent_tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "parent"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-parent",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    parent_task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="parent",
+        status=TaskStatus.QUEUED,
+        tool_call=parent_tool_call,
+        created_at_ms=0,
+    )
+    child_tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "child"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-child",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    child_task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="child",
+        status=TaskStatus.PENDING,
+        tool_call=child_tool_call,
+        depends_on=[parent_task.task_id],
+        created_at_ms=0,
+    )
+
+    task_repo = _InMemoryTaskRepo()
+    tool_call_repo = _InMemoryToolCallRepo()
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
+        tool=tool,
+        task=parent_task,
+        task_repo=task_repo,
+        tool_call_repo=tool_call_repo,
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=_InMemoryRunPacketRepo(),
+        ledger=_FakeLedger(),
+    )
+    await task_repo.create(child_task)
+    await tool_call_repo.create(child_tool_call)
+
+    report = await service.execute_task(parent_task.task_id)
+
+    assert report.disposition == ExecutionDisposition.FAILED_PERMANENT
+    updated_child = await task_repo.get(child_task.task_id)
+    updated_child_tool_call = await tool_call_repo.get(child_tool_call.tool_call_id)
+    assert updated_child is not None
+    assert updated_child.status == TaskStatus.CANCELED
+    assert updated_child_tool_call is not None
+    assert updated_child_tool_call.status == ToolCallStatus.CANCELED

@@ -164,6 +164,24 @@ class _TwoTaskRouter:
         )
 
 
+class _DependentTaskRouter:
+    async def route(self, event: Event, ctx: PlanningInput) -> ReflexDecision:
+        _ = (event, ctx)
+        return ReflexDecision(
+            action="fast_tasks",
+            reason="dependency_chain",
+            proposed_tasks=[
+                ProposedTask(name="root", tool_name="debug.echo", args={"a": 1}),
+                ProposedTask(
+                    name="child",
+                    tool_name="debug.echo",
+                    args={"b": 2},
+                    depends_on=["root"],
+                ),
+            ],
+        )
+
+
 async def test_budget_exceeded_prevents_enqueue_and_is_recorded() -> None:
     registry = ToolRegistry()
     registry.register(EchoTool())
@@ -193,3 +211,34 @@ async def test_budget_exceeded_prevents_enqueue_and_is_recorded() -> None:
     assert packet.policy_decisions
     assert packet.policy_decisions[0]["type"] == "budget_exceeded"
     assert packet.policy_decisions[0]["context"]["budget"] == "max_tasks_per_run"
+
+
+async def test_handle_event_only_enqueues_root_tasks_for_dependency_graph() -> None:
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+
+    queue = _RecordingQueue()
+    sink = _InMemoryRunSink()
+    clock = _FixedClock()
+
+    engine = OrchestratorEngine(
+        reflex_router=_DependentTaskRouter(),
+        planner=NoOpPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
+        clock=clock,
+        run_sink=sink,
+    )
+
+    run_id = await engine.handle_event(_event())
+    UUID(run_id)
+
+    assert len(queue.envelopes) == 1
+    packet = sink.packets[0]
+    assert len(packet.tasks) == 2
+
+    by_name = {task.name: task for task in packet.tasks}
+    assert by_name["root"].status.value == "queued"
+    assert by_name["child"].status.value == "pending"
+    assert by_name["child"].depends_on == [by_name["root"].task_id]

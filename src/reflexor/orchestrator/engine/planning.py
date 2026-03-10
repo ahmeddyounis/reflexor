@@ -12,12 +12,56 @@ from reflexor.domain.models_run_packet import RunPacket
 from reflexor.observability.context import correlation_context
 from reflexor.orchestrator.budgets import BudgetTracker, budget_exceeded_to_audit_dict
 from reflexor.orchestrator.engine.types import PlanningTrigger
-from reflexor.orchestrator.plans import LimitsSnapshot, PlanningInput
+from reflexor.orchestrator.plans import LimitsSnapshot, Plan, PlanningInput
 from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
 from reflexor.storage.ports import RunRecord
 
 if TYPE_CHECKING:
     from reflexor.orchestrator.engine.core import OrchestratorEngine
+
+
+def _validate_plan_budget_assertions(*, engine: OrchestratorEngine, plan: Plan) -> None:
+    assertions = plan.budget_assertions
+
+    if (
+        assertions.max_tasks is not None
+        and engine.limits.max_tasks_per_run is not None
+        and assertions.max_tasks > int(engine.limits.max_tasks_per_run)
+    ):
+        raise BudgetExceeded(
+            "planner budget assertion exceeds configured max_tasks_per_run",
+            budget="max_tasks_per_run",
+            context={
+                "asserted_max_tasks": assertions.max_tasks,
+                "configured_max_tasks_per_run": int(engine.limits.max_tasks_per_run),
+            },
+        )
+    if (
+        assertions.max_tool_calls is not None
+        and engine.limits.max_tool_calls_per_run is not None
+        and assertions.max_tool_calls > int(engine.limits.max_tool_calls_per_run)
+    ):
+        raise BudgetExceeded(
+            "planner budget assertion exceeds configured max_tool_calls_per_run",
+            budget="max_tool_calls_per_run",
+            context={
+                "asserted_max_tool_calls": assertions.max_tool_calls,
+                "configured_max_tool_calls_per_run": int(engine.limits.max_tool_calls_per_run),
+            },
+        )
+    if (
+        assertions.max_runtime_s is not None
+        and engine.limits.max_wall_time_s is not None
+        and assertions.max_runtime_s > float(engine.limits.max_wall_time_s)
+    ):
+        raise BudgetExceeded(
+            "planner budget assertion exceeds configured max_run_wall_time_s",
+            budget="max_run_wall_time_s",
+            context={
+                "asserted_max_runtime_s": assertions.max_runtime_s,
+                "configured_max_run_wall_time_s": float(engine.limits.max_wall_time_s),
+            },
+        )
 
 
 async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrigger) -> str:
@@ -31,7 +75,10 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
     started_perf_s = time.perf_counter()
     planning_run_id = str(uuid4())
     tracker = BudgetTracker(limits=engine.limits, clock=engine.clock)
-    validator = PlanValidator(registry=engine.tool_registry)
+    validator = PlanValidator(
+        registry=engine.tool_registry,
+        approval_required_scopes=engine.approval_required_scopes,
+    )
 
     plan_dict: dict[str, object] = {}
     tasks: list[Task] = []
@@ -96,6 +143,7 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                         now_ms=now_ms,
                     )
                     plan = await engine.planner.plan(planning_input)
+                    _validate_plan_budget_assertions(engine=engine, plan=plan)
                     plan_dict = plan.model_dump(mode="json")
 
                     proposed_tasks = list(plan.tasks)
@@ -113,13 +161,12 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                     if engine.persistence is not None:
                         await engine.persistence.persist_tasks_and_tool_calls(tasks)
 
-                    await engine._enqueue_tasks(
+                    enqueued_task_ids = await engine._enqueue_tasks(
                         tasks,
                         reason=plan.summary,
                         source="planner",
                         trigger=effective_trigger,
                     )
-                    enqueued_task_ids = [task.task_id for task in tasks]
                     if enqueued_task_ids:
                         enqueued_set = set(enqueued_task_ids)
                         tasks = [

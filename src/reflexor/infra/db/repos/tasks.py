@@ -130,6 +130,22 @@ class SqlAlchemyTaskRepo:
             tool_call_row = await self._session.get(ToolCallRow, task_row.tool_call_id)
         return _task_from_rows(task_row, tool_call_row)
 
+    async def list_by_run(self, run_id: str) -> list[Task]:
+        normalized = _normalize_optional_str(run_id)
+        if normalized is None:
+            raise ValueError("run_id must be non-empty")
+
+        stmt = cast(
+            Select[tuple[TaskRow, ToolCallRow | None]],
+            select(TaskRow, ToolCallRow)
+            .outerjoin(ToolCallRow, TaskRow.tool_call_id == ToolCallRow.tool_call_id)
+            .where(TaskRow.run_id == normalized)
+            .order_by(TaskRow.created_at_ms, TaskRow.task_id),
+        )
+        result = await self._session.execute(stmt)
+        rows = result.all()
+        return [_task_from_rows(task_row, tool_call_row) for task_row, tool_call_row in rows]
+
     async def list_summaries(
         self,
         *,

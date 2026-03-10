@@ -4,9 +4,16 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from reflexor.domain.execution_state import ExecutionState, start_execution
+from reflexor.domain.enums import TaskStatus
+from reflexor.domain.execution_state import ExecutionState, complete_canceled, start_execution
+from reflexor.domain.lifecycle import transition_task
 from reflexor.domain.models import ToolCall
 from reflexor.executor.service.audit import append_audit
+from reflexor.executor.service.dependencies import (
+    blocked_dependents_after_failure,
+    dependency_ready_envelope,
+    ready_dependents_after_success,
+)
 from reflexor.executor.service.outcomes import classify_outcome, did_attempt_tool_run
 from reflexor.executor.service.state_transitions import apply_state_transition
 from reflexor.executor.service.types import (
@@ -118,6 +125,7 @@ async def persist_outcome(
 
     attempted_tool_run = did_attempt_tool_run(outcome)
     tool_is_idempotent = _is_tool_idempotent(service, tool_call.tool_name)
+    dependent_envelopes = []
 
     uow = service._uow_factory()
     async with uow:
@@ -162,6 +170,38 @@ async def persist_outcome(
                 disposition=disposition,
             )
 
+        all_run_tasks = await task_repo.list_by_run(state.task.run_id)
+        if state.task.status == TaskStatus.SUCCEEDED:
+            ready_dependents = ready_dependents_after_success(
+                task=state.task,
+                all_tasks=all_run_tasks,
+            )
+            for dependent in ready_dependents:
+                queued_task = transition_task(dependent, TaskStatus.QUEUED)
+                await task_repo.update(queued_task)
+                dependent_envelopes.append(
+                    dependency_ready_envelope(
+                        task=queued_task,
+                        now_ms=now_ms,
+                        upstream_task_id=state.task.task_id,
+                    )
+                )
+        elif state.task.status in {TaskStatus.CANCELED, TaskStatus.FAILED} and not will_retry:
+            blocked_dependents = blocked_dependents_after_failure(
+                task=state.task,
+                all_tasks=all_run_tasks,
+            )
+            for dependent in blocked_dependents:
+                if dependent.tool_call is None:
+                    continue
+                canceled_state = complete_canceled(
+                    task=dependent,
+                    tool_call=dependent.tool_call,
+                    now_ms=now_ms,
+                )
+                await tool_call_repo.update(canceled_state.tool_call)
+                await task_repo.update(canceled_state.task)
+
     if service._metrics is not None:
         service._metrics.tasks_completed_total.labels(status=state.task.status.value).inc()
 
@@ -177,6 +217,9 @@ async def persist_outcome(
                 tool_name=tool_call.tool_name,
                 ok="true" if result.ok else "false",
             ).observe(float(tool_latency_s))
+
+    for envelope in dependent_envelopes:
+        await service._queue.enqueue(envelope)
 
     return ExecutionReport(
         task_id=state.task.task_id,

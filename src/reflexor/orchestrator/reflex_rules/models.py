@@ -128,8 +128,39 @@ class DropAction(BaseModel):
     kind: Literal["drop"] = "drop"
 
 
+class FlagAction(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["flag"] = "flag"
+    severity: Literal["low", "medium", "high"] = "medium"
+    note_template: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("note_template")
+    @classmethod
+    def _validate_note_template(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        _validate_placeholders_in_obj({"note_template": trimmed})
+        return trimmed
+
+    @field_validator("tags")
+    @classmethod
+    def _validate_tags(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            trimmed = str(item).strip()
+            if not trimmed:
+                raise ValueError("tags entries must be non-empty")
+            normalized.append(trimmed)
+        return normalized
+
+
 ReflexRuleAction = Annotated[
-    FastToolAction | NeedsPlanningAction | DropAction,
+    FastToolAction | NeedsPlanningAction | DropAction | FlagAction,
     Field(discriminator="kind"),
 ]
 
@@ -162,6 +193,7 @@ class ReflexRule(BaseModel):
 __all__ = [
     "DropAction",
     "FastToolAction",
+    "FlagAction",
     "NeedsPlanningAction",
     "ReflexRule",
     "ReflexRuleMatch",

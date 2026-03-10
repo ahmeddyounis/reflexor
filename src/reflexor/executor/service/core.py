@@ -21,6 +21,7 @@ from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service.audit import append_audit
 from reflexor.executor.service.cache import maybe_use_cached_success
 from reflexor.executor.service.circuit_breaker import record_circuit_breaker_result
+from reflexor.executor.service.dependencies import has_unmet_dependencies
 from reflexor.executor.service.loading import load_approval_status, load_task_and_tool_call
 from reflexor.executor.service.persistence import (
     persist_approval,
@@ -241,6 +242,33 @@ class ExecutorService:
             task_id=task.task_id,
             tool_call_id=tool_call.tool_call_id,
         ):
+            uow = self._uow_factory()
+            async with uow:
+                run_tasks = await self._repos.task_repo(uow.session).list_by_run(task.run_id)
+            if task.status in {TaskStatus.PENDING, TaskStatus.QUEUED} and has_unmet_dependencies(
+                task=task, all_tasks=run_tasks
+            ):
+                await self._queue.nack(
+                    lease,
+                    delay_s=1.0,
+                    reason="dependencies_unmet",
+                )
+                return ExecutionReport(
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    tool_name=tool_call.tool_name,
+                    idempotency_key=tool_call.idempotency_key,
+                    disposition=ExecutionDisposition.FAILED_TRANSIENT,
+                    decision=None,
+                    result=ToolResult(
+                        ok=False,
+                        error_code="DEPENDENCIES_UNMET",
+                        error_message="task dependencies are not yet satisfied",
+                    ),
+                    retry_after_s=1.0,
+                )
+
             if task.status == TaskStatus.SUCCEEDED:
                 await self._queue.ack(lease)
                 return ExecutionReport(

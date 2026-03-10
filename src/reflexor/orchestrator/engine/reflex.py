@@ -40,7 +40,10 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
         )
 
     tracker = BudgetTracker(limits=engine.limits, clock=engine.clock)
-    validator = PlanValidator(registry=engine.tool_registry)
+    validator = PlanValidator(
+        registry=engine.tool_registry,
+        approval_required_scopes=engine.approval_required_scopes,
+    )
 
     reflex_decision_dict: dict[str, object] = {}
     tasks: list[Task] = []
@@ -99,14 +102,13 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
                     if engine.persistence is not None:
                         await engine.persistence.persist_tasks_and_tool_calls(tasks)
 
-                    await engine._enqueue_tasks(
+                    enqueued_task_ids = await engine._enqueue_tasks(
                         tasks,
                         reason=decision.reason,
                         source="reflex",
                         trigger="event",
                         first_enqueue_started_s=started_perf_s,
                     )
-                    enqueued_task_ids = [task.task_id for task in tasks]
                     if enqueued_task_ids:
                         enqueued_set = set(enqueued_task_ids)
                         tasks = [
@@ -125,6 +127,16 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
                     if engine.metrics is not None:
                         engine.metrics.orchestrator_rejections_total.labels(reason="drop").inc()
                     pass
+                elif decision.action == "flag":
+                    if engine.metrics is not None:
+                        engine.metrics.orchestrator_rejections_total.labels(reason="flag").inc()
+                    policy_decisions.append(
+                        {
+                            "type": "flagged_event",
+                            "reason": decision.reason,
+                            "flag": decision.flag or {},
+                        }
+                    )
                 else:  # pragma: no cover
                     raise AssertionError(f"unknown reflex decision action: {decision.action!r}")
         except BudgetExceeded as exc:

@@ -19,10 +19,11 @@ Clean Architecture:
 
 from __future__ import annotations
 
-from reflexor.orchestrator.reflex_rules.loader import load_reflex_rules_json
+from reflexor.orchestrator.reflex_rules.loader import load_reflex_rules, load_reflex_rules_json
 from reflexor.orchestrator.reflex_rules.models import (
     DropAction,
     FastToolAction,
+    FlagAction,
     NeedsPlanningAction,
     ReflexRule,
     ReflexRuleMatch,
@@ -38,6 +39,7 @@ from reflexor.orchestrator.reflex_rules.template import (
 __all__ = [
     "DropAction",
     "FastToolAction",
+    "FlagAction",
     "NeedsPlanningAction",
     "ReflexRule",
     "ReflexRuleMatch",
@@ -45,6 +47,7 @@ __all__ = [
     "ReflexTemplateError",
     "TemplateResolutionError",
     "TemplateValidationError",
+    "load_reflex_rules",
     "load_reflex_rules_json",
     "render_template_value",
 ]
