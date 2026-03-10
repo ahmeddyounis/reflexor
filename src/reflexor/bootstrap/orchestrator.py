@@ -74,6 +74,7 @@ def build_orchestrator_engine(
     limits = BudgetLimits(
         max_tasks_per_run=settings.max_tasks_per_run,
         max_tool_calls_per_run=settings.max_tool_calls_per_run,
+        max_tokens_per_run=settings.planner_max_tokens_per_run,
         max_wall_time_s=settings.max_run_wall_time_s,
         max_events_per_planning_cycle=settings.max_events_per_planning_cycle,
         max_backlog_events=settings.event_backlog_max,
@@ -88,7 +89,11 @@ def build_orchestrator_engine(
         tool_call_repo=repos.tool_call_repo,
         run_packet_repo=repos.run_packet_repo,
     )
-    persistence = OrchestratorPersistence(uow_factory=uow_factory, repos=orchestrator_repos)
+    persistence = OrchestratorPersistence(
+        uow_factory=uow_factory,
+        repos=orchestrator_repos,
+        event_dedupe_window_ms=int(float(settings.event_dedupe_window_s) * 1000),
+    )
 
     event_suppressor = None
     if settings.event_suppression_enabled:
@@ -121,5 +126,6 @@ def build_orchestrator_engine(
         metrics=metrics,
         planner_debounce_s=float(settings.planner_debounce_s),
         planner_interval_s=float(settings.planner_interval_s),
+        enabled_scopes=tuple(settings.enabled_scopes),
         approval_required_scopes=tuple(settings.approval_required_scopes),
     )

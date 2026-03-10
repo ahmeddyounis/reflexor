@@ -36,6 +36,10 @@ class PathArgs(BaseModel):
     path: Path
 
 
+class MessageArgs(BaseModel):
+    message: str
+
+
 def _tool_call(*, tool_name: str, scope: str) -> ToolCall:
     return ToolCall(
         tool_name=tool_name,
@@ -401,6 +405,68 @@ def test_approval_required_rule_requires_approval_for_scopes(tmp_path: Path) -> 
     assert decision is not None
     assert decision.action == PolicyAction.REQUIRE_APPROVAL
     assert decision.reason_code == REASON_APPROVAL_REQUIRED
+
+
+def test_approval_required_rule_requires_approval_for_destination_domain(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["net.http"],
+        approval_required_domains=["api.example.com"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.http",
+        version="0.1.0",
+        description="http tool",
+        permission_scope="net.http",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = ApprovalRequiredRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="net.http"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://api.example.com/path"),
+        ctx=ctx,
+    )
+
+    assert decision is not None
+    assert decision.action == PolicyAction.REQUIRE_APPROVAL
+    assert decision.reason_code == REASON_APPROVAL_REQUIRED
+    assert decision.metadata["host"] == "api.example.com"
+
+
+def test_approval_required_rule_requires_approval_for_payload_keyword(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["fs.write"],
+        approval_required_payload_keywords=["SeCrEt"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.message",
+        version="0.1.0",
+        description="message tool",
+        permission_scope="fs.write",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=MessageArgs)
+
+    rule = ApprovalRequiredRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="fs.write"),
+        tool_spec=tool_spec,
+        parsed_args=MessageArgs(message="contains SECRET material"),
+        ctx=ctx,
+    )
+
+    assert decision is not None
+    assert decision.action == PolicyAction.REQUIRE_APPROVAL
+    assert decision.reason_code == REASON_APPROVAL_REQUIRED
+    assert decision.metadata["keyword"] == "secret"
 
 
 def test_approval_required_rule_requires_approval_for_prod_side_effects(tmp_path: Path) -> None:

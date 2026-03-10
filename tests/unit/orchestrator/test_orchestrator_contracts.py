@@ -4,7 +4,14 @@ import pytest
 
 from reflexor.domain.models_event import Event
 from reflexor.orchestrator.interfaces import NeedsPlanningRouter, NoOpPlanner
-from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask, ReflexDecision
+from reflexor.orchestrator.plans import (
+    BudgetAssertions,
+    LimitsSnapshot,
+    Plan,
+    PlanningInput,
+    ProposedTask,
+    ReflexDecision,
+)
 
 
 def _event() -> Event:
@@ -44,7 +51,15 @@ def test_reflex_decision_json_round_trip() -> None:
 
 
 def test_plan_json_round_trip() -> None:
-    plan = Plan(summary="tests", tasks=[ProposedTask(name="task-1", tool_name="echo")])
+    plan = Plan(
+        summary="tests",
+        tasks=[ProposedTask(name="task-1", tool_name="echo")],
+        budget_assertions=BudgetAssertions(
+            max_tool_calls=1,
+            max_runtime_s=30.0,
+            max_tokens=128,
+        ),
+    )
     dumped = plan.model_dump(mode="json")
     assert Plan.model_validate(dumped) == plan
 
@@ -53,7 +68,12 @@ def test_planning_input_requires_events_for_event_trigger() -> None:
     with pytest.raises(ValueError, match="events must be non-empty"):
         PlanningInput(trigger="event", events=[], now_ms=0)
 
-    ok = PlanningInput(trigger="tick", events=[], now_ms=0)
+    ok = PlanningInput(
+        trigger="tick",
+        events=[],
+        limits=LimitsSnapshot(max_tool_calls=1, max_runtime_s=30.0, max_tokens=128),
+        now_ms=0,
+    )
     assert ok.trigger == "tick"
 
 

@@ -134,6 +134,7 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
         metrics=metrics,
         planner_debounce_s=settings.planner_debounce_s,
         planner_interval_s=settings.planner_interval_s,
+        enabled_scopes=("net.http",),
     )
 
     run_id = await engine.handle_event(_event(tmp_path))

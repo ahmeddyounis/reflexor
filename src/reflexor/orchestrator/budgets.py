@@ -27,6 +27,7 @@ class BudgetLimits:
 
     max_tasks_per_run: int | None = None
     max_tool_calls_per_run: int | None = None
+    max_tokens_per_run: int | None = None
     max_wall_time_s: float | None = None
     max_events_per_planning_cycle: int | None = None
     max_backlog_events: int | None = None
@@ -36,6 +37,7 @@ class BudgetLimits:
         _validate_optional_positive_int(
             self.max_tool_calls_per_run, field_name="max_tool_calls_per_run"
         )
+        _validate_optional_positive_int(self.max_tokens_per_run, field_name="max_tokens_per_run")
         _validate_optional_positive_int(
             self.max_events_per_planning_cycle, field_name="max_events_per_planning_cycle"
         )
@@ -95,6 +97,7 @@ class BudgetTracker:
             "limits": {
                 "max_tasks_per_run": self.limits.max_tasks_per_run,
                 "max_tool_calls_per_run": self.limits.max_tool_calls_per_run,
+                "max_tokens_per_run": self.limits.max_tokens_per_run,
                 "max_wall_time_s": self.limits.max_wall_time_s,
                 "max_events_per_planning_cycle": self.limits.max_events_per_planning_cycle,
                 "max_backlog_events": self.limits.max_backlog_events,

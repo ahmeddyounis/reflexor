@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 _DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./reflexor.db"
 
 _RESET_TABLES: tuple[str, ...] = (
+    "event_dedupes",
     "memory_items",
     "approvals",
     "tasks",

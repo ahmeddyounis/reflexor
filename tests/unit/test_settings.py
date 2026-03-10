@@ -73,6 +73,9 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.planner_temperature == 0.0
     assert settings.planner_system_prompt is None
     assert settings.planner_max_memory_items == 5
+    assert settings.planner_max_tokens_per_run == 4096
+    assert settings.approval_required_domains == []
+    assert settings.approval_required_payload_keywords == []
     assert settings.otel_enabled is False
     assert settings.otel_service_name == "reflexor"
     assert settings.otel_exporter_otlp_endpoint is None
@@ -81,6 +84,11 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.planner_debounce_s == 2.0
     assert settings.event_backlog_max == 200
     assert settings.max_events_per_planning_cycle == 50
+    assert settings.event_dedupe_window_s == 86_400.0
+    assert settings.maintenance_batch_size == 200
+    assert settings.memory_compaction_after_days == 1
+    assert settings.memory_retention_days == 30
+    assert settings.archive_terminal_tasks_after_days == 30
     assert settings.max_tasks_per_run == 50
     assert settings.max_tool_calls_per_run == 50
     assert settings.max_run_wall_time_s == 30.0
@@ -226,6 +234,17 @@ def test_planner_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_pat
         ReflexorSettings(otel_service_name=" ")
 
 
+def test_approval_and_maintenance_settings_are_normalized(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        approval_required_domains=[" Example.com ", "api.example.com."],
+        approval_required_payload_keywords=[" Secret ", "secret", "PII"],
+    )
+
+    assert settings.approval_required_domains == ["example.com", "api.example.com"]
+    assert settings.approval_required_payload_keywords == ["secret", "pii"]
+
+
 def test_redis_settings_reject_invalid_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -284,11 +303,29 @@ def test_orchestrator_settings_reject_non_positive_values(
     with pytest.raises(ValueError, match="max_events_per_planning_cycle must be > 0"):
         ReflexorSettings(max_events_per_planning_cycle=0)
 
+    with pytest.raises(ValueError, match="event_dedupe_window_s must be > 0"):
+        ReflexorSettings(event_dedupe_window_s=0)
+
+    with pytest.raises(ValueError, match="maintenance_batch_size must be > 0"):
+        ReflexorSettings(maintenance_batch_size=0)
+
+    with pytest.raises(ValueError, match="memory_compaction_after_days must be > 0"):
+        ReflexorSettings(memory_compaction_after_days=0)
+
+    with pytest.raises(ValueError, match="memory_retention_days must be > 0"):
+        ReflexorSettings(memory_retention_days=0)
+
+    with pytest.raises(ValueError, match="archive_terminal_tasks_after_days must be > 0"):
+        ReflexorSettings(archive_terminal_tasks_after_days=0)
+
     with pytest.raises(ValueError, match="max_tasks_per_run must be > 0"):
         ReflexorSettings(max_tasks_per_run=0)
 
     with pytest.raises(ValueError, match="max_tool_calls_per_run must be > 0"):
         ReflexorSettings(max_tool_calls_per_run=0)
+
+    with pytest.raises(ValueError, match="planner_max_tokens_per_run must be > 0"):
+        ReflexorSettings(planner_max_tokens_per_run=0)
 
     with pytest.raises(ValueError, match="max_run_wall_time_s must be > 0"):
         ReflexorSettings(max_run_wall_time_s=0)

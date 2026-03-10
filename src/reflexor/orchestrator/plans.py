@@ -107,11 +107,12 @@ class BudgetAssertions(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    max_tool_calls: int
+    max_runtime_s: float
+    max_tokens: int
     max_tasks: int | None = None
-    max_tool_calls: int | None = None
-    max_runtime_s: float | None = None
 
-    @field_validator("max_tasks", "max_tool_calls")
+    @field_validator("max_tasks", "max_tool_calls", "max_tokens")
     @classmethod
     def _validate_optional_positive_ints(cls, value: int | None, info: object) -> int | None:
         if value is None:
@@ -142,7 +143,7 @@ class Plan(BaseModel):
     tasks: list[ProposedTask] = Field(default_factory=list)
     estimated_cost: float | None = None
     required_approvals: list[str] = Field(default_factory=list)
-    budget_assertions: BudgetAssertions = Field(default_factory=BudgetAssertions)
+    budget_assertions: BudgetAssertions
     planner_version: str | None = None
     planning_notes: list[str] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -223,9 +224,10 @@ class LimitsSnapshot(BaseModel):
 
     max_tasks: int | None = None
     max_tool_calls: int | None = None
+    max_tokens: int | None = None
     max_runtime_s: float | None = None
 
-    @field_validator("max_tasks", "max_tool_calls")
+    @field_validator("max_tasks", "max_tool_calls", "max_tokens")
     @classmethod
     def _validate_optional_positive_ints(cls, value: int | None, info: object) -> int | None:
         if value is None:

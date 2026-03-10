@@ -33,7 +33,7 @@ def test_post_events_persists_reflex_run_and_dedupes(tmp_path: Path) -> None:
 
     settings = ReflexorSettings(
         workspace_root=tmp_path,
-        enabled_scopes=[],
+        enabled_scopes=["fs.read"],
         database_url=f"sqlite+aiosqlite:///{db_path}",
         max_run_packet_bytes=50_000,
     )

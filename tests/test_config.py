@@ -22,7 +22,15 @@ def test_config_import_and_defaults_are_safe() -> None:
     assert settings.enabled_scopes == []
     assert settings.http_allowed_domains == []
     assert settings.webhook_allowed_targets == []
+    assert settings.approval_required_domains == []
+    assert settings.approval_required_payload_keywords == []
     assert isinstance(settings.workspace_root, Path)
+    assert settings.event_dedupe_window_s == 86_400.0
+    assert settings.planner_max_tokens_per_run == 4096
+    assert settings.maintenance_batch_size == 200
+    assert settings.memory_compaction_after_days == 1
+    assert settings.memory_retention_days == 30
+    assert settings.archive_terminal_tasks_after_days == 30
     assert settings.max_event_payload_bytes == DEFAULT_MAX_PAYLOAD_BYTES
     assert settings.max_tool_output_bytes == DEFAULT_MAX_TOOL_RESULT_BYTES
     assert settings.max_run_packet_bytes == DEFAULT_MAX_PACKET_BYTES
@@ -45,6 +53,10 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
     monkeypatch.setenv("REFLEXOR_MAX_EVENT_PAYLOAD_BYTES", "123")
     monkeypatch.setenv("REFLEXOR_MAX_TOOL_OUTPUT_BYTES", "456")
     monkeypatch.setenv("REFLEXOR_MAX_RUN_PACKET_BYTES", "789")
+    monkeypatch.setenv("REFLEXOR_APPROVAL_REQUIRED_DOMAINS", '[" Example.com "]')
+    monkeypatch.setenv("REFLEXOR_APPROVAL_REQUIRED_PAYLOAD_KEYWORDS", '[" Secret ", "secret"]')
+    monkeypatch.setenv("REFLEXOR_EVENT_DEDUPE_WINDOW_S", "120")
+    monkeypatch.setenv("REFLEXOR_PLANNER_MAX_TOKENS_PER_RUN", "2048")
 
     settings_1 = get_settings()
     assert settings_1.profile == "prod"
@@ -54,6 +66,10 @@ def test_settings_load_from_env_and_cache_can_be_cleared(
     assert settings_1.http_allowed_domains == ["example.com", "api.example.com"]
     assert settings_1.webhook_allowed_targets == ["https://hooks.example.com/path"]
     assert settings_1.workspace_root.resolve(strict=False) == tmp_path.resolve(strict=False)
+    assert settings_1.approval_required_domains == ["example.com"]
+    assert settings_1.approval_required_payload_keywords == ["secret"]
+    assert settings_1.event_dedupe_window_s == 120.0
+    assert settings_1.planner_max_tokens_per_run == 2048
     assert settings_1.max_event_payload_bytes == 123
     assert settings_1.max_tool_output_bytes == 456
     assert settings_1.max_run_packet_bytes == 789

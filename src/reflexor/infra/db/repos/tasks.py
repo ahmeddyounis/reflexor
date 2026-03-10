@@ -268,3 +268,38 @@ class SqlAlchemyTaskRepo:
         result = await self._session.execute(stmt)
         rows = result.all()
         return [_task_from_rows(task_row, tool_call_row) for task_row, tool_call_row in rows]
+
+    async def archive_terminal_before(self, *, completed_before_ms: int, limit: int) -> int:
+        limit_int, _ = _validate_limit_offset(limit=limit, offset=0)
+        if limit_int == 0:
+            return 0
+
+        stmt = (
+            select(TaskRow.task_id)
+            .where(
+                TaskRow.status.in_(
+                    [
+                        TaskStatus.SUCCEEDED.value,
+                        TaskStatus.FAILED.value,
+                        TaskStatus.CANCELED.value,
+                    ]
+                ),
+                TaskRow.completed_at_ms.is_not(None),
+                TaskRow.completed_at_ms < int(completed_before_ms),
+            )
+            .order_by(TaskRow.completed_at_ms, TaskRow.task_id)
+            .limit(limit_int)
+        )
+        task_ids = list((await self._session.execute(stmt)).scalars().all())
+        if not task_ids:
+            return 0
+
+        rows = (
+            (await self._session.execute(select(TaskRow).where(TaskRow.task_id.in_(task_ids))))
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            row.status = TaskStatus.ARCHIVED.value
+        await self._session.flush()
+        return len(task_ids)

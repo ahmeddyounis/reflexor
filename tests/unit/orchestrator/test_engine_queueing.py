@@ -112,6 +112,7 @@ async def test_handle_event_enqueues_task_envelope_for_reflex_rule() -> None:
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
         run_sink=sink,
+        enabled_scopes=("fs.read",),
     )
 
     run_id = await engine.handle_event(_event())
@@ -187,6 +188,7 @@ async def test_handle_event_enqueues_otel_trace_carrier_when_available(
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=_FixedClock(),
         run_sink=_InMemoryRunSink(),
+        enabled_scopes=("fs.read",),
     )
 
     await engine.handle_event(_event())
@@ -244,6 +246,7 @@ async def test_budget_exceeded_prevents_enqueue_and_is_recorded() -> None:
         limits=BudgetLimits(max_tasks_per_run=1, max_tool_calls_per_run=10),
         clock=clock,
         run_sink=sink,
+        enabled_scopes=("fs.read",),
     )
 
     run_id = await engine.handle_event(_event())
@@ -275,6 +278,7 @@ async def test_handle_event_only_enqueues_root_tasks_for_dependency_graph() -> N
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
         run_sink=sink,
+        enabled_scopes=("fs.read",),
     )
 
     run_id = await engine.handle_event(_event())

@@ -39,6 +39,8 @@ class PolicyContext:
 
     enabled_scopes: tuple[str, ...]
     approval_required_scopes: tuple[str, ...]
+    approval_required_domains: tuple[str, ...]
+    approval_required_payload_keywords: tuple[str, ...]
 
     allowlists: PolicyAllowlists
     workspace_root: Path
@@ -51,6 +53,8 @@ class PolicyContext:
             dry_run=settings.dry_run,
             enabled_scopes=tuple(settings.enabled_scopes),
             approval_required_scopes=tuple(settings.approval_required_scopes),
+            approval_required_domains=tuple(settings.approval_required_domains),
+            approval_required_payload_keywords=tuple(settings.approval_required_payload_keywords),
             allowlists=PolicyAllowlists(
                 http_allowed_domains=tuple(settings.http_allowed_domains),
                 webhook_allowed_targets=tuple(settings.webhook_allowed_targets),

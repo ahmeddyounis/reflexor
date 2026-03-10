@@ -141,6 +141,7 @@ class PlanValidator:
     """Validate tasks against the tool registry and build domain models."""
 
     registry: ToolRegistry
+    enabled_scopes: tuple[str, ...] = ()
     approval_required_scopes: tuple[str, ...] = ()
 
     def build_task(
@@ -157,6 +158,10 @@ class PlanValidator:
             raise PlanValidationError(str(exc)) from exc
 
         permission_scope = _validate_permission_scope(tool.manifest.permission_scope)
+        if permission_scope not in set(self.enabled_scopes):
+            raise PlanValidationError(
+                "tool manifest permission_scope is not enabled for planning execution"
+            )
         if (
             proposed_task.declared_permission_scope is not None
             and proposed_task.declared_permission_scope != permission_scope

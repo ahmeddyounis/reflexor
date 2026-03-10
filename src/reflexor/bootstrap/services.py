@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from reflexor.application.approvals_service import ApprovalCommandService
+from reflexor.application.maintenance_service import MaintenanceService
 from reflexor.application.services import (
     ApprovalsService,
     EventSubmissionService,
@@ -18,6 +19,7 @@ from reflexor.application.suppressions_service import (
     EventSuppressionQueryService,
 )
 from reflexor.bootstrap.repos import RepoProviders
+from reflexor.config import ReflexorSettings
 from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.queue import Queue
 from reflexor.storage.uow import UnitOfWork
@@ -28,6 +30,7 @@ class AppServices:
     submit_events: EventSubmissionService
     approvals: ApprovalsService
     approval_commands: ApprovalCommandService
+    maintenance: MaintenanceService
     queries: QueryService
     run_queries: RunQueryService
     task_queries: TaskQueryService
@@ -37,6 +40,7 @@ class AppServices:
 
 def build_app_services(
     *,
+    settings: ReflexorSettings,
     orchestrator_engine: OrchestratorEngine,
     uow_factory: Callable[[], UnitOfWork],
     repos: RepoProviders,
@@ -47,6 +51,7 @@ def build_app_services(
         uow_factory=uow_factory,
         event_repo=repos.event_repo,
         run_packet_repo=repos.run_packet_repo,
+        dedupe_window_ms=int(float(settings.event_dedupe_window_s) * 1000),
     )
     approvals = ApprovalsService(uow_factory=uow_factory, approval_repo=repos.approval_repo)
     approval_commands = ApprovalCommandService(
@@ -56,6 +61,15 @@ def build_app_services(
         tool_call_repo=repos.tool_call_repo,
         queue=queue,
         clock=orchestrator_engine.clock,
+    )
+    maintenance = MaintenanceService(
+        settings=settings,
+        clock=orchestrator_engine.clock,
+        uow_factory=uow_factory,
+        event_repo=repos.event_repo,
+        run_packet_repo=repos.run_packet_repo,
+        memory_repo=repos.memory_repo,
+        task_repo=repos.task_repo,
     )
     queries = QueryService(
         uow_factory=uow_factory,
@@ -83,6 +97,7 @@ def build_app_services(
         submit_events=submit_events,
         approvals=approvals,
         approval_commands=approval_commands,
+        maintenance=maintenance,
         queries=queries,
         run_queries=run_queries,
         task_queries=task_queries,

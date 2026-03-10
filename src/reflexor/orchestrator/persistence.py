@@ -55,6 +55,7 @@ class OrchestratorPersistence:
     uow_factory: Callable[[], UnitOfWork]
     repos: OrchestratorRepoFactory
     queued_status: TaskStatus = TaskStatus.QUEUED
+    event_dedupe_window_ms: int | None = None
 
     async def persist_event_and_run(self, *, event: Event, run_record: RunRecord) -> Event:
         """Persist the event and run metadata record (commit stage 1).
@@ -70,7 +71,10 @@ class OrchestratorPersistence:
             stored_event: Event
             if event.dedupe_key is not None:
                 stored_event, _ = await event_repo.create_or_get_by_dedupe(
-                    source=event.source, dedupe_key=event.dedupe_key, event=event
+                    source=event.source,
+                    dedupe_key=event.dedupe_key,
+                    event=event,
+                    dedupe_window_ms=self.event_dedupe_window_ms,
                 )
             else:
                 stored_event = await event_repo.create(event)

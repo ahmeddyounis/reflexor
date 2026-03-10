@@ -50,6 +50,17 @@ def _validate_plan_budget_assertions(*, engine: OrchestratorEngine, plan: Plan) 
                 "configured_max_tool_calls_per_run": int(engine.limits.max_tool_calls_per_run),
             },
         )
+    if engine.limits.max_tokens_per_run is not None and assertions.max_tokens > int(
+        engine.limits.max_tokens_per_run
+    ):
+        raise BudgetExceeded(
+            "planner budget assertion exceeds configured max_tokens_per_run",
+            budget="max_tokens_per_run",
+            context={
+                "asserted_max_tokens": assertions.max_tokens,
+                "configured_max_tokens_per_run": int(engine.limits.max_tokens_per_run),
+            },
+        )
     if (
         assertions.max_runtime_s is not None
         and engine.limits.max_wall_time_s is not None
@@ -78,6 +89,7 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
     tracker = BudgetTracker(limits=engine.limits, clock=engine.clock)
     validator = PlanValidator(
         registry=engine.tool_registry,
+        enabled_scopes=engine.enabled_scopes,
         approval_required_scopes=engine.approval_required_scopes,
     )
 
@@ -147,6 +159,7 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                             limits=LimitsSnapshot(
                                 max_tasks=engine.limits.max_tasks_per_run,
                                 max_tool_calls=engine.limits.max_tool_calls_per_run,
+                                max_tokens=engine.limits.max_tokens_per_run,
                                 max_runtime_s=engine.limits.max_wall_time_s,
                             ),
                             now_ms=now_ms,

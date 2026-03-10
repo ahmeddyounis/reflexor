@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -13,7 +13,6 @@ class Base(DeclarativeBase):
 
 class EventRow(Base):
     __tablename__ = "events"
-    __table_args__ = (Index("ux_events_source_dedupe_key", "source", "dedupe_key", unique=True),)
 
     event_id: Mapped[str] = mapped_column(String, primary_key=True)
     type: Mapped[str] = mapped_column(String, index=True)
@@ -21,6 +20,17 @@ class EventRow(Base):
     received_at_ms: Mapped[int] = mapped_column(Integer)
     payload: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
     dedupe_key: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class EventDedupeRow(Base):
+    __tablename__ = "event_dedupes"
+
+    source: Mapped[str] = mapped_column(String, primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String, primary_key=True)
+    event_id: Mapped[str] = mapped_column(String, ForeignKey("events.event_id"))
+    created_at_ms: Mapped[int] = mapped_column(Integer)
+    updated_at_ms: Mapped[int] = mapped_column(Integer)
+    expires_at_ms: Mapped[int] = mapped_column(Integer, index=True)
 
 
 class RunRow(Base):
@@ -147,6 +157,7 @@ class MemoryItemRow(Base):
 __all__ = [
     "ApprovalRow",
     "Base",
+    "EventDedupeRow",
     "EventRow",
     "EventSuppressionRow",
     "IdempotencyLedgerRow",

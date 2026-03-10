@@ -65,7 +65,7 @@ def test_invalid_tool_name_is_rejected() -> None:
 def test_invalid_args_are_rejected() -> None:
     registry = ToolRegistry()
     registry.register(StrictTool())
-    validator = PlanValidator(registry=registry)
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
 
     proposed = ProposedTask(name="t1", tool_name="tests.strict_plan", args={"count": "nope"})
     with pytest.raises(PlanValidationError, match="invalid tool args"):
@@ -82,7 +82,7 @@ def test_missing_permission_scope_is_rejected() -> None:
     tool.manifest = tool.manifest.model_copy(update={"permission_scope": " "})
     registry.register(tool)
 
-    validator = PlanValidator(registry=registry)
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
     proposed = ProposedTask(name="t1", tool_name="tests.strict_plan", args={"count": 1})
 
     with pytest.raises(PlanValidationError, match="permission_scope must be non-empty"):
@@ -93,10 +93,25 @@ def test_missing_permission_scope_is_rejected() -> None:
         )
 
 
+def test_disabled_permission_scope_is_rejected() -> None:
+    registry = ToolRegistry()
+    registry.register(StrictTool())
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.write",))
+
+    proposed = ProposedTask(name="t1", tool_name="tests.strict_plan", args={"count": 1})
+
+    with pytest.raises(PlanValidationError, match="not enabled"):
+        validator.build_task(
+            proposed,
+            run_id="00000000-0000-4000-8000-000000000000",
+            seed_source="planning",
+        )
+
+
 def test_idempotency_key_is_deterministic_over_dict_key_order() -> None:
     registry = ToolRegistry()
     registry.register(ExtraTool())
-    validator = PlanValidator(registry=registry)
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
 
     run_id = "00000000-0000-4000-8000-000000000000"
     event_id = "11111111-1111-4111-8111-111111111111"
@@ -123,7 +138,7 @@ def test_idempotency_key_is_deterministic_over_dict_key_order() -> None:
 def test_seed_fallback_differs_between_reflex_and_planning() -> None:
     registry = ToolRegistry()
     registry.register(ExtraTool())
-    validator = PlanValidator(registry=registry)
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
 
     run_id = "00000000-0000-4000-8000-000000000000"
     event_id = "11111111-1111-4111-8111-111111111111"
@@ -142,7 +157,7 @@ def test_seed_fallback_differs_between_reflex_and_planning() -> None:
 def test_build_tasks_resolves_dependencies_to_task_ids() -> None:
     registry = ToolRegistry()
     registry.register(ExtraTool())
-    validator = PlanValidator(registry=registry)
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
 
     tasks = validator.build_tasks(
         [
@@ -167,7 +182,7 @@ def test_build_tasks_resolves_dependencies_to_task_ids() -> None:
 def test_build_tasks_rejects_cycles() -> None:
     registry = ToolRegistry()
     registry.register(ExtraTool())
-    validator = PlanValidator(registry=registry)
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
 
     with pytest.raises(PlanValidationError, match="cyclic dependency"):
         validator.build_tasks(
@@ -193,7 +208,7 @@ def test_build_tasks_rejects_cycles() -> None:
 def test_declared_permission_scope_must_match_manifest() -> None:
     registry = ToolRegistry()
     registry.register(StrictTool())
-    validator = PlanValidator(registry=registry)
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
 
     proposed = ProposedTask(
         name="t1",

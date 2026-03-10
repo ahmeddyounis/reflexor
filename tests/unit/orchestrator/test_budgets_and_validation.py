@@ -17,7 +17,13 @@ from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import NeedsPlanningRouter, NoOpPlanner
-from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask, ReflexDecision
+from reflexor.orchestrator.plans import (
+    BudgetAssertions,
+    Plan,
+    PlanningInput,
+    ProposedTask,
+    ReflexDecision,
+)
 from reflexor.orchestrator.sinks import InMemoryRunPacketSink
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
@@ -109,7 +115,17 @@ class _TaskListPlanner:
 
     async def plan(self, input: PlanningInput) -> Plan:
         self.calls.append(input)
-        return Plan(summary="planned", tasks=list(self._tasks), metadata={})
+        return Plan(
+            summary="planned",
+            tasks=list(self._tasks),
+            budget_assertions=BudgetAssertions(
+                max_tasks=int(input.limits.max_tasks or max(len(self._tasks), 1)),
+                max_tool_calls=int(input.limits.max_tool_calls or max(len(self._tasks), 1)),
+                max_runtime_s=float(input.limits.max_runtime_s or 30.0),
+                max_tokens=int(input.limits.max_tokens or 128),
+            ),
+            metadata={},
+        )
 
 
 async def test_planning_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_path: Path) -> None:
@@ -143,6 +159,7 @@ async def test_planning_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_pat
         ),
         clock=clock,
         metrics=metrics,
+        enabled_scopes=("fs.read",),
     )
 
     await engine.handle_event(_event("11111111-1111-4111-8111-111111111111"))
@@ -189,6 +206,7 @@ async def test_reflex_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_path:
         ),
         clock=clock,
         metrics=metrics,
+        enabled_scopes=("fs.read",),
     )
 
     run_id = await engine.handle_event(_event("22222222-2222-4222-8222-222222222222"))
@@ -233,6 +251,7 @@ async def test_reflex_invalid_args_records_validation_error_and_does_not_enqueue
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
         metrics=metrics,
+        enabled_scopes=("fs.read",),
     )
 
     run_id = await engine.handle_event(_event("33333333-3333-4333-8333-333333333333"))
@@ -298,6 +317,7 @@ async def test_planning_validation_failure_is_recorded_and_backlog_is_retained(
         limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
         clock=clock,
         metrics=metrics,
+        enabled_scopes=("fs.read",),
     )
 
     await engine.handle_event(_event("44444444-4444-4444-8444-444444444444"))

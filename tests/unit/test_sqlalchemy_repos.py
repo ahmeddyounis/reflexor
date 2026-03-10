@@ -361,6 +361,258 @@ async def test_event_repo_create_or_get_by_dedupe_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_event_repo_allows_same_dedupe_key_after_window_expires() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        dedupe_key = "ticket:T-1"
+        source = "tests"
+        event1 = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source=source,
+            received_at_ms=10,
+            payload={"ticket_id": "T-1", "seq": 1},
+            dedupe_key=dedupe_key,
+        )
+        event2 = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source=source,
+            received_at_ms=30,
+            payload={"ticket_id": "T-1", "seq": 2},
+            dedupe_key=dedupe_key,
+        )
+
+        uow1 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow1:
+            session = cast(AsyncSession, uow1.session)
+            event_repo = SqlAlchemyEventRepo(session)
+            stored1, created1 = await event_repo.create_or_get_by_dedupe(
+                source=source,
+                dedupe_key=dedupe_key,
+                event=event1,
+                dedupe_window_ms=5,
+            )
+            assert created1 is True
+
+        uow2 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow2:
+            session = cast(AsyncSession, uow2.session)
+            event_repo = SqlAlchemyEventRepo(session)
+
+            assert (
+                await event_repo.get_by_dedupe(
+                    source=source,
+                    dedupe_key=dedupe_key,
+                    active_at_ms=12,
+                )
+            ) is not None
+            assert (
+                await event_repo.get_by_dedupe(
+                    source=source,
+                    dedupe_key=dedupe_key,
+                    active_at_ms=15,
+                )
+            ) is None
+
+            stored2, created2 = await event_repo.create_or_get_by_dedupe(
+                source=source,
+                dedupe_key=dedupe_key,
+                event=event2,
+                dedupe_window_ms=5,
+            )
+            assert created2 is True
+            assert stored2.event_id != stored1.event_id
+
+            listed_events = await event_repo.list(limit=10, offset=0)
+            assert [event.event_id for event in listed_events] == [
+                stored1.event_id,
+                stored2.event_id,
+            ]
+
+
+@pytest.mark.asyncio
+async def test_memory_repo_search_and_delete_older_than() -> None:
+    settings = ReflexorSettings(max_run_packet_bytes=50_000)
+
+    async with _in_memory_session_factory() as session_factory:
+        run_old_id = _uuid()
+        run_new_id = _uuid()
+        event_old = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source="tests",
+            received_at_ms=10,
+            payload={"ticket_id": "T-1"},
+        )
+        event_new = Event(
+            event_id=_uuid(),
+            type="ticket.updated",
+            source="tests",
+            received_at_ms=20,
+            payload={"ticket_id": "T-1"},
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            event_repo = SqlAlchemyEventRepo(session)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(
+                session,
+                settings=settings,
+                memory_repo=memory_repo,
+            )
+
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_old_id,
+                    parent_run_id=None,
+                    created_at_ms=100,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_new_id,
+                    parent_run_id=None,
+                    created_at_ms=200,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await event_repo.create(event_old)
+            await event_repo.create(event_new)
+            await run_packet_repo.create(
+                RunPacket(
+                    run_id=run_old_id,
+                    event=event_old,
+                    created_at_ms=100,
+                )
+            )
+            await run_packet_repo.create(
+                RunPacket(
+                    run_id=run_new_id,
+                    event=event_new,
+                    created_at_ms=200,
+                )
+            )
+
+        uow2 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow2:
+            session = cast(AsyncSession, uow2.session)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+
+            searched = await memory_repo.search(query="ticket.updated", limit=10, offset=0)
+            assert [item.run_id for item in searched] == [run_new_id]
+
+            deleted = await memory_repo.delete_older_than(updated_before_ms=150, limit=10)
+            assert deleted == 1
+
+            remaining = await memory_repo.list_recent(limit=10, offset=0)
+            assert [item.run_id for item in remaining] == [run_new_id]
+
+
+@pytest.mark.asyncio
+async def test_task_repo_archive_terminal_before_updates_run_summary() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        old_tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "old"},
+            permission_scope="debug.echo",
+            idempotency_key="old",
+            status=ToolCallStatus.SUCCEEDED,
+            created_at_ms=10,
+            started_at_ms=10,
+            completed_at_ms=20,
+        )
+        recent_tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "recent"},
+            permission_scope="debug.echo",
+            idempotency_key="recent",
+            status=ToolCallStatus.SUCCEEDED,
+            created_at_ms=30,
+            started_at_ms=30,
+            completed_at_ms=40,
+        )
+        old_task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="old",
+            status=TaskStatus.SUCCEEDED,
+            tool_call=old_tool_call,
+            attempts=1,
+            created_at_ms=10,
+            started_at_ms=10,
+            completed_at_ms=20,
+        )
+        recent_task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="recent",
+            status=TaskStatus.SUCCEEDED,
+            tool_call=recent_tool_call,
+            attempts=1,
+            created_at_ms=30,
+            started_at_ms=30,
+            completed_at_ms=200,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+            tool_call_repo = SqlAlchemyToolCallRepo(session)
+
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_id,
+                    parent_run_id=None,
+                    created_at_ms=1,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await tool_call_repo.create(old_tool_call)
+            await tool_call_repo.create(recent_tool_call)
+            await task_repo.create(old_task)
+            await task_repo.create(recent_task)
+
+            archived_old = await task_repo.archive_terminal_before(
+                completed_before_ms=100,
+                limit=10,
+            )
+            assert archived_old == 1
+
+            updated_old = await task_repo.get(old_task.task_id)
+            updated_recent = await task_repo.get(recent_task.task_id)
+            assert updated_old is not None
+            assert updated_recent is not None
+            assert updated_old.status == TaskStatus.ARCHIVED
+            assert updated_recent.status == TaskStatus.SUCCEEDED
+
+            summary = await run_repo.get_summary(run_id)
+            assert summary is not None
+            assert summary.status == RunStatus.SUCCEEDED
+
+            archived_recent = await task_repo.archive_terminal_before(
+                completed_before_ms=300,
+                limit=10,
+            )
+            assert archived_recent == 1
+
+            summary = await run_repo.get_summary(run_id)
+            assert summary is not None
+            assert summary.status == RunStatus.ARCHIVED
+
+
+@pytest.mark.asyncio
 async def test_run_packet_repo_persists_sanitized_packet() -> None:
     settings = ReflexorSettings(max_tool_output_bytes=200)
 

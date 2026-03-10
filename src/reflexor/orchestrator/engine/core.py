@@ -50,6 +50,7 @@ class OrchestratorEngine:
     metrics: ReflexorMetrics | None = None
     planner_debounce_s: float = 0.25
     planner_interval_s: float = 30.0
+    enabled_scopes: tuple[str, ...] = ()
     approval_required_scopes: tuple[str, ...] = ()
 
     _backlog: deque[Event] = field(default_factory=deque, init=False)

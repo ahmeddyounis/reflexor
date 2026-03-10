@@ -46,7 +46,7 @@ def test_event_suppression_blocks_task_enqueue_and_expires(tmp_path: Path) -> No
     clock = _MutableClock(now=1_000)
     settings = ReflexorSettings(
         workspace_root=tmp_path,
-        enabled_scopes=[],
+        enabled_scopes=["fs.read"],
         database_url=f"sqlite+aiosqlite:///{db_path}",
         event_suppression_enabled=True,
         event_suppression_signature_fields=["ticket"],
@@ -148,7 +148,7 @@ def test_event_suppression_clear_endpoint_resumes_immediately(tmp_path: Path) ->
     clock = _MutableClock(now=1_000)
     settings = ReflexorSettings(
         workspace_root=tmp_path,
-        enabled_scopes=[],
+        enabled_scopes=["fs.read"],
         database_url=f"sqlite+aiosqlite:///{db_path}",
         event_suppression_enabled=True,
         event_suppression_signature_fields=["ticket"],

@@ -9,6 +9,7 @@ from reflexor.cli.commands import api as api_command
 from reflexor.cli.commands import approvals as approvals_command
 from reflexor.cli.commands import config as config_command
 from reflexor.cli.commands import events as events_command
+from reflexor.cli.commands import maintenance as maintenance_command
 from reflexor.cli.commands import run as run_command
 from reflexor.cli.commands import runs as runs_command
 from reflexor.cli.commands import suppressions as suppressions_command
@@ -71,6 +72,7 @@ api_command.register(app)
 approvals_command.register(app)
 config_command.register(app)
 events_command.register(app)
+maintenance_command.register(app)
 run_command.register(app)
 runs_command.register(app)
 suppressions_command.register(app)

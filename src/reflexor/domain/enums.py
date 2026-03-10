@@ -13,6 +13,7 @@ class TaskStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"
+    ARCHIVED = "archived"
 
 
 class ToolCallStatus(StrEnum):
@@ -44,3 +45,4 @@ class RunStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"
+    ARCHIVED = "archived"

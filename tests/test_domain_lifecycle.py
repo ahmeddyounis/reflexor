@@ -24,9 +24,10 @@ EXPECTED_TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.FAILED,
         TaskStatus.CANCELED,
     },
-    TaskStatus.FAILED: {TaskStatus.RUNNING, TaskStatus.CANCELED},
-    TaskStatus.SUCCEEDED: set(),
-    TaskStatus.CANCELED: set(),
+    TaskStatus.FAILED: {TaskStatus.RUNNING, TaskStatus.CANCELED, TaskStatus.ARCHIVED},
+    TaskStatus.SUCCEEDED: {TaskStatus.ARCHIVED},
+    TaskStatus.CANCELED: {TaskStatus.ARCHIVED},
+    TaskStatus.ARCHIVED: set(),
 }
 
 EXPECTED_TOOL_CALL_TRANSITIONS: dict[ToolCallStatus, set[ToolCallStatus]] = {
@@ -137,6 +138,9 @@ def test_tool_call_transition_invalid_edges_raise() -> None:
         (TaskStatus.WAITING_APPROVAL, TaskStatus.CANCELED),
         (TaskStatus.FAILED, TaskStatus.RUNNING),
         (TaskStatus.FAILED, TaskStatus.CANCELED),
+        (TaskStatus.FAILED, TaskStatus.ARCHIVED),
+        (TaskStatus.SUCCEEDED, TaskStatus.ARCHIVED),
+        (TaskStatus.CANCELED, TaskStatus.ARCHIVED),
     ],
 )
 def test_task_transition_all_allowed_edges(current: TaskStatus, target: TaskStatus) -> None:
@@ -238,6 +242,39 @@ def _task_for_transition(*, current: TaskStatus, target: TaskStatus) -> Task:
                 completed_at_ms=2,
             )
         return _task(status=current, completed_at_ms=1)
+
+    if target == TaskStatus.ARCHIVED:
+        if current == TaskStatus.SUCCEEDED:
+            return _task(
+                status=current,
+                tool_call=_tool_call(
+                    status=ToolCallStatus.SUCCEEDED,
+                    started_at_ms=1,
+                    completed_at_ms=2,
+                ),
+                attempts=1,
+                started_at_ms=1,
+                completed_at_ms=2,
+            )
+        if current == TaskStatus.FAILED:
+            return _task(
+                status=current,
+                tool_call=_tool_call(
+                    status=ToolCallStatus.FAILED,
+                    started_at_ms=1,
+                    completed_at_ms=2,
+                ),
+                attempts=1,
+                started_at_ms=1,
+                completed_at_ms=2,
+            )
+        return _task(
+            status=current,
+            tool_call=_tool_call(status=ToolCallStatus.CANCELED, completed_at_ms=2),
+            attempts=1,
+            started_at_ms=1,
+            completed_at_ms=2,
+        )
 
     raise AssertionError(
         f"unhandled task transition {current.value} → {target.value}"
@@ -379,6 +416,35 @@ def test_task_cancel_requires_completion_and_no_active_tool_call() -> None:
     )
     with pytest.raises(InvalidTransition, match="must not have an active tool_call"):
         transition_task(task, TaskStatus.CANCELED)
+
+
+def test_task_archive_requires_completion_and_terminal_tool_call() -> None:
+    with pytest.raises(InvalidTransition, match="archived task must have completed_at_ms"):
+        transition_task(
+            _task(
+                status=TaskStatus.SUCCEEDED,
+                tool_call=_tool_call(
+                    status=ToolCallStatus.SUCCEEDED,
+                    started_at_ms=1,
+                    completed_at_ms=2,
+                ),
+                attempts=1,
+                started_at_ms=1,
+            ),
+            TaskStatus.ARCHIVED,
+        )
+
+    with pytest.raises(InvalidTransition, match="must not have an active tool_call"):
+        transition_task(
+            _task(
+                status=TaskStatus.FAILED,
+                tool_call=_tool_call(status=ToolCallStatus.RUNNING, started_at_ms=1),
+                attempts=1,
+                started_at_ms=1,
+                completed_at_ms=2,
+            ),
+            TaskStatus.ARCHIVED,
+        )
 
 
 def test_tool_call_invariants() -> None:

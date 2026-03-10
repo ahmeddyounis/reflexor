@@ -37,7 +37,11 @@ class ReflexorSettings(_ReflexorSettingsEvents):
             normalized.append(trimmed)
         return normalized
 
-    @field_validator("event_suppression_window_s", "event_suppression_ttl_s")
+    @field_validator(
+        "event_dedupe_window_s",
+        "event_suppression_window_s",
+        "event_suppression_ttl_s",
+    )
     @classmethod
     def _validate_positive_floats(cls, value: float, info: ValidationInfo) -> float:
         field_name = info.field_name or "value"

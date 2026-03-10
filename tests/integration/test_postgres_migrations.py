@@ -34,6 +34,7 @@ async def _reset_database(database_url: str) -> None:
             await conn.execute(sa.text("DROP TABLE IF EXISTS tool_calls CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS run_packets CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS idempotency_ledger CASCADE"))
+            await conn.execute(sa.text("DROP TABLE IF EXISTS event_dedupes CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS runs CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS events CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS alembic_version CASCADE"))

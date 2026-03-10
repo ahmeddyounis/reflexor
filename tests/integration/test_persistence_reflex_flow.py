@@ -151,6 +151,7 @@ async def test_event_to_reflex_persists_db_rows_and_enqueues(tmp_path: Path) -> 
             persistence=persistence,
             limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
             clock=clock,
+            enabled_scopes=("net.http",),
         )
 
         event_id = _uuid()

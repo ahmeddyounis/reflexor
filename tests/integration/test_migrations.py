@@ -38,6 +38,7 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
 
         expected_tables = {
             "events",
+            "event_dedupes",
             "runs",
             "tool_calls",
             "tasks",
@@ -69,6 +70,20 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
         run_columns = _column_names(inspector, table="runs")
         missing_run_columns = expected_run_columns - run_columns
         assert not missing_run_columns, f"Missing columns for runs: {sorted(missing_run_columns)}"
+
+        expected_event_dedupe_columns = {
+            "source",
+            "dedupe_key",
+            "event_id",
+            "created_at_ms",
+            "updated_at_ms",
+            "expires_at_ms",
+        }
+        event_dedupe_columns = _column_names(inspector, table="event_dedupes")
+        missing_event_dedupe_columns = expected_event_dedupe_columns - event_dedupe_columns
+        assert not missing_event_dedupe_columns, (
+            f"Missing columns for event_dedupes: {sorted(missing_event_dedupe_columns)}"
+        )
 
         expected_task_columns = {"task_id", "run_id", "status"}
         task_columns = _column_names(inspector, table="tasks")
@@ -157,7 +172,8 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
         )
 
         expected_indexes = {
-            "events": {"ix_events_type", "ux_events_source_dedupe_key"},
+            "events": {"ix_events_type"},
+            "event_dedupes": {"ix_event_dedupes_expires_at_ms"},
             "runs": {"ix_runs_created_at_ms"},
             "tasks": {"ix_tasks_run_id", "ix_tasks_status"},
             "tool_calls": {"ix_tool_calls_idempotency_key"},

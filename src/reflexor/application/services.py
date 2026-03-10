@@ -41,6 +41,7 @@ class EventSubmissionService:
     uow_factory: Callable[[], UnitOfWork]
     event_repo: Callable[[DatabaseSession], EventRepo]
     run_packet_repo: Callable[[DatabaseSession], RunPacketRepo]
+    dedupe_window_ms: int | None = None
 
     async def submit_event(self, event: Event) -> SubmitEventOutcome:
         if event.dedupe_key is not None:
@@ -48,7 +49,9 @@ class EventSubmissionService:
             async with uow:
                 repo = self.event_repo(uow.session)
                 existing = await repo.get_by_dedupe(
-                    source=event.source, dedupe_key=event.dedupe_key
+                    source=event.source,
+                    dedupe_key=event.dedupe_key,
+                    active_at_ms=event.received_at_ms,
                 )
                 if existing is not None:
                     packets = self.run_packet_repo(uow.session)
@@ -66,7 +69,11 @@ class EventSubmissionService:
             uow = self.uow_factory()
             async with uow:
                 repo = self.event_repo(uow.session)
-                stored = await repo.get_by_dedupe(source=event.source, dedupe_key=event.dedupe_key)
+                stored = await repo.get_by_dedupe(
+                    source=event.source,
+                    dedupe_key=event.dedupe_key,
+                    active_at_ms=event.received_at_ms,
+                )
                 if stored is not None:
                     event_id = stored.event_id
 

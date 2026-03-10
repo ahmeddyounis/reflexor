@@ -43,6 +43,7 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
     tracker = BudgetTracker(limits=engine.limits, clock=engine.clock)
     validator = PlanValidator(
         registry=engine.tool_registry,
+        enabled_scopes=engine.enabled_scopes,
         approval_required_scopes=engine.approval_required_scopes,
     )
 

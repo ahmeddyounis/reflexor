@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from reflexor.domain.models_event import Event
-from reflexor.orchestrator.plans import Plan, PlanningInput, ReflexDecision
+from reflexor.orchestrator.plans import BudgetAssertions, Plan, PlanningInput, ReflexDecision
 
 
 class Planner(Protocol):
@@ -40,8 +40,16 @@ class NoOpPlanner:
     """Planner stub that emits an empty plan."""
 
     async def plan(self, input: PlanningInput) -> Plan:
-        _ = input
-        return Plan(summary="noop", tasks=[], metadata={})
+        return Plan(
+            summary="noop",
+            tasks=[],
+            budget_assertions=BudgetAssertions(
+                max_tool_calls=int(input.limits.max_tool_calls or 1),
+                max_runtime_s=float(input.limits.max_runtime_s or 1.0),
+                max_tokens=int(input.limits.max_tokens or 1),
+            ),
+            metadata={},
+        )
 
 
 class NeedsPlanningRouter:

@@ -12,6 +12,7 @@ They must remain independent from infrastructure/framework concerns.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Protocol
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 
 from reflexor.domain.models import ToolCall
 from reflexor.security.fs_safety import resolve_path_in_workspace
-from reflexor.security.net_safety import validate_and_normalize_url
+from reflexor.security.net_safety import hostname_matches_allowlist, validate_and_normalize_url
 from reflexor.security.policy.context import PolicyContext, ToolSpec
 from reflexor.security.policy.decision import (
     REASON_APPROVAL_REQUIRED,
@@ -238,7 +239,6 @@ class ApprovalRequiredRule:
         parsed_args: BaseModel,
         ctx: PolicyContext,
     ) -> PolicyDecision | None:
-        _ = parsed_args
         scope = tool_call.permission_scope
 
         if scope in ctx.approval_required_scopes:
@@ -248,6 +248,39 @@ class ApprovalRequiredRule:
                 rule_id=self.rule_id,
                 metadata={"scope": scope, "tool_name": tool_spec.tool_name},
             )
+
+        raw_url = _extract_url(parsed_args)
+        if raw_url is not None:
+            host = urlsplit(raw_url).hostname
+            if host and hostname_matches_allowlist(host, ctx.approval_required_domains):
+                return PolicyDecision.require_approval(
+                    reason_code=REASON_APPROVAL_REQUIRED,
+                    message="destination domain requires approval",
+                    rule_id=self.rule_id,
+                    metadata={
+                        "scope": scope,
+                        "tool_name": tool_spec.tool_name,
+                        "host": host.lower().rstrip("."),
+                    },
+                )
+
+        if ctx.approval_required_payload_keywords:
+            payload_text = json.dumps(
+                parsed_args.model_dump(mode="json"),
+                ensure_ascii=False,
+            ).lower()
+            for keyword in ctx.approval_required_payload_keywords:
+                if keyword in payload_text:
+                    return PolicyDecision.require_approval(
+                        reason_code=REASON_APPROVAL_REQUIRED,
+                        message="payload classification requires approval",
+                        rule_id=self.rule_id,
+                        metadata={
+                            "scope": scope,
+                            "tool_name": tool_spec.tool_name,
+                            "keyword": keyword,
+                        },
+                    )
 
         if ctx.profile == "prod" and tool_spec.manifest.side_effects and not ctx.dry_run:
             return PolicyDecision.require_approval(

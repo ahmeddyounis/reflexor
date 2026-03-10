@@ -91,10 +91,21 @@ class EventRepo(Protocol):
 
     async def create(self, event: Event) -> Event: ...
 
-    async def get_by_dedupe(self, *, source: str, dedupe_key: str) -> Event | None: ...
+    async def get_by_dedupe(
+        self,
+        *,
+        source: str,
+        dedupe_key: str,
+        active_at_ms: int | None = None,
+    ) -> Event | None: ...
 
     async def create_or_get_by_dedupe(
-        self, *, source: str, dedupe_key: str, event: Event
+        self,
+        *,
+        source: str,
+        dedupe_key: str,
+        event: Event,
+        dedupe_window_ms: int | None = None,
     ) -> tuple[Event, bool]: ...
 
     async def get(self, event_id: str) -> Event | None: ...
@@ -107,6 +118,8 @@ class EventRepo(Protocol):
         event_type: str | None = None,
         source: str | None = None,
     ) -> list[Event]: ...
+
+    async def prune_expired_dedupe(self, *, now_ms: int, limit: int) -> int: ...
 
 
 class EventSuppressionRepo(Protocol):
@@ -205,6 +218,8 @@ class TaskRepo(Protocol):
         status: TaskStatus | None = None,
     ) -> list[Task]: ...
 
+    async def archive_terminal_before(self, *, completed_before_ms: int, limit: int) -> int: ...
+
 
 class ToolCallRepo(Protocol):
     """ToolCall persistence port."""
@@ -272,6 +287,14 @@ class RunPacketRepo(Protocol):
 
     async def list_recent(self, *, limit: int, offset: int) -> list[RunPacket]: ...
 
+    async def list_before(
+        self,
+        *,
+        created_before_ms: int,
+        limit: int,
+        offset: int = 0,
+    ) -> list[RunPacket]: ...
+
     async def get_run_id_for_event(self, event_id: str) -> str | None: ...
 
 
@@ -290,6 +313,18 @@ class MemoryRepo(Protocol):
         event_type: str | None = None,
         event_source: str | None = None,
     ) -> list[MemoryItem]: ...
+
+    async def search(
+        self,
+        *,
+        query: str,
+        limit: int,
+        offset: int = 0,
+        event_type: str | None = None,
+        event_source: str | None = None,
+    ) -> list[MemoryItem]: ...
+
+    async def delete_older_than(self, *, updated_before_ms: int, limit: int) -> int: ...
 
 
 if TYPE_CHECKING:

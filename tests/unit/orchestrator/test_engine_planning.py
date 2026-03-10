@@ -12,7 +12,7 @@ from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import NeedsPlanningRouter
-from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask
+from reflexor.orchestrator.plans import BudgetAssertions, Plan, PlanningInput, ProposedTask
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
 from reflexor.orchestrator.sinks import RunPacketSink
 from reflexor.tools.registry import ToolRegistry
@@ -145,6 +145,12 @@ class _SingleTaskPlanner:
                     args={"msg": "hi", "kind": input.trigger},
                 )
             ],
+            budget_assertions=BudgetAssertions(
+                max_tasks=1,
+                max_tool_calls=int(input.limits.max_tool_calls or 1),
+                max_runtime_s=float(input.limits.max_runtime_s or 30.0),
+                max_tokens=int(input.limits.max_tokens or 128),
+            ),
             metadata={},
         )
 
@@ -155,6 +161,12 @@ class _InvalidToolPlanner:
         return Plan(
             summary="invalid",
             tasks=[ProposedTask(name="bad", tool_name="missing.tool", args={})],
+            budget_assertions=BudgetAssertions(
+                max_tasks=1,
+                max_tool_calls=1,
+                max_runtime_s=30.0,
+                max_tokens=128,
+            ),
             metadata={},
         )
 
@@ -172,6 +184,12 @@ class _TickPlanner:
                     args={"msg": "hi", "kind": "tick"},
                 )
             ],
+            budget_assertions=BudgetAssertions(
+                max_tasks=1,
+                max_tool_calls=int(input.limits.max_tool_calls or 1),
+                max_runtime_s=float(input.limits.max_runtime_s or 30.0),
+                max_tokens=int(input.limits.max_tokens or 128),
+            ),
             metadata={},
         )
 
@@ -197,6 +215,7 @@ async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None
         metrics=metrics,
         planner_debounce_s=1.0,
         planner_interval_s=10_000.0,
+        enabled_scopes=("fs.read",),
     )
     engine.start()
 
@@ -260,6 +279,7 @@ async def test_debounce_coalesces_many_event_triggers_into_one_planning_call() -
         run_sink=sink,
         planner_debounce_s=2.0,
         planner_interval_s=10_000.0,
+        enabled_scopes=("fs.read",),
     )
     engine.start()
 
@@ -315,6 +335,7 @@ async def test_invalid_plan_does_not_clear_backlog() -> None:
         run_sink=sink,
         planner_debounce_s=1.0,
         planner_interval_s=10_000.0,
+        enabled_scopes=("fs.read",),
     )
     engine.start()
 
@@ -354,6 +375,7 @@ async def test_tick_path_runs_even_without_event_triggers() -> None:
         run_sink=sink,
         planner_debounce_s=10.0,
         planner_interval_s=5.0,
+        enabled_scopes=("fs.read",),
     )
     engine.start()
 

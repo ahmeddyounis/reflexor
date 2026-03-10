@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from reflexor.application.approvals_service import ApprovalCommandService
+    from reflexor.application.maintenance_service import MaintenanceService
     from reflexor.application.services import (
         ApprovalsService,
         EventSubmissionService,
@@ -122,6 +123,33 @@ def _memory_loader(
     if int(settings.planner_max_memory_items) <= 0:
         return None
 
+    def _memory_search_terms(event: PlanningInput) -> list[str]:
+        terms: list[str] = []
+        seen: set[str] = set()
+        for candidate_event in event.events:
+            for raw in (
+                candidate_event.type,
+                candidate_event.source,
+                *candidate_event.payload.keys(),
+            ):
+                normalized = str(raw).strip().lower()
+                if len(normalized) < 3 or normalized in seen:
+                    continue
+                seen.add(normalized)
+                terms.append(normalized)
+            for value in candidate_event.payload.values():
+                if not isinstance(value, str):
+                    continue
+                for part in value.split():
+                    normalized = part.strip(" ,.:;!?()[]{}\"'").lower()
+                    if len(normalized) < 4 or normalized in seen:
+                        continue
+                    seen.add(normalized)
+                    terms.append(normalized)
+                    if len(terms) >= 12:
+                        return terms
+        return terms
+
     async def load_memory(_planning_input: PlanningInput) -> list[dict[str, object]]:
         uow = uow_factory()
         async with uow:
@@ -147,6 +175,20 @@ def _memory_loader(
                     remaining -= 1
                     if remaining <= 0:
                         break
+
+            if remaining > 0:
+                for term in _memory_search_terms(_planning_input):
+                    if remaining <= 0:
+                        break
+                    matches = await repo.search(query=term, limit=remaining, offset=0)
+                    for item in matches:
+                        if item.memory_id in seen_memory_ids:
+                            continue
+                        seen_memory_ids.add(item.memory_id)
+                        items.append(item)
+                        remaining -= 1
+                        if remaining <= 0:
+                            break
 
             if remaining > 0:
                 fallback = await repo.list_recent(limit=remaining, offset=0)
@@ -242,6 +284,10 @@ class AppContainer:
     @property
     def approval_commands(self) -> ApprovalCommandService:
         return self.services.approval_commands
+
+    @property
+    def maintenance(self) -> MaintenanceService:
+        return self.services.maintenance
 
     @property
     def queries(self) -> QueryService:
@@ -455,6 +501,7 @@ class AppContainer:
         )
 
         services = build_app_services(
+            settings=effective_settings,
             orchestrator_engine=orchestrator_engine,
             uow_factory=uow_factory,
             repos=repos,

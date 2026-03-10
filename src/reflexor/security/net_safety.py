@@ -92,6 +92,12 @@ def validate_and_normalize_url(
     return urlunsplit((scheme, netloc, split.path, split.query, split.fragment))
 
 
+def hostname_matches_allowlist(hostname: str, allowlist: Iterable[str]) -> bool:
+    normalized_host = normalize_hostname(hostname)
+    normalized_allowlist = [_normalize_allow_domain(item) for item in allowlist]
+    return _hostname_in_allowlist(normalized_host, normalized_allowlist)
+
+
 DnsResolver = Callable[[str, int | None], Awaitable[Iterable[str]]]
 
 

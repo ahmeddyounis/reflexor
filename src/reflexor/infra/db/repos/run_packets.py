@@ -84,14 +84,28 @@ class SqlAlchemyRunPacketRepo:
         )
         result = await self._session.execute(stmt)
         rows = result.scalars().all()
-        packets: list[RunPacket] = []
-        for row in rows:
-            sanitized_packet = sanitize_for_audit(row.packet, settings=self._settings)
-            sanitized_packet["run_id"] = row.run_id
-            sanitized_packet["created_at_ms"] = row.created_at_ms
-            sanitized_packet["packet_version"] = int(row.packet_version)
-            packets.append(RunPacket.model_validate(sanitized_packet))
-        return packets
+        return [self._row_to_packet(row) for row in rows]
+
+    async def list_before(
+        self,
+        *,
+        created_before_ms: int,
+        limit: int,
+        offset: int = 0,
+    ) -> list[RunPacket]:
+        limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)
+        if limit_int == 0:
+            return []
+
+        stmt: Select[tuple[RunPacketRow]] = (
+            select(RunPacketRow)
+            .where(RunPacketRow.created_at_ms < int(created_before_ms))
+            .order_by(RunPacketRow.created_at_ms, RunPacketRow.run_id)
+            .limit(limit_int)
+            .offset(offset_int)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [self._row_to_packet(row) for row in rows]
 
     async def get_run_id_for_event(self, event_id: str) -> str | None:
         normalized = event_id.strip()
@@ -106,3 +120,10 @@ class SqlAlchemyRunPacketRepo:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    def _row_to_packet(self, row: RunPacketRow) -> RunPacket:
+        sanitized_packet = sanitize_for_audit(row.packet, settings=self._settings)
+        sanitized_packet["run_id"] = row.run_id
+        sanitized_packet["created_at_ms"] = row.created_at_ms
+        sanitized_packet["packet_version"] = int(row.packet_version)
+        return RunPacket.model_validate(sanitized_packet)

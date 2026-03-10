@@ -9,7 +9,7 @@ import respx
 from reflexor.bootstrap.planner import build_planner
 from reflexor.config import ReflexorSettings
 from reflexor.domain.models_event import Event
-from reflexor.orchestrator.plans import Plan, PlanningInput
+from reflexor.orchestrator.plans import BudgetAssertions, LimitsSnapshot, Plan, PlanningInput
 from reflexor.planning import OpenAICompatiblePlannerBackend, StructuredPlanner
 from reflexor.planning.contracts import PlannerToolSpec
 from reflexor.tools.impl.echo import EchoTool
@@ -23,7 +23,21 @@ def _planning_input(payload: dict[str, object]) -> PlanningInput:
         received_at_ms=0,
         payload=payload,
     )
-    return PlanningInput(trigger="event", events=[event], now_ms=0)
+    return PlanningInput(
+        trigger="event",
+        events=[event],
+        limits=LimitsSnapshot(
+            max_tasks=5,
+            max_tool_calls=5,
+            max_tokens=512,
+            max_runtime_s=30.0,
+        ),
+        now_ms=0,
+    )
+
+
+def _budget_assertions() -> BudgetAssertions:
+    return BudgetAssertions(max_tasks=5, max_tool_calls=5, max_runtime_s=30.0, max_tokens=512)
 
 
 class _RecordingBackend:
@@ -46,7 +60,7 @@ class _RecordingBackend:
                 "system_prompt": system_prompt,
             }
         )
-        return Plan(summary="recorded", tasks=[])
+        return Plan(summary="recorded", tasks=[], budget_assertions=_budget_assertions())
 
 
 @pytest.mark.asyncio
@@ -63,6 +77,12 @@ async def test_heuristic_planner_uses_embedded_plan() -> None:
             {
                 "planner_plan": {
                     "summary": "embedded",
+                    "budget_assertions": {
+                        "max_tasks": 5,
+                        "max_tool_calls": 5,
+                        "max_runtime_s": 30.0,
+                        "max_tokens": 512,
+                    },
                     "tasks": [
                         {
                             "name": "echo",
@@ -107,6 +127,12 @@ async def test_openai_compatible_planner_parses_structured_response() -> None:
                             "content": json.dumps(
                                 {
                                     "summary": "planned",
+                                    "budget_assertions": {
+                                        "max_tasks": 5,
+                                        "max_tool_calls": 5,
+                                        "max_runtime_s": 30.0,
+                                        "max_tokens": 512,
+                                    },
                                     "tasks": [
                                         {
                                             "name": "echo",

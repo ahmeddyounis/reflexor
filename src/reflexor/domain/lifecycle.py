@@ -15,9 +15,10 @@ TASK_ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         {TaskStatus.WAITING_APPROVAL, TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}
     ),
     TaskStatus.WAITING_APPROVAL: frozenset({TaskStatus.QUEUED, TaskStatus.CANCELED}),
-    TaskStatus.FAILED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELED}),
-    TaskStatus.SUCCEEDED: frozenset(),
-    TaskStatus.CANCELED: frozenset(),
+    TaskStatus.FAILED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELED, TaskStatus.ARCHIVED}),
+    TaskStatus.SUCCEEDED: frozenset({TaskStatus.ARCHIVED}),
+    TaskStatus.CANCELED: frozenset({TaskStatus.ARCHIVED}),
+    TaskStatus.ARCHIVED: frozenset(),
 }
 
 TOOL_CALL_ALLOWED_TRANSITIONS: dict[ToolCallStatus, frozenset[ToolCallStatus]] = {
@@ -237,6 +238,21 @@ def _validate_task_invariants(task: Task, *, current_state: TaskStatus) -> None:
         }:
             fail(
                 "canceled task must not have an active tool_call",
+                tool_call_status=task.tool_call.status.value,
+            )
+        return
+
+    if status == TaskStatus.ARCHIVED:
+        if task.completed_at_ms is None:
+            fail("archived task must have completed_at_ms")
+        if task.tool_call is not None and task.tool_call.status not in {
+            ToolCallStatus.SUCCEEDED,
+            ToolCallStatus.FAILED,
+            ToolCallStatus.CANCELED,
+            ToolCallStatus.DENIED,
+        }:
+            fail(
+                "archived task must not have an active tool_call",
                 tool_call_status=task.tool_call.status.value,
             )
         return

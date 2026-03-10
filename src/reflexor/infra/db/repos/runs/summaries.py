@@ -34,6 +34,9 @@ def _task_agg_subquery() -> Any:
             func.sum(case((TaskRow.status == TaskStatus.CANCELED.value, 1), else_=0)).label(
                 "tasks_canceled"
             ),
+            func.sum(case((TaskRow.status == TaskStatus.ARCHIVED.value, 1), else_=0)).label(
+                "tasks_archived"
+            ),
         )
         .group_by(TaskRow.run_id)
         .subquery()
@@ -56,7 +59,7 @@ def _approvals_agg_subquery() -> Any:
 
 def _computed_status_expr(
     *, task_agg: Any, label: str | None = "computed_status"
-) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
+) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any]:
     tasks_total = func.coalesce(task_agg.c.tasks_total, 0)
     tasks_pending = func.coalesce(task_agg.c.tasks_pending, 0)
     tasks_queued = func.coalesce(task_agg.c.tasks_queued, 0)
@@ -64,15 +67,18 @@ def _computed_status_expr(
     tasks_succeeded = func.coalesce(task_agg.c.tasks_succeeded, 0)
     tasks_failed = func.coalesce(task_agg.c.tasks_failed, 0)
     tasks_canceled = func.coalesce(task_agg.c.tasks_canceled, 0)
+    tasks_archived = func.coalesce(task_agg.c.tasks_archived, 0)
     pending_like = tasks_pending + tasks_queued
+    terminal_success_like = tasks_succeeded + tasks_archived
 
     expr = case(
         (tasks_total == 0, literal(RunStatus.SUCCEEDED.value)),
+        (tasks_archived == tasks_total, literal(RunStatus.ARCHIVED.value)),
         (tasks_failed > 0, literal(RunStatus.FAILED.value)),
         (tasks_canceled > 0, literal(RunStatus.CANCELED.value)),
         (tasks_running > 0, literal(RunStatus.RUNNING.value)),
-        (tasks_succeeded == tasks_total, literal(RunStatus.SUCCEEDED.value)),
-        (tasks_succeeded > 0, literal(RunStatus.RUNNING.value)),
+        (terminal_success_like == tasks_total, literal(RunStatus.SUCCEEDED.value)),
+        (terminal_success_like > 0, literal(RunStatus.RUNNING.value)),
         (pending_like > 0, literal(RunStatus.CREATED.value)),
         else_=literal(RunStatus.RUNNING.value),
     )
@@ -86,6 +92,7 @@ def _computed_status_expr(
             tasks_succeeded,
             tasks_failed,
             tasks_canceled,
+            tasks_archived,
         )
     return (
         expr.label(label),
@@ -96,6 +103,7 @@ def _computed_status_expr(
         tasks_succeeded,
         tasks_failed,
         tasks_canceled,
+        tasks_archived,
     )
 
 
@@ -139,6 +147,7 @@ async def list_run_summaries(
         tasks_succeeded,
         tasks_failed,
         tasks_canceled,
+        _tasks_archived,
     ) = _computed_status_expr(task_agg=task_agg)
 
     approvals_total = func.coalesce(approvals_agg.c.approvals_total, 0)
@@ -266,6 +275,7 @@ async def get_run_summary(session: AsyncSession, run_id: str) -> RunSummary | No
         tasks_succeeded,
         tasks_failed,
         tasks_canceled,
+        _tasks_archived,
     ) = _computed_status_expr(task_agg=task_agg)
 
     approvals_total = func.coalesce(approvals_agg.c.approvals_total, 0)

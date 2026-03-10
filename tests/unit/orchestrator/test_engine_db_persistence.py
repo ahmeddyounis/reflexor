@@ -163,6 +163,7 @@ async def test_handle_event_persists_rows_and_marks_task_queued(tmp_path: Path) 
             persistence=persistence,
             limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
             clock=clock,
+            enabled_scopes=("net.http",),
         )
 
         event = _event(tmp_path=tmp_path, event_id=_uuid())
@@ -230,6 +231,7 @@ async def test_invalid_tasks_persist_run_packet_but_do_not_enqueue_or_store_task
             persistence=persistence,
             limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
             clock=clock,
+            enabled_scopes=("net.http",),
         )
 
         event = _event(tmp_path=tmp_path, event_id=_uuid())

@@ -16,6 +16,7 @@ def test_enum_values_are_stable() -> None:
         "succeeded",
         "failed",
         "canceled",
+        "archived",
     ]
     assert [status.value for status in ToolCallStatus] == [
         "pending",
@@ -38,6 +39,7 @@ def test_enum_values_are_stable() -> None:
         "succeeded",
         "failed",
         "canceled",
+        "archived",
     ]
 
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from reflexor.orchestrator.plans import Plan, PlanningInput, ProposedTask
+from reflexor.orchestrator.plans import BudgetAssertions, Plan, PlanningInput, ProposedTask
 from reflexor.planning.contracts import PlannerToolSpec
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -33,6 +33,7 @@ class HeuristicPlannerBackend:
         system_prompt: str | None,
     ) -> Plan:
         _ = (memory, system_prompt)
+        budget_assertions = _budget_assertions_for_input(planning_input)
 
         for event in planning_input.events:
             payload = event.payload
@@ -50,6 +51,7 @@ class HeuristicPlannerBackend:
                 return Plan(
                     summary=f"heuristic:{event.type}",
                     tasks=tasks,
+                    budget_assertions=budget_assertions,
                     planner_version=self.planner_version,
                     planning_notes=["derived from event payload tasks"],
                 )
@@ -69,6 +71,7 @@ class HeuristicPlannerBackend:
                                 declared_permission_scope=tool_spec.permission_scope,
                             )
                         ],
+                        budget_assertions=budget_assertions,
                         planner_version=self.planner_version,
                         planning_notes=["derived from event payload tool_name/args"],
                     )
@@ -76,6 +79,7 @@ class HeuristicPlannerBackend:
         return Plan(
             summary="heuristic:noop",
             tasks=[],
+            budget_assertions=budget_assertions,
             planner_version=self.planner_version,
             planning_notes=["no actionable planner hints found in events"],
         )
@@ -151,6 +155,21 @@ def _build_user_prompt(
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _budget_assertions_for_input(planning_input: PlanningInput) -> BudgetAssertions:
+    if planning_input.limits.max_tool_calls is None:
+        raise ValueError("planning_input.limits.max_tool_calls is required")
+    if planning_input.limits.max_runtime_s is None:
+        raise ValueError("planning_input.limits.max_runtime_s is required")
+    if planning_input.limits.max_tokens is None:
+        raise ValueError("planning_input.limits.max_tokens is required")
+    return BudgetAssertions(
+        max_tasks=planning_input.limits.max_tasks,
+        max_tool_calls=int(planning_input.limits.max_tool_calls),
+        max_runtime_s=float(planning_input.limits.max_runtime_s),
+        max_tokens=int(planning_input.limits.max_tokens),
+    )
 
 
 def _parse_openai_plan_response(payload: dict[str, object]) -> Plan:

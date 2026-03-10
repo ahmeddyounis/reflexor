@@ -10,6 +10,7 @@ from reflexor.config.settings.parsing import (
     _parse_rate_limit_spec,
     _parse_rate_limit_spec_dict,
     _parse_str_int_dict,
+    _parse_str_list,
 )
 from reflexor.config.validation import normalize_domains
 from reflexor.domain.models_event import DEFAULT_MAX_PAYLOAD_BYTES
@@ -43,6 +44,9 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
     planner_temperature: float = 0.0
     planner_system_prompt: str | None = None
     planner_max_memory_items: int = 5
+    planner_max_tokens_per_run: int = 4096
+    approval_required_domains: list[str] = Field(default_factory=list)
+    approval_required_payload_keywords: list[str] = Field(default_factory=list)
     otel_enabled: bool = False
     otel_service_name: str = "reflexor"
     otel_exporter_otlp_endpoint: str | None = None
@@ -51,6 +55,10 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
     planner_debounce_s: float = 2.0
     event_backlog_max: int = 200
     max_events_per_planning_cycle: int = 50
+    maintenance_batch_size: int = 200
+    memory_compaction_after_days: int = 1
+    memory_retention_days: int | None = 30
+    archive_terminal_tasks_after_days: int | None = 30
 
     max_tasks_per_run: int = 50
     max_tool_calls_per_run: int = 50
@@ -109,12 +117,28 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
         "executor_max_concurrency",
         "event_backlog_max",
         "max_events_per_planning_cycle",
+        "maintenance_batch_size",
+        "memory_compaction_after_days",
         "max_tasks_per_run",
         "max_tool_calls_per_run",
         "planner_max_memory_items",
+        "planner_max_tokens_per_run",
     )
     @classmethod
     def _validate_positive_ints(cls, value: int, info: ValidationInfo) -> int:
+        field_name = info.field_name or "value"
+        number = int(value)
+        if number <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+        return number
+
+    @field_validator("memory_retention_days", "archive_terminal_tasks_after_days")
+    @classmethod
+    def _validate_optional_positive_ints(
+        cls, value: int | None, info: ValidationInfo
+    ) -> int | None:
+        if value is None:
+            return None
         field_name = info.field_name or "value"
         number = int(value)
         if number <= 0:
@@ -153,6 +177,17 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
             return trimmed.rstrip("/")
         return trimmed
 
+    @field_validator(
+        "approval_required_domains",
+        "approval_required_payload_keywords",
+        mode="before",
+    )
+    @classmethod
+    def _parse_string_lists(cls, value: object, info: ValidationInfo) -> list[str]:
+        field_name = info.field_name
+        assert field_name is not None
+        return _parse_str_list(value, field_name=field_name)
+
     @field_validator("planner_temperature")
     @classmethod
     def _validate_planner_temperature(cls, value: float) -> float:
@@ -160,6 +195,24 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
         if temperature < 0 or temperature > 2:
             raise ValueError("planner_temperature must be in [0, 2]")
         return temperature
+
+    @field_validator("approval_required_domains", mode="after")
+    @classmethod
+    def _validate_approval_required_domains(cls, value: list[str]) -> list[str]:
+        return normalize_domains(value)
+
+    @field_validator("approval_required_payload_keywords", mode="after")
+    @classmethod
+    def _normalize_payload_keywords(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for keyword in value:
+            lowered = keyword.strip().lower()
+            if not lowered or lowered in seen:
+                continue
+            seen.add(lowered)
+            normalized.append(lowered)
+        return normalized
 
     @field_validator("executor_per_tool_concurrency", mode="after")
     @classmethod
