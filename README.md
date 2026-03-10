@@ -93,7 +93,6 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [Tools](docs/tools.md)
 - [Queue](docs/queue.md)
 - [Storage & Migrations](docs/storage.md)
-- [PRD Traceability](docs/prd_traceability.md)
 - [Security: Redaction & Truncation](docs/security_redaction.md)
 - [Examples](examples/README.md)
 - [Benchmark Script](scripts/benchmark_event_to_enqueue.py)
