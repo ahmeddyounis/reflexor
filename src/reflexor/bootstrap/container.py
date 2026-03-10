@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from reflexor.bootstrap.executor import build_executor_service
 from reflexor.bootstrap.orchestrator import build_orchestrator_engine
+from reflexor.bootstrap.planner import build_planner
 from reflexor.bootstrap.policy import build_policy_gate, build_policy_runner
 from reflexor.bootstrap.queue import build_queue
 from reflexor.bootstrap.repos import RepoProviders, build_repo_providers
@@ -375,6 +376,7 @@ class AppContainer:
             runner=tool_runner,
             gate=policy_gate,
         )
+        effective_planner = planner or build_planner(effective_settings, registry=registry)
         orchestrator_engine = build_orchestrator_engine(
             effective_settings,
             metrics=effective_metrics,
@@ -383,7 +385,7 @@ class AppContainer:
             queue=effective_queue,
             registry=registry,
             reflex_router=reflex_router,
-            planner=planner,
+            planner=effective_planner,
             clock=clock,
             run_sink=run_sink,
         )

@@ -60,6 +60,11 @@ def test_registry_register_and_lookup() -> None:
 
     assert registry.get("dummy.tool") is tool
     assert [m.name for m in registry.list_manifests()] == ["dummy.tool"]
+    specs = registry.list_specs()
+    assert len(specs) == 1
+    assert specs[0].manifest.name == "dummy.tool"
+    assert specs[0].input_schema["type"] == "object"
+    assert specs[0].output_schema["type"] == "object"
 
     registry.validate_exists("dummy.tool")
 

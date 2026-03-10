@@ -50,6 +50,8 @@ class ToolManifest(BaseModel):
     default_timeout_s: int = 60
     max_output_bytes: int = 64_000
     tags: list[str] = Field(default_factory=list)
+    input_schema: dict[str, object] | None = None
+    output_schema: dict[str, object] | None = None
 
     @field_validator("sdk_version")
     @classmethod
@@ -80,6 +82,17 @@ class ToolManifest(BaseModel):
                 raise ValueError("tags entries must be non-empty")
             normalized.append(trimmed)
         return _dedupe_preserving_order(normalized)
+
+    @field_validator("input_schema", "output_schema")
+    @classmethod
+    def _validate_optional_json_schema(
+        cls, value: dict[str, object] | None, info: ValidationInfo
+    ) -> dict[str, object] | None:
+        if value is None:
+            return None
+        field_name = info.field_name or "schema"
+        _require_json_serializable(value, field_name=field_name)
+        return value
 
 
 class ToolResult(BaseModel):

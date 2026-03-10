@@ -5,6 +5,7 @@ import re
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TypeGuard
 
 import structlog
@@ -14,6 +15,28 @@ from reflexor.config import ReflexorSettings
 from reflexor.security.scopes import ALL_SCOPES
 from reflexor.tools.sdk import Tool, ToolContext, ToolManifest, ToolResult
 from reflexor.tools.sdk.compat import SUPPORTED_TOOL_SDK_VERSIONS, is_supported_tool_sdk_version
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    manifest: ToolManifest
+    input_schema: dict[str, object]
+    output_schema: dict[str, object]
+
+    def to_prompt_dict(self) -> dict[str, object]:
+        return {
+            "name": self.manifest.name,
+            "version": self.manifest.version,
+            "description": self.manifest.description,
+            "permission_scope": self.manifest.permission_scope,
+            "side_effects": self.manifest.side_effects,
+            "idempotent": self.manifest.idempotent,
+            "default_timeout_s": self.manifest.default_timeout_s,
+            "max_output_bytes": self.manifest.max_output_bytes,
+            "tags": list(self.manifest.tags),
+            "input_schema": self.input_schema,
+            "output_schema": self.output_schema,
+        }
 
 
 class ToolRegistry:
@@ -55,6 +78,11 @@ class ToolRegistry:
         """Return manifests for all registered tools in registration order."""
 
         return [tool.manifest for tool in self._tools.values()]
+
+    def list_specs(self) -> list[ToolSpec]:
+        """Return manifests enriched with canonical input/output schemas."""
+
+        return [_tool_spec(tool) for tool in self._tools.values()]
 
     def load_entrypoints(self, *, settings: ReflexorSettings) -> int:
         """Discover and register tools from Python entry points.
@@ -299,3 +327,14 @@ def _validate_plugin_tool(
         raise ValueError(f"tool entrypoint {entrypoint_name!r} run() must be async")
 
     return _EntrypointTool(tool=tool, manifest=manifest)
+
+
+def _tool_spec(tool: Tool[BaseModel]) -> ToolSpec:
+    manifest = tool.manifest
+    input_schema = manifest.input_schema or tool.ArgsModel.model_json_schema(mode="validation")
+    output_schema = manifest.output_schema or ToolResult.model_json_schema(mode="serialization")
+    return ToolSpec(
+        manifest=manifest,
+        input_schema=input_schema,
+        output_schema=output_schema,
+    )

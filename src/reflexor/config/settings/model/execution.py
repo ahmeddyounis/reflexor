@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, ValidationInfo, field_validator
 
 from reflexor.config.settings.model.infra import _ReflexorSettingsInfra
@@ -33,6 +35,14 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
     rate_limit_per_destination: dict[str, RateLimitSpecConfig] = Field(default_factory=dict)
     rate_limit_per_run: RateLimitSpecConfig | None = None
 
+    planner_backend: Literal["noop", "heuristic", "openai_compatible"] = "noop"
+    planner_model: str | None = None
+    planner_api_key: str | None = None
+    planner_base_url: str = "https://api.openai.com/v1"
+    planner_timeout_s: float = 30.0
+    planner_temperature: float = 0.0
+    planner_system_prompt: str | None = None
+    planner_max_memory_items: int = 5
     planner_interval_s: float = 60.0
     planner_debounce_s: float = 2.0
     event_backlog_max: int = 200
@@ -78,6 +88,7 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
         "executor_visibility_timeout_s",
         "executor_retry_base_delay_s",
         "executor_retry_max_delay_s",
+        "planner_timeout_s",
         "planner_interval_s",
         "planner_debounce_s",
         "max_run_wall_time_s",
@@ -96,6 +107,7 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
         "max_events_per_planning_cycle",
         "max_tasks_per_run",
         "max_tool_calls_per_run",
+        "planner_max_memory_items",
     )
     @classmethod
     def _validate_positive_ints(cls, value: int, info: ValidationInfo) -> int:
@@ -112,6 +124,30 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
         if jitter < 0 or jitter > 1:
             raise ValueError("executor_retry_jitter must be in [0, 1]")
         return jitter
+
+    @field_validator("planner_model", "planner_api_key", "planner_system_prompt")
+    @classmethod
+    def _normalize_optional_planner_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
+
+    @field_validator("planner_base_url")
+    @classmethod
+    def _validate_planner_base_url(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("planner_base_url must be non-empty")
+        return trimmed.rstrip("/")
+
+    @field_validator("planner_temperature")
+    @classmethod
+    def _validate_planner_temperature(cls, value: float) -> float:
+        temperature = float(value)
+        if temperature < 0 or temperature > 2:
+            raise ValueError("planner_temperature must be in [0, 2]")
+        return temperature
 
     @field_validator("executor_per_tool_concurrency", mode="after")
     @classmethod

@@ -72,6 +72,8 @@ class ReflexorSettings(_ReflexorSettingsEvents):
             raise ValueError("executor_retry_max_delay_s must be >= executor_retry_base_delay_s")
         if self.executor_visibility_timeout_s < self.executor_default_timeout_s:
             raise ValueError("executor_visibility_timeout_s must be >= executor_default_timeout_s")
+        if self.planner_backend == "openai_compatible" and self.planner_model is None:
+            raise ValueError("planner_model must be set when planner_backend=openai_compatible")
         unknown_approval_scopes = sorted(
             set(self.approval_required_scopes) - set(self.enabled_scopes)
         )

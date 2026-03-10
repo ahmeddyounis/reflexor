@@ -65,6 +65,14 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.rate_limit_per_tool == {}
     assert settings.rate_limit_per_destination == {}
     assert settings.rate_limit_per_run is None
+    assert settings.planner_backend == "noop"
+    assert settings.planner_model is None
+    assert settings.planner_api_key is None
+    assert settings.planner_base_url == "https://api.openai.com/v1"
+    assert settings.planner_timeout_s == 30.0
+    assert settings.planner_temperature == 0.0
+    assert settings.planner_system_prompt is None
+    assert settings.planner_max_memory_items == 5
     assert settings.planner_interval_s == 60.0
     assert settings.planner_debounce_s == 2.0
     assert settings.event_backlog_max == 200
@@ -186,6 +194,29 @@ def test_database_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     with pytest.raises(ValueError, match="db_pool_timeout_s must be > 0"):
         ReflexorSettings(db_pool_timeout_s=0)
+
+
+def test_planner_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    settings = ReflexorSettings(
+        planner_backend="openai_compatible",
+        planner_model="gpt-test",
+        planner_base_url=" https://planner.example.com/v1/ ",
+        planner_temperature=0.5,
+    )
+    assert settings.planner_model == "gpt-test"
+    assert settings.planner_base_url == "https://planner.example.com/v1"
+    assert settings.planner_temperature == 0.5
+
+    with pytest.raises(ValueError, match="planner_model must be set"):
+        ReflexorSettings(planner_backend="openai_compatible")
+
+    with pytest.raises(ValueError, match="planner_base_url must be non-empty"):
+        ReflexorSettings(planner_base_url=" ")
+
+    with pytest.raises(ValueError, match="planner_temperature must be in \\[0, 2\\]"):
+        ReflexorSettings(planner_temperature=3)
 
 
 def test_redis_settings_reject_invalid_values(
