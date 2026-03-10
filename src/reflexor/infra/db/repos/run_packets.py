@@ -7,15 +7,24 @@ from reflexor.config import ReflexorSettings
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.infra.db.models import RunPacketRow, RunRow
 from reflexor.infra.db.repos._common import _validate_limit_offset
+from reflexor.memory import memory_item_from_run_packet
 from reflexor.observability.audit_sanitize import sanitize_for_audit
+from reflexor.storage.ports import MemoryRepo
 
 RUN_PACKET_VERSION = 1
 
 
 class SqlAlchemyRunPacketRepo:
-    def __init__(self, session: AsyncSession, *, settings: ReflexorSettings | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        settings: ReflexorSettings | None = None,
+        memory_repo: MemoryRepo | None = None,
+    ) -> None:
         self._session = session
         self._settings = settings
+        self._memory_repo = memory_repo
 
     async def create(self, packet: RunPacket) -> RunPacket:
         run = await self._session.get(RunRow, packet.run_id)
@@ -42,6 +51,9 @@ class SqlAlchemyRunPacketRepo:
             existing.created_at_ms = packet.created_at_ms
             existing.packet = sanitized_packet
         await self._session.flush()
+        if self._memory_repo is not None:
+            memory_item = memory_item_from_run_packet(packet)
+            await self._memory_repo.upsert(memory_item)
         return RunPacket.model_validate(sanitized_packet)
 
     async def get(self, run_id: str) -> RunPacket | None:

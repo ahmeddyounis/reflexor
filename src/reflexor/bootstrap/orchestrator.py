@@ -19,6 +19,7 @@ from reflexor.orchestrator.interfaces import (
     NeedsPlanningRouter,
     NoOpPlanner,
     Planner,
+    ReflexClassifier,
     ReflexRouter,
 )
 from reflexor.orchestrator.persistence import OrchestratorPersistence, OrchestratorRepoFactory
@@ -31,6 +32,8 @@ from reflexor.tools.registry import ToolRegistry
 def resolve_reflex_router(
     settings: ReflexorSettings,
     reflex_router: ReflexRouter | None,
+    *,
+    reflex_classifier: ReflexClassifier | None = None,
 ) -> ReflexRouter:
     if reflex_router is not None:
         return reflex_router
@@ -40,11 +43,16 @@ def resolve_reflex_router(
         from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
 
         try:
-            return RuleBasedReflexRouter.from_file(rules_path)
+            return RuleBasedReflexRouter.from_file(rules_path, classifier=reflex_classifier)
         except FileNotFoundError as exc:
             raise ValueError(f"reflex_rules_path not found: {rules_path}") from exc
         except Exception as exc:  # pragma: no cover
             raise ValueError(f"failed to load reflex rules from {rules_path}: {exc}") from exc
+
+    if reflex_classifier is not None:
+        from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
+
+        return RuleBasedReflexRouter.from_raw_rules([], classifier=reflex_classifier)
 
     return NeedsPlanningRouter()
 
@@ -58,6 +66,7 @@ def build_orchestrator_engine(
     queue: Queue,
     registry: ToolRegistry,
     reflex_router: ReflexRouter | None,
+    reflex_classifier: ReflexClassifier | None,
     planner: Planner | None,
     clock: Clock | None,
     run_sink: RunPacketSink | None,
@@ -93,7 +102,11 @@ def build_orchestrator_engine(
             ttl_s=float(settings.event_suppression_ttl_s),
         )
 
-    effective_reflex_router = resolve_reflex_router(settings, reflex_router)
+    effective_reflex_router = resolve_reflex_router(
+        settings,
+        reflex_router,
+        reflex_classifier=reflex_classifier,
+    )
 
     return OrchestratorEngine(
         reflex_router=effective_reflex_router,

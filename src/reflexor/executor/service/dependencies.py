@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from reflexor.domain.enums import TaskStatus
 from reflexor.domain.models import Task
 from reflexor.observability.context import correlation_context, get_correlation_ids
+from reflexor.observability.tracing import inject_trace_carrier
 from reflexor.orchestrator.queue import TaskEnvelope
 
 
@@ -81,6 +82,14 @@ def dependency_ready_envelope(
         task_id=task.task_id,
         tool_call_id=tool_call.tool_call_id,
     ):
+        trace_payload: dict[str, object] = {
+            "reason": "dependency_satisfied",
+            "source": "executor",
+            "upstream_task_id": upstream_task_id,
+        }
+        otel_carrier = inject_trace_carrier()
+        if otel_carrier:
+            trace_payload["otel"] = otel_carrier
         return TaskEnvelope(
             task_id=task.task_id,
             run_id=task.run_id,
@@ -88,11 +97,7 @@ def dependency_ready_envelope(
             created_at_ms=now_ms,
             available_at_ms=now_ms,
             correlation_ids=get_correlation_ids(),
-            trace={
-                "reason": "dependency_satisfied",
-                "source": "executor",
-                "upstream_task_id": upstream_task_id,
-            },
+            trace=trace_payload,
             payload={
                 "tool_call_id": tool_call.tool_call_id,
                 "tool_name": tool_call.tool_name,

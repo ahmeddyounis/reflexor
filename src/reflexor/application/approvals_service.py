@@ -21,6 +21,7 @@ from reflexor.domain.execution_state import complete_canceled, complete_denied
 from reflexor.domain.lifecycle import transition_task
 from reflexor.domain.models import Approval
 from reflexor.observability.context import correlation_context, get_correlation_ids
+from reflexor.observability.tracing import inject_trace_carrier
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.queue import Queue, TaskEnvelope
 from reflexor.storage.ports import ApprovalRepo, TaskRepo, ToolCallRepo
@@ -94,6 +95,13 @@ class ApprovalCommandService:
                     task_id=queued_task.task_id,
                     tool_call_id=tool_call.tool_call_id,
                 ):
+                    trace_payload: dict[str, object] = {
+                        "reason": "approval_approved",
+                        "source": "approvals",
+                    }
+                    otel_carrier = inject_trace_carrier()
+                    if otel_carrier:
+                        trace_payload["otel"] = otel_carrier
                     envelope = TaskEnvelope(
                         task_id=queued_task.task_id,
                         run_id=queued_task.run_id,
@@ -101,7 +109,7 @@ class ApprovalCommandService:
                         created_at_ms=now_ms,
                         available_at_ms=now_ms,
                         correlation_ids=get_correlation_ids(),
-                        trace={"reason": "approval_approved", "source": "approvals"},
+                        trace=trace_payload,
                         payload={
                             "tool_call_id": tool_call.tool_call_id,
                             "tool_name": tool_call.tool_name,

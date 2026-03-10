@@ -9,8 +9,9 @@ import respx
 from reflexor.bootstrap.planner import build_planner
 from reflexor.config import ReflexorSettings
 from reflexor.domain.models_event import Event
-from reflexor.orchestrator.plans import PlanningInput
+from reflexor.orchestrator.plans import Plan, PlanningInput
 from reflexor.planning import OpenAICompatiblePlannerBackend, StructuredPlanner
+from reflexor.planning.contracts import PlannerToolSpec
 from reflexor.tools.impl.echo import EchoTool
 from reflexor.tools.registry import ToolRegistry
 
@@ -23,6 +24,29 @@ def _planning_input(payload: dict[str, object]) -> PlanningInput:
         payload=payload,
     )
     return PlanningInput(trigger="event", events=[event], now_ms=0)
+
+
+class _RecordingBackend:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def plan(
+        self,
+        *,
+        planning_input: PlanningInput,
+        tools: list[PlannerToolSpec],
+        memory: list[dict[str, object]],
+        system_prompt: str | None,
+    ) -> Plan:
+        self.calls.append(
+            {
+                "planning_input": planning_input.model_dump(mode="json"),
+                "tools": [tool.to_prompt_dict() for tool in tools],
+                "memory": memory,
+                "system_prompt": system_prompt,
+            }
+        )
+        return Plan(summary="recorded", tasks=[])
 
 
 @pytest.mark.asyncio
@@ -110,3 +134,26 @@ async def test_openai_compatible_planner_parses_structured_response() -> None:
     assert plan.summary == "planned"
     assert plan.planner_version == "openai_compatible.v1"
     assert plan.tasks[0].tool_name == "debug.echo"
+
+
+@pytest.mark.asyncio
+async def test_structured_planner_passes_memory_to_backend() -> None:
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    backend = _RecordingBackend()
+
+    async def memory_loader(_input: PlanningInput) -> list[dict[str, object]]:
+        return [{"summary": "recent run"}]
+
+    planner = StructuredPlanner(
+        backend=backend,
+        registry=registry,
+        system_prompt="plan carefully",
+        memory_loader=memory_loader,
+    )
+
+    plan = await planner.plan(_planning_input({"action": "opened"}))
+
+    assert plan.summary == "recorded"
+    assert backend.calls[0]["memory"] == [{"summary": "recent run"}]
+    assert backend.calls[0]["system_prompt"] == "plan carefully"

@@ -185,6 +185,21 @@ class RunPacket(BaseModel):
         updated["tasks"] = [*self.tasks, task]
         return RunPacket.model_validate(updated)
 
+    def with_task_upserted(self, task: Task) -> RunPacket:
+        updated = self.model_dump()
+        replaced = False
+        tasks: list[Task] = []
+        for existing in self.tasks:
+            if existing.task_id == task.task_id:
+                tasks.append(task)
+                replaced = True
+                continue
+            tasks.append(existing)
+        if not replaced:
+            tasks.append(task)
+        updated["tasks"] = tasks
+        return RunPacket.model_validate(updated)
+
     def with_tool_result_added(self, tool_result: dict[str, object]) -> RunPacket:
         updated = self.model_dump()
         updated["tool_results"] = [*self.tool_results, tool_result]

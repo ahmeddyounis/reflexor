@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from reflexor.domain.models import Task
 from reflexor.observability.context import correlation_context, get_correlation_ids
+from reflexor.observability.tracing import inject_trace_carrier
 from reflexor.orchestrator.engine.types import PlanningTrigger
 from reflexor.orchestrator.queue import TaskEnvelope
 from reflexor.orchestrator.validation import PlanValidationError
@@ -32,6 +33,14 @@ async def enqueue_tasks(
             raise PlanValidationError("task.tool_call is required for queueing")
 
         with correlation_context(task_id=task.task_id, tool_call_id=tool_call.tool_call_id):
+            trace_payload: dict[str, object] = {
+                "reason": reason,
+                "source": source,
+                "trigger": trigger,
+            }
+            otel_carrier = inject_trace_carrier()
+            if otel_carrier:
+                trace_payload["otel"] = otel_carrier
             envelope = TaskEnvelope(
                 task_id=task.task_id,
                 run_id=task.run_id,
@@ -39,7 +48,7 @@ async def enqueue_tasks(
                 created_at_ms=now_ms,
                 available_at_ms=now_ms,
                 correlation_ids=get_correlation_ids(),
-                trace={"reason": reason, "source": source, "trigger": trigger},
+                trace=trace_payload,
                 payload={
                     "tool_call_id": tool_call.tool_call_id,
                     "tool_name": tool_call.tool_name,

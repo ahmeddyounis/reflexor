@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from reflexor.config import ReflexorSettings
-from reflexor.domain.enums import ApprovalStatus
+from reflexor.domain.enums import ApprovalStatus, TaskStatus
 from reflexor.domain.models import Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
@@ -91,7 +91,18 @@ async def append_audit(
         **decision.to_audit_dict(),
     }
 
-    updated = packet.with_tool_result_added(tool_result_entry).with_policy_decision_added(
+    updated = packet.with_task_upserted(task)
+    if updated.started_at_ms is None and task.started_at_ms is not None:
+        updated = updated.model_copy(update={"started_at_ms": task.started_at_ms}, deep=True)
+
+    all_tasks_terminal = bool(updated.tasks) and all(
+        candidate.status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}
+        for candidate in updated.tasks
+    )
+    if all_tasks_terminal:
+        updated = updated.model_copy(update={"completed_at_ms": now_ms}, deep=True)
+
+    updated = updated.with_tool_result_added(tool_result_entry).with_policy_decision_added(
         decision_entry
     )
 

@@ -30,6 +30,12 @@ class ReflexRouter(Protocol):
     async def route(self, event: Event, ctx: PlanningInput) -> ReflexDecision: ...
 
 
+class ReflexClassifier(Protocol):
+    """Optional constrained classifier used as a fallback after deterministic rules."""
+
+    async def classify(self, event: Event, ctx: PlanningInput) -> ReflexDecision | None: ...
+
+
 class NoOpPlanner:
     """Planner stub that emits an empty plan."""
 
@@ -49,9 +55,26 @@ class NeedsPlanningRouter:
         return ReflexDecision(action="needs_planning", reason="stub", proposed_tasks=[])
 
 
+class NoOpReflexClassifier:
+    """Classifier stub that never overrides deterministic routing."""
+
+    async def classify(self, event: Event, ctx: PlanningInput) -> ReflexDecision | None:
+        _ = event
+        _ = ctx
+        return None
+
+
 if TYPE_CHECKING:
     _planner: Planner = NoOpPlanner()
     _router: ReflexRouter = NeedsPlanningRouter()
+    _classifier: ReflexClassifier = NoOpReflexClassifier()
 
 
-__all__ = ["NeedsPlanningRouter", "NoOpPlanner", "Planner", "ReflexRouter"]
+__all__ = [
+    "NeedsPlanningRouter",
+    "NoOpPlanner",
+    "NoOpReflexClassifier",
+    "Planner",
+    "ReflexClassifier",
+    "ReflexRouter",
+]

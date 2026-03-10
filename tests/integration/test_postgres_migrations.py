@@ -18,6 +18,8 @@ _TARGETS: tuple[tuple[str, str], ...] = (
     ("tasks", "labels"),
     ("tasks", "metadata"),
     ("idempotency_ledger", "result_json"),
+    ("memory_items", "content"),
+    ("memory_items", "tags"),
 )
 
 
@@ -27,6 +29,7 @@ async def _reset_database(database_url: str) -> None:
         async with engine.begin() as conn:
             # Use CASCADE since tables have FKs.
             await conn.execute(sa.text("DROP TABLE IF EXISTS approvals CASCADE"))
+            await conn.execute(sa.text("DROP TABLE IF EXISTS memory_items CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS tasks CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS tool_calls CASCADE"))
             await conn.execute(sa.text("DROP TABLE IF EXISTS run_packets CASCADE"))

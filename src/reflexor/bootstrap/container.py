@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -39,9 +39,11 @@ from reflexor.infra.db.engine import (
     create_async_session_factory,
 )
 from reflexor.observability.metrics import ReflexorMetrics
+from reflexor.observability.tracing import configure_tracing
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
-from reflexor.orchestrator.interfaces import Planner, ReflexRouter
+from reflexor.orchestrator.interfaces import Planner, ReflexClassifier, ReflexRouter
+from reflexor.orchestrator.plans import PlanningInput
 from reflexor.orchestrator.queue import Queue
 from reflexor.orchestrator.sinks import RunPacketSink
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
@@ -109,6 +111,57 @@ def _resolve_engine_and_session_factory(
     effective_engine = create_async_engine(settings)
     effective_session_factory = create_async_session_factory(effective_engine)
     return effective_engine, effective_session_factory, True
+
+
+def _memory_loader(
+    *,
+    settings: ReflexorSettings,
+    uow_factory: Callable[[], UnitOfWork],
+    repos: RepoProviders,
+) -> Callable[[object], Awaitable[list[dict[str, object]]]] | None:
+    if int(settings.planner_max_memory_items) <= 0:
+        return None
+
+    async def load_memory(_planning_input: PlanningInput) -> list[dict[str, object]]:
+        uow = uow_factory()
+        async with uow:
+            repo = repos.memory_repo(uow.session)
+            remaining = int(settings.planner_max_memory_items)
+            items = []
+            seen_memory_ids: set[str] = set()
+
+            for event in _planning_input.events:
+                if remaining <= 0:
+                    break
+                matching = await repo.list_recent(
+                    limit=remaining,
+                    offset=0,
+                    event_type=event.type,
+                    event_source=event.source,
+                )
+                for item in matching:
+                    if item.memory_id in seen_memory_ids:
+                        continue
+                    seen_memory_ids.add(item.memory_id)
+                    items.append(item)
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
+
+            if remaining > 0:
+                fallback = await repo.list_recent(limit=remaining, offset=0)
+                for item in fallback:
+                    if item.memory_id in seen_memory_ids:
+                        continue
+                    seen_memory_ids.add(item.memory_id)
+                    items.append(item)
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
+
+            return [item.to_planning_dict() for item in items]
+
+    return load_memory
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,12 +395,14 @@ class AppContainer:
         queue: Queue | None = None,
         tool_registry: ToolRegistry | None = None,
         reflex_router: ReflexRouter | None = None,
+        reflex_classifier: ReflexClassifier | None = None,
         planner: Planner | None = None,
         clock: Clock | None = None,
         run_sink: RunPacketSink | None = None,
     ) -> AppContainer:
         effective_settings = get_settings() if settings is None else settings
         effective_metrics = ReflexorMetrics.build() if metrics is None else metrics
+        configure_tracing(effective_settings)
 
         effective_engine, effective_session_factory, owns_engine = (
             _resolve_engine_and_session_factory(
@@ -376,7 +431,15 @@ class AppContainer:
             runner=tool_runner,
             gate=policy_gate,
         )
-        effective_planner = planner or build_planner(effective_settings, registry=registry)
+        effective_planner = planner or build_planner(
+            effective_settings,
+            registry=registry,
+            memory_loader=_memory_loader(
+                settings=effective_settings,
+                uow_factory=uow_factory,
+                repos=repos,
+            ),
+        )
         orchestrator_engine = build_orchestrator_engine(
             effective_settings,
             metrics=effective_metrics,
@@ -385,6 +448,7 @@ class AppContainer:
             queue=effective_queue,
             registry=registry,
             reflex_router=reflex_router,
+            reflex_classifier=reflex_classifier,
             planner=effective_planner,
             clock=clock,
             run_sink=run_sink,

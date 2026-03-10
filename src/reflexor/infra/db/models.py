@@ -126,12 +126,33 @@ class IdempotencyLedgerRow(Base):
     expires_at_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
 
+class MemoryItemRow(Base):
+    __tablename__ = "memory_items"
+
+    memory_id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String, ForeignKey("runs.run_id"), unique=True, index=True
+    )
+    event_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("events.event_id"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String, index=True)
+    event_type: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    event_source: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    summary: Mapped[str] = mapped_column(String)
+    content: Mapped[dict[str, object]] = mapped_column(JSON_VARIANT)
+    tags: Mapped[list[str]] = mapped_column(JSON_VARIANT)
+    created_at_ms: Mapped[int] = mapped_column(Integer, index=True)
+    updated_at_ms: Mapped[int] = mapped_column(Integer, index=True)
+
+
 __all__ = [
     "ApprovalRow",
     "Base",
     "EventRow",
     "EventSuppressionRow",
     "IdempotencyLedgerRow",
+    "MemoryItemRow",
     "RunPacketRow",
     "RunRow",
     "TaskRow",

@@ -73,6 +73,10 @@ def test_defaults_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.planner_temperature == 0.0
     assert settings.planner_system_prompt is None
     assert settings.planner_max_memory_items == 5
+    assert settings.otel_enabled is False
+    assert settings.otel_service_name == "reflexor"
+    assert settings.otel_exporter_otlp_endpoint is None
+    assert settings.otel_console_exporter is False
     assert settings.planner_interval_s == 60.0
     assert settings.planner_debounce_s == 2.0
     assert settings.event_backlog_max == 200
@@ -217,6 +221,9 @@ def test_planner_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     with pytest.raises(ValueError, match="planner_temperature must be in \\[0, 2\\]"):
         ReflexorSettings(planner_temperature=3)
+
+    with pytest.raises(ValueError, match="otel_service_name must be non-empty"):
+        ReflexorSettings(otel_service_name=" ")
 
 
 def test_redis_settings_reject_invalid_values(

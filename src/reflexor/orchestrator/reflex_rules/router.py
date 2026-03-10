@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from reflexor.domain.models_event import Event
-from reflexor.orchestrator.interfaces import ReflexRouter
+from reflexor.orchestrator.interfaces import ReflexClassifier, ReflexRouter
 from reflexor.orchestrator.plans import PlanningInput, ProposedTask, ReflexDecision
 from reflexor.orchestrator.reflex_rules.loader import load_reflex_rules
 from reflexor.orchestrator.reflex_rules.models import (
@@ -23,23 +23,44 @@ from reflexor.orchestrator.reflex_rules.template import (
 class RuleBasedReflexRouter:
     """A reflex router backed by a deterministic ordered ruleset."""
 
-    def __init__(self, rules: list[ReflexRule]) -> None:
+    def __init__(
+        self,
+        rules: list[ReflexRule],
+        *,
+        classifier: ReflexClassifier | None = None,
+    ) -> None:
         self._rules = list(rules)
+        self._classifier = classifier
 
     @classmethod
-    def from_json_file(cls, path: str | Path) -> RuleBasedReflexRouter:
-        return cls(load_reflex_rules(path))
+    def from_json_file(
+        cls,
+        path: str | Path,
+        *,
+        classifier: ReflexClassifier | None = None,
+    ) -> RuleBasedReflexRouter:
+        return cls(load_reflex_rules(path), classifier=classifier)
 
     @classmethod
-    def from_file(cls, path: str | Path) -> RuleBasedReflexRouter:
-        return cls(load_reflex_rules(path))
+    def from_file(
+        cls,
+        path: str | Path,
+        *,
+        classifier: ReflexClassifier | None = None,
+    ) -> RuleBasedReflexRouter:
+        return cls(load_reflex_rules(path), classifier=classifier)
 
     @classmethod
-    def from_raw_rules(cls, rules: list[object]) -> RuleBasedReflexRouter:
+    def from_raw_rules(
+        cls,
+        rules: list[object],
+        *,
+        classifier: ReflexClassifier | None = None,
+    ) -> RuleBasedReflexRouter:
         parsed: list[ReflexRule] = []
         for item in rules:
             parsed.append(ReflexRule.model_validate(item))
-        return cls(parsed)
+        return cls(parsed, classifier=classifier)
 
     async def route(self, event: Event, ctx: PlanningInput) -> ReflexDecision:
         _ = ctx
@@ -94,6 +115,11 @@ class RuleBasedReflexRouter:
                 )
 
             raise AssertionError(f"Unhandled rule action type: {type(rule.action)!r}")
+
+        if self._classifier is not None:
+            classified = await self._classifier.classify(event, ctx)
+            if classified is not None:
+                return classified
 
         return ReflexDecision(action="needs_planning", reason="no_matching_rule", proposed_tasks=[])
 

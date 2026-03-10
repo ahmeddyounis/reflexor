@@ -45,6 +45,7 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
             "run_packets",
             "idempotency_ledger",
             "event_suppressions",
+            "memory_items",
         }
         tables = set(inspector.get_table_names())
         missing_tables = expected_tables - tables
@@ -136,6 +137,25 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
             f"Missing columns for event_suppressions: {sorted(missing_suppression_columns)}"
         )
 
+        expected_memory_columns = {
+            "memory_id",
+            "run_id",
+            "event_id",
+            "kind",
+            "event_type",
+            "event_source",
+            "summary",
+            "content",
+            "tags",
+            "created_at_ms",
+            "updated_at_ms",
+        }
+        memory_columns = _column_names(inspector, table="memory_items")
+        missing_memory_columns = expected_memory_columns - memory_columns
+        assert not missing_memory_columns, (
+            f"Missing columns for memory_items: {sorted(missing_memory_columns)}"
+        )
+
         expected_indexes = {
             "events": {"ix_events_type", "ux_events_source_dedupe_key"},
             "runs": {"ix_runs_created_at_ms"},
@@ -153,6 +173,14 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
                 "ix_event_suppressions_event_source",
                 "ix_event_suppressions_suppressed_until_ms",
                 "ix_event_suppressions_expires_at_ms",
+            },
+            "memory_items": {
+                "ix_memory_items_run_id",
+                "ix_memory_items_kind",
+                "ix_memory_items_event_type",
+                "ix_memory_items_event_source",
+                "ix_memory_items_created_at_ms",
+                "ix_memory_items_updated_at_ms",
             },
         }
         for table, expected in expected_indexes.items():

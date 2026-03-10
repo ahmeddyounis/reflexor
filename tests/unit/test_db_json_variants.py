@@ -27,6 +27,8 @@ def test_json_columns_use_jsonb_on_postgres_and_json_on_sqlite() -> None:
         ("tasks", "metadata"),
         ("run_packets", "packet"),
         ("idempotency_ledger", "result_json"),
+        ("memory_items", "content"),
+        ("memory_items", "tags"),
     }
 
     for table_name, column_name in sorted(json_columns):

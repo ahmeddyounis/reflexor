@@ -11,6 +11,8 @@ from reflexor.infra.db.mappers import (
     approval_to_row_dict,
     event_from_row_dict,
     event_to_row_dict,
+    memory_item_from_row_dict,
+    memory_item_to_row_dict,
     run_packet_from_row_dict,
     run_packet_to_row_dict,
     task_from_row_dict,
@@ -18,6 +20,7 @@ from reflexor.infra.db.mappers import (
     tool_call_from_row_dict,
     tool_call_to_row_dict,
 )
+from reflexor.memory.models import MemoryItem
 
 
 def test_event_mapping_round_trip() -> None:
@@ -167,3 +170,23 @@ def test_run_packet_mapping_round_trip() -> None:
     assert row["created_at_ms"] == 0
     restored = run_packet_from_row_dict(row)
     assert restored.model_dump(mode="json") == packet.model_dump(mode="json")
+
+
+def test_memory_item_mapping_round_trip() -> None:
+    item = MemoryItem(
+        memory_id=str(uuid.uuid4()),
+        run_id=str(uuid.uuid4()),
+        event_id=str(uuid.uuid4()),
+        kind="run_summary",
+        event_type="webhook",
+        event_source="tests",
+        summary="summary",
+        content={"a": 1},
+        tags=["webhook", "tests"],
+        created_at_ms=1,
+        updated_at_ms=2,
+    )
+
+    row = memory_item_to_row_dict(item)
+    restored = memory_item_from_row_dict(row)
+    assert restored.model_dump(mode="json") == item.model_dump(mode="json")

@@ -22,6 +22,7 @@ from reflexor.infra.db.models import Base, RunPacketRow
 from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyEventRepo,
+    SqlAlchemyMemoryRepo,
     SqlAlchemyRunPacketRepo,
     SqlAlchemyRunRepo,
     SqlAlchemyTaskRepo,
@@ -169,7 +170,8 @@ async def test_sqlalchemy_repos_crud_status_and_pagination() -> None:
             tool_call_repo = SqlAlchemyToolCallRepo(session)
             task_repo = SqlAlchemyTaskRepo(session)
             approval_repo = SqlAlchemyApprovalRepo(session)
-            run_packet_repo = SqlAlchemyRunPacketRepo(session)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(session, memory_repo=memory_repo)
 
             assert await run_repo.create(run) == run
             assert await run_repo.create(run2) == run2
@@ -201,7 +203,8 @@ async def test_sqlalchemy_repos_crud_status_and_pagination() -> None:
             tool_call_repo = SqlAlchemyToolCallRepo(session)
             task_repo = SqlAlchemyTaskRepo(session)
             approval_repo = SqlAlchemyApprovalRepo(session)
-            run_packet_repo = SqlAlchemyRunPacketRepo(session)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(session, memory_repo=memory_repo)
 
             assert await run_repo.get(run_id) == run
             assert await run_repo.list_recent(limit=10, offset=0) == [run2, run]
@@ -237,6 +240,17 @@ async def test_sqlalchemy_repos_crud_status_and_pagination() -> None:
             listed_approvals = await approval_repo.list(limit=1, offset=1)
             assert [item.approval_id for item in listed_approvals] == [approval2.approval_id]
 
+            recent_memory = await memory_repo.list_recent(limit=10, offset=0)
+            assert [item.run_id for item in recent_memory] == [run2_id, run_id]
+
+            updated_memory = await memory_repo.list_recent(
+                limit=10,
+                offset=0,
+                event_type="ticket.updated",
+                event_source="tests",
+            )
+            assert [item.run_id for item in updated_memory] == [run2_id]
+
             updated_tool_call = await tool_call_repo.update_status(
                 tool_call1.tool_call_id, ToolCallStatus.SUCCEEDED
             )
@@ -258,6 +272,12 @@ async def test_sqlalchemy_repos_crud_status_and_pagination() -> None:
             packet = await run_packet_repo.get(run_id)
             assert packet is not None
             assert packet.model_dump(mode="json") == packet1.model_dump(mode="json")
+
+            memory_item = await memory_repo.get_by_run(run_id)
+            assert memory_item is not None
+            assert memory_item.run_id == run_id
+            assert memory_item.event_type == event1.type
+            assert memory_item.event_source == event1.source
             recent_packets = await run_packet_repo.list_recent(limit=10, offset=0)
             assert recent_packets[0].run_id == run2_id
 

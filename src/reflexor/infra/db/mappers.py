@@ -8,10 +8,12 @@ from reflexor.domain.models_run_packet import RunPacket
 from reflexor.infra.db.models import (
     ApprovalRow,
     EventRow,
+    MemoryItemRow,
     RunPacketRow,
     TaskRow,
     ToolCallRow,
 )
+from reflexor.memory.models import MemoryItem
 
 
 def event_to_row_dict(event: Event) -> dict[str, object]:
@@ -275,6 +277,63 @@ def run_packet_from_orm(row: RunPacketRow) -> RunPacket:
     )
 
 
+def memory_item_to_row_dict(item: MemoryItem) -> dict[str, object]:
+    dumped = item.model_dump(mode="json")
+    return {
+        "memory_id": dumped["memory_id"],
+        "run_id": dumped["run_id"],
+        "event_id": dumped.get("event_id"),
+        "kind": dumped["kind"],
+        "event_type": dumped.get("event_type"),
+        "event_source": dumped.get("event_source"),
+        "summary": dumped["summary"],
+        "content": dumped.get("content", {}),
+        "tags": dumped.get("tags", []),
+        "created_at_ms": dumped["created_at_ms"],
+        "updated_at_ms": dumped["updated_at_ms"],
+    }
+
+
+def memory_item_from_row_dict(row: Mapping[str, object]) -> MemoryItem:
+    return MemoryItem.model_validate(
+        {
+            "memory_id": row["memory_id"],
+            "run_id": row["run_id"],
+            "event_id": row.get("event_id"),
+            "kind": row["kind"],
+            "event_type": row.get("event_type"),
+            "event_source": row.get("event_source"),
+            "summary": row["summary"],
+            "content": row.get("content", {}),
+            "tags": row.get("tags", []),
+            "created_at_ms": row["created_at_ms"],
+            "updated_at_ms": row["updated_at_ms"],
+        }
+    )
+
+
+def memory_item_to_orm(item: MemoryItem) -> MemoryItemRow:
+    return MemoryItemRow(**memory_item_to_row_dict(item))
+
+
+def memory_item_from_orm(row: MemoryItemRow) -> MemoryItem:
+    return memory_item_from_row_dict(
+        {
+            "memory_id": row.memory_id,
+            "run_id": row.run_id,
+            "event_id": row.event_id,
+            "kind": row.kind,
+            "event_type": row.event_type,
+            "event_source": row.event_source,
+            "summary": row.summary,
+            "content": row.content,
+            "tags": row.tags,
+            "created_at_ms": row.created_at_ms,
+            "updated_at_ms": row.updated_at_ms,
+        }
+    )
+
+
 __all__ = [
     "approval_from_orm",
     "approval_from_row_dict",
@@ -284,6 +343,10 @@ __all__ = [
     "event_from_row_dict",
     "event_to_orm",
     "event_to_row_dict",
+    "memory_item_from_orm",
+    "memory_item_from_row_dict",
+    "memory_item_to_orm",
+    "memory_item_to_row_dict",
     "run_packet_from_orm",
     "run_packet_from_row_dict",
     "run_packet_to_orm",

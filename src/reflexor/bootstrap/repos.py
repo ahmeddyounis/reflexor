@@ -13,6 +13,7 @@ from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyEventRepo,
     SqlAlchemyEventSuppressionRepo,
+    SqlAlchemyMemoryRepo,
     SqlAlchemyRunPacketRepo,
     SqlAlchemyRunRepo,
     SqlAlchemyTaskRepo,
@@ -22,6 +23,7 @@ from reflexor.storage.ports import (
     ApprovalRepo,
     EventRepo,
     EventSuppressionRepo,
+    MemoryRepo,
     RunPacketRepo,
     RunRepo,
     TaskRepo,
@@ -39,6 +41,7 @@ class RepoProviders:
     tool_call_repo: Callable[[DatabaseSession], ToolCallRepo]
     approval_repo: Callable[[DatabaseSession], ApprovalRepo]
     run_packet_repo: Callable[[DatabaseSession], RunPacketRepo]
+    memory_repo: Callable[[DatabaseSession], MemoryRepo]
 
 
 def build_repo_providers(settings: ReflexorSettings) -> RepoProviders:
@@ -52,6 +55,9 @@ def build_repo_providers(settings: ReflexorSettings) -> RepoProviders:
         tool_call_repo=lambda session: SqlAlchemyToolCallRepo(cast(AsyncSession, session)),
         approval_repo=lambda session: SqlAlchemyApprovalRepo(cast(AsyncSession, session)),
         run_packet_repo=lambda session: SqlAlchemyRunPacketRepo(
-            cast(AsyncSession, session), settings=settings
+            cast(AsyncSession, session),
+            settings=settings,
+            memory_repo=SqlAlchemyMemoryRepo(cast(AsyncSession, session)),
         ),
+        memory_repo=lambda session: SqlAlchemyMemoryRepo(cast(AsyncSession, session)),
     )

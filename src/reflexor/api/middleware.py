@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from reflexor.api.schemas import ErrorResponse
 from reflexor.observability.context import correlation_context, request_id_context
 from reflexor.observability.metrics import ReflexorMetrics
+from reflexor.observability.tracing import start_span
 
 logger = logging.getLogger(__name__)
 
@@ -36,49 +37,57 @@ def install_middleware(app: FastAPI) -> None:
             # Clear correlation IDs at the request boundary.
             # Inner layers may set these (e.g. event_id/run_id).
             with correlation_context(event_id=None, run_id=None, task_id=None, tool_call_id=None):
-                logger.info(
-                    "api request start",
-                    extra={
-                        "event_type": "api.request.start",
-                        "method": request.method.upper(),
-                        "path": request.url.path,
+                with start_span(
+                    "api.request",
+                    attributes={
+                        "http.method": request.method.upper(),
+                        "http.path": request.url.path,
+                        "request.id": request_id,
                     },
-                )
-
-                response = await _maybe_reject_oversized_events_request(
-                    request, request_id=request_id
-                )
-                if response is None:
-                    response = await call_next(request)
-
-                response.headers["X-Request-ID"] = request_id
-
-                elapsed_ms = int((time.perf_counter() - started) * 1000)
-                route = getattr(request.scope.get("route"), "path", request.url.path)
-                status_code = int(getattr(response, "status_code", 500))
-
-                metrics = _get_metrics(request)
-                if metrics is not None:
-                    metrics.api_requests_total.labels(
-                        method=request.method.upper(),
-                        route=str(route),
-                        status=str(status_code),
-                    ).inc()
-
-                with correlation_context(**_extract_path_correlation_ids(request)):
+                ):
                     logger.info(
-                        "api request end",
+                        "api request start",
                         extra={
-                            "event_type": "api.request.end",
+                            "event_type": "api.request.start",
                             "method": request.method.upper(),
                             "path": request.url.path,
-                            "route": str(route),
-                            "status_code": status_code,
-                            "elapsed_ms": elapsed_ms,
                         },
                     )
 
-                return response
+                    response = await _maybe_reject_oversized_events_request(
+                        request, request_id=request_id
+                    )
+                    if response is None:
+                        response = await call_next(request)
+
+                    response.headers["X-Request-ID"] = request_id
+
+                    elapsed_ms = int((time.perf_counter() - started) * 1000)
+                    route = getattr(request.scope.get("route"), "path", request.url.path)
+                    status_code = int(getattr(response, "status_code", 500))
+
+                    metrics = _get_metrics(request)
+                    if metrics is not None:
+                        metrics.api_requests_total.labels(
+                            method=request.method.upper(),
+                            route=str(route),
+                            status=str(status_code),
+                        ).inc()
+
+                    with correlation_context(**_extract_path_correlation_ids(request)):
+                        logger.info(
+                            "api request end",
+                            extra={
+                                "event_type": "api.request.end",
+                                "method": request.method.upper(),
+                                "path": request.url.path,
+                                "route": str(route),
+                                "status_code": status_code,
+                                "elapsed_ms": elapsed_ms,
+                            },
+                        )
+
+                    return response
 
 
 def _get_or_create_request_id(request: Request) -> str:

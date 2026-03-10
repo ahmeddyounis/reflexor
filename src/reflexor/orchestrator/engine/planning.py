@@ -10,6 +10,7 @@ from reflexor.domain.models import Task
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.observability.context import correlation_context
+from reflexor.observability.tracing import start_span
 from reflexor.orchestrator.budgets import BudgetTracker, budget_exceeded_to_audit_dict
 from reflexor.orchestrator.engine.types import PlanningTrigger
 from reflexor.orchestrator.plans import LimitsSnapshot, Plan, PlanningInput
@@ -127,85 +128,93 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                 )
 
             with correlation_context(event_id=persisted_event.event_id, run_id=planning_run_id):
-                try:
-                    effective_trigger: PlanningTrigger = trigger
-                    if effective_trigger == "event" and not selected_events:
-                        effective_trigger = "tick"
+                with start_span(
+                    "orchestrator.planning",
+                    attributes={
+                        "run.id": planning_run_id,
+                        "planning.trigger": trigger,
+                        "planning.selected_events": len(selected_events),
+                    },
+                ):
+                    try:
+                        effective_trigger: PlanningTrigger = trigger
+                        if effective_trigger == "event" and not selected_events:
+                            effective_trigger = "tick"
 
-                    planning_input = PlanningInput(
-                        trigger=effective_trigger,
-                        events=selected_events,
-                        limits=LimitsSnapshot(
-                            max_tasks=engine.limits.max_tasks_per_run,
-                            max_tool_calls=engine.limits.max_tool_calls_per_run,
-                            max_runtime_s=engine.limits.max_wall_time_s,
-                        ),
-                        now_ms=now_ms,
-                    )
-                    plan = await engine.planner.plan(planning_input)
-                    _validate_plan_budget_assertions(engine=engine, plan=plan)
-                    plan_dict = plan.model_dump(mode="json")
+                        planning_input = PlanningInput(
+                            trigger=effective_trigger,
+                            events=selected_events,
+                            limits=LimitsSnapshot(
+                                max_tasks=engine.limits.max_tasks_per_run,
+                                max_tool_calls=engine.limits.max_tool_calls_per_run,
+                                max_runtime_s=engine.limits.max_wall_time_s,
+                            ),
+                            now_ms=now_ms,
+                        )
+                        plan = await engine.planner.plan(planning_input)
+                        _validate_plan_budget_assertions(engine=engine, plan=plan)
+                        plan_dict = plan.model_dump(mode="json")
 
-                    proposed_tasks = list(plan.tasks)
-                    if selected_events:
-                        tracker.observe_planning_events(len(selected_events), source="planner")
-                    if proposed_tasks:
-                        tracker.accept_tasks(len(proposed_tasks), source="planner")
-                        tracker.accept_tool_calls(len(proposed_tasks), source="planner")
+                        proposed_tasks = list(plan.tasks)
+                        if selected_events:
+                            tracker.observe_planning_events(len(selected_events), source="planner")
+                        if proposed_tasks:
+                            tracker.accept_tasks(len(proposed_tasks), source="planner")
+                            tracker.accept_tool_calls(len(proposed_tasks), source="planner")
 
-                    tasks = validator.build_tasks(
-                        proposed_tasks,
-                        run_id=planning_run_id,
-                        seed_source="planning",
-                    )
-                    if engine.persistence is not None:
-                        await engine.persistence.persist_tasks_and_tool_calls(tasks)
+                        tasks = validator.build_tasks(
+                            proposed_tasks,
+                            run_id=planning_run_id,
+                            seed_source="planning",
+                        )
+                        if engine.persistence is not None:
+                            await engine.persistence.persist_tasks_and_tool_calls(tasks)
 
-                    enqueued_task_ids = await engine._enqueue_tasks(
-                        tasks,
-                        reason=plan.summary,
-                        source="planner",
-                        trigger=effective_trigger,
-                    )
-                    if enqueued_task_ids:
-                        enqueued_set = set(enqueued_task_ids)
-                        tasks = [
-                            (
-                                task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
-                                if task.task_id in enqueued_set
-                                else task
-                            )
-                            for task in tasks
-                        ]
+                        enqueued_task_ids = await engine._enqueue_tasks(
+                            tasks,
+                            reason=plan.summary,
+                            source="planner",
+                            trigger=effective_trigger,
+                        )
+                        if enqueued_task_ids:
+                            enqueued_set = set(enqueued_task_ids)
+                            tasks = [
+                                (
+                                    task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
+                                    if task.task_id in enqueued_set
+                                    else task
+                                )
+                                for task in tasks
+                            ]
 
-                    if selected_events:
-                        async with engine._backlog_lock:
-                            for _ in range(len(selected_events)):
-                                if not engine._backlog:
-                                    break
-                                engine._backlog.popleft()
-                except BudgetExceeded as exc:
-                    if engine.metrics is not None:
-                        engine.metrics.orchestrator_rejections_total.labels(reason="budget").inc()
-                    policy_decisions.append(budget_exceeded_to_audit_dict(exc))
-                except PlanValidationError as exc:
-                    if engine.metrics is not None:
-                        engine.metrics.orchestrator_rejections_total.labels(
-                            reason="validation"
-                        ).inc()
-                    policy_decisions.append(
-                        {
-                            "type": "plan_validation_error",
-                            "message": str(exc),
-                        }
-                    )
-                except Exception as exc:  # pragma: no cover
-                    policy_decisions.append(
-                        {
-                            "type": "planning_error",
-                            "message": str(exc),
-                        }
-                    )
+                        if selected_events:
+                            async with engine._backlog_lock:
+                                for _ in range(len(selected_events)):
+                                    if not engine._backlog:
+                                        break
+                                    engine._backlog.popleft()
+                    except BudgetExceeded as exc:
+                        if engine.metrics is not None:
+                            engine.metrics.orchestrator_rejections_total.labels(reason="budget").inc()
+                        policy_decisions.append(budget_exceeded_to_audit_dict(exc))
+                    except PlanValidationError as exc:
+                        if engine.metrics is not None:
+                            engine.metrics.orchestrator_rejections_total.labels(
+                                reason="validation"
+                            ).inc()
+                        policy_decisions.append(
+                            {
+                                "type": "plan_validation_error",
+                                "message": str(exc),
+                            }
+                        )
+                    except Exception as exc:  # pragma: no cover
+                        policy_decisions.append(
+                            {
+                                "type": "planning_error",
+                                "message": str(exc),
+                            }
+                        )
 
                 run_packet = RunPacket(
                     run_id=planning_run_id,

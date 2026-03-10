@@ -8,6 +8,7 @@ from reflexor.domain.serialization import canonical_json, stable_sha256
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
+from reflexor.orchestrator.engine import queueing as queueing_module
 from reflexor.orchestrator.interfaces import NoOpPlanner
 from reflexor.orchestrator.plans import PlanningInput, ProposedTask, ReflexDecision
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
@@ -149,6 +150,51 @@ async def test_handle_event_enqueues_task_envelope_for_reflex_rule() -> None:
         "11111111-1111-4111-8111-111111111111",
     )
     assert task.tool_call.idempotency_key == expected_key
+
+
+async def test_handle_event_enqueues_otel_trace_carrier_when_available(
+    monkeypatch,
+) -> None:
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+
+    router = RuleBasedReflexRouter.from_raw_rules(
+        [
+            {
+                "rule_id": "echo",
+                "match": {"event_type": "webhook"},
+                "action": {
+                    "kind": "fast_tool",
+                    "tool_name": "debug.echo",
+                    "args_template": {"url": "${payload.url}"},
+                },
+            }
+        ]
+    )
+
+    monkeypatch.setattr(
+        queueing_module,
+        "inject_trace_carrier",
+        lambda: {"traceparent": "00-abc-123-01"},
+    )
+
+    queue = _RecordingQueue()
+    engine = OrchestratorEngine(
+        reflex_router=router,
+        planner=NoOpPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
+        clock=_FixedClock(),
+        run_sink=_InMemoryRunSink(),
+    )
+
+    await engine.handle_event(_event())
+
+    assert len(queue.envelopes) == 1
+    envelope = queue.envelopes[0]
+    assert envelope.trace is not None
+    assert envelope.trace["otel"] == {"traceparent": "00-abc-123-01"}
 
 
 class _TwoTaskRouter:

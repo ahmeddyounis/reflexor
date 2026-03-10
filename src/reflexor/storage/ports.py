@@ -7,6 +7,7 @@ from reflexor.domain.enums import ApprovalStatus, RunStatus, TaskStatus, ToolCal
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
+from reflexor.memory.models import MemoryItem
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +275,23 @@ class RunPacketRepo(Protocol):
     async def get_run_id_for_event(self, event_id: str) -> str | None: ...
 
 
+class MemoryRepo(Protocol):
+    """Persistence port for planner memory summaries."""
+
+    async def upsert(self, item: MemoryItem) -> MemoryItem: ...
+
+    async def get_by_run(self, run_id: str) -> MemoryItem | None: ...
+
+    async def list_recent(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+        event_type: str | None = None,
+        event_source: str | None = None,
+    ) -> list[MemoryItem]: ...
+
+
 if TYPE_CHECKING:
 
     class _MockToolCallRepo:
@@ -299,6 +317,7 @@ __all__ = [
     "EventRepo",
     "EventSuppressionRecord",
     "EventSuppressionRepo",
+    "MemoryRepo",
     "RunPacketRepo",
     "RunRecord",
     "RunRepo",

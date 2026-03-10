@@ -43,6 +43,10 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
     planner_temperature: float = 0.0
     planner_system_prompt: str | None = None
     planner_max_memory_items: int = 5
+    otel_enabled: bool = False
+    otel_service_name: str = "reflexor"
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_console_exporter: bool = False
     planner_interval_s: float = 60.0
     planner_debounce_s: float = 2.0
     event_backlog_max: int = 200
@@ -125,7 +129,12 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
             raise ValueError("executor_retry_jitter must be in [0, 1]")
         return jitter
 
-    @field_validator("planner_model", "planner_api_key", "planner_system_prompt")
+    @field_validator(
+        "planner_model",
+        "planner_api_key",
+        "planner_system_prompt",
+        "otel_exporter_otlp_endpoint",
+    )
     @classmethod
     def _normalize_optional_planner_strings(cls, value: str | None) -> str | None:
         if value is None:
@@ -133,13 +142,16 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
         trimmed = str(value).strip()
         return trimmed or None
 
-    @field_validator("planner_base_url")
+    @field_validator("planner_base_url", "otel_service_name")
     @classmethod
-    def _validate_planner_base_url(cls, value: str) -> str:
+    def _validate_non_empty_urlish_strings(cls, value: str, info: ValidationInfo) -> str:
         trimmed = value.strip()
         if not trimmed:
-            raise ValueError("planner_base_url must be non-empty")
-        return trimmed.rstrip("/")
+            field_name = info.field_name or "value"
+            raise ValueError(f"{field_name} must be non-empty")
+        if info.field_name == "planner_base_url":
+            return trimmed.rstrip("/")
+        return trimmed
 
     @field_validator("planner_temperature")
     @classmethod

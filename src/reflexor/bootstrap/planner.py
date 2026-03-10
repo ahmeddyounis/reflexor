@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Sequence
+
 from reflexor.config import ReflexorSettings
 from reflexor.orchestrator.interfaces import NoOpPlanner, Planner
+from reflexor.orchestrator.plans import PlanningInput
 from reflexor.planning import (
     HeuristicPlannerBackend,
     OpenAICompatiblePlannerBackend,
@@ -11,8 +14,15 @@ from reflexor.planning import (
 )
 from reflexor.tools.registry import ToolRegistry
 
+MemoryLoader = Callable[[PlanningInput], Awaitable[Sequence[dict[str, object]]]]
 
-def build_planner(settings: ReflexorSettings, *, registry: ToolRegistry) -> Planner:
+
+def build_planner(
+    settings: ReflexorSettings,
+    *,
+    registry: ToolRegistry,
+    memory_loader: MemoryLoader | None = None,
+) -> Planner:
     if settings.planner_backend == "noop":
         return NoOpPlanner()
 
@@ -21,6 +31,7 @@ def build_planner(settings: ReflexorSettings, *, registry: ToolRegistry) -> Plan
             backend=HeuristicPlannerBackend(),
             registry=registry,
             system_prompt=settings.planner_system_prompt,
+            memory_loader=memory_loader,
         )
 
     if settings.planner_backend == "openai_compatible":
@@ -34,6 +45,7 @@ def build_planner(settings: ReflexorSettings, *, registry: ToolRegistry) -> Plan
             ),
             registry=registry,
             system_prompt=settings.planner_system_prompt,
+            memory_loader=memory_loader,
         )
 
     raise ValueError(f"unsupported planner_backend: {settings.planner_backend!r}")

@@ -22,6 +22,7 @@ from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyEventRepo,
     SqlAlchemyIdempotencyLedger,
+    SqlAlchemyMemoryRepo,
     SqlAlchemyRunPacketRepo,
     SqlAlchemyRunRepo,
     SqlAlchemyTaskRepo,
@@ -42,6 +43,8 @@ _JSONB_TARGETS: tuple[tuple[str, str], ...] = (
     ("tasks", "labels"),
     ("tasks", "metadata"),
     ("idempotency_ledger", "result_json"),
+    ("memory_items", "content"),
+    ("memory_items", "tags"),
 )
 
 
@@ -224,7 +227,12 @@ async def _crud_flow(*, database_url: str) -> None:
             tool_call_repo = SqlAlchemyToolCallRepo(session)
             task_repo = SqlAlchemyTaskRepo(session)
             approval_repo = SqlAlchemyApprovalRepo(session)
-            run_packet_repo = SqlAlchemyRunPacketRepo(session, settings=settings)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(
+                session,
+                settings=settings,
+                memory_repo=memory_repo,
+            )
             ledger = SqlAlchemyIdempotencyLedger(session, settings=settings)
 
             await run_repo.create(run_record)
@@ -242,7 +250,12 @@ async def _crud_flow(*, database_url: str) -> None:
             tool_call_repo = SqlAlchemyToolCallRepo(session)
             task_repo = SqlAlchemyTaskRepo(session)
             approval_repo = SqlAlchemyApprovalRepo(session)
-            run_packet_repo = SqlAlchemyRunPacketRepo(session, settings=settings)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(
+                session,
+                settings=settings,
+                memory_repo=memory_repo,
+            )
             ledger = SqlAlchemyIdempotencyLedger(session, settings=settings)
 
             roundtrip_event = await event_repo.get(stored_a.event_id)
@@ -269,6 +282,11 @@ async def _crud_flow(*, database_url: str) -> None:
             assert roundtrip_packet.plan == packet.plan
             assert roundtrip_packet.event.event_id == stored_a.event_id
             assert await run_packet_repo.get_run_id_for_event(stored_a.event_id) == run_id
+
+            memory_item = await memory_repo.get_by_run(run_id)
+            assert memory_item is not None
+            assert memory_item.event_id == stored_a.event_id
+            assert memory_item.content["plan"] == packet.plan
 
             cached = await ledger.get_success(idempotency_key)
             assert cached is not None

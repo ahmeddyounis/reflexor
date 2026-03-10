@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from reflexor.domain.models_event import Event
-from reflexor.orchestrator.plans import PlanningInput
+from reflexor.orchestrator.plans import PlanningInput, ReflexDecision
 from reflexor.orchestrator.reflex_rules import (
     ReflexRule,
     RuleBasedReflexRouter,
@@ -207,3 +207,20 @@ rules:
     rules = load_reflex_rules(path)
     assert len(rules) == 1
     assert rules[0].rule_id == "r1"
+
+
+class _MockClassifier:
+    async def classify(self, event: Event, ctx: PlanningInput) -> ReflexDecision | None:
+        _ = event
+        _ = ctx
+        return ReflexDecision(action="flag", reason="classifier", flag={"severity": "low"})
+
+
+async def test_classifier_fallback_runs_after_no_matching_rule() -> None:
+    router = RuleBasedReflexRouter.from_raw_rules([], classifier=_MockClassifier())
+
+    decision = await router.route(_event(), PlanningInput(trigger="tick", now_ms=0))
+
+    assert decision.action == "flag"
+    assert decision.reason == "classifier"
+    assert decision.flag == {"severity": "low"}
