@@ -50,7 +50,7 @@ db-upgrade: $(VENV_MARKER)
 	$(PY) -m reflexor.infra.db.migrate upgrade
 
 prod-preflight: $(VENV_MARKER)
-	$(PY) -m reflexor.cli.main --profile prod config validate --strict --json
+	$(VENV_BIN)/reflexor --profile prod config validate --strict --json
 
 validate-manifests: $(VENV_MARKER)
 	$(PY) scripts/validate_k8s_manifests.py deploy/k8s

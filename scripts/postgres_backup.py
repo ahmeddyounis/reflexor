@@ -6,7 +6,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from reflexor.operations import build_pg_dump_command, connection_info_from_database_url
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC_ROOT = _REPO_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
+
+from reflexor.operations import (  # noqa: E402
+    build_pg_dump_command,
+    connection_info_from_database_url,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:

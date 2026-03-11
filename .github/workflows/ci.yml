@@ -201,7 +201,7 @@ jobs:
           REFLEXOR_REFLEX_RULES_PATH: /tmp/reflex_rules.yaml
         run: |
           printf 'rules: []\n' > /tmp/reflex_rules.yaml
-          python -m reflexor.cli.main config validate --strict --json
+          reflexor config validate --strict --json
 
       - name: Build runtime image
         run: |
