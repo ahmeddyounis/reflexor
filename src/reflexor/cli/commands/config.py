@@ -8,6 +8,7 @@ import typer
 from reflexor.cli import output
 from reflexor.cli.container import CliContainer
 from reflexor.config import ReflexorSettings
+from reflexor.operations import build_production_preflight_report
 
 JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
 PRETTY_OPT = typer.Option(False, "--pretty", help="Pretty-print JSON (implies --json).")
@@ -121,6 +122,72 @@ def register(app: typer.Typer) -> None:
                 output.TableColumn("value", "VALUE", max_width=120),
             ],
         )
+
+    @config_app.command("validate")
+    def validate_config(
+        ctx: typer.Context,
+        strict: bool = typer.Option(
+            False,
+            "--strict",
+            help="Treat warnings as failures (useful for CI/deploy preflight).",
+        ),
+        json_output: bool = JSON_OPT,
+        pretty: bool = PRETTY_OPT,
+    ) -> None:
+        container = ctx.obj
+        if not isinstance(container, CliContainer):
+            output.abort("internal error: invalid CLI context object")
+
+        report = build_production_preflight_report(container.settings)
+        payload = report.to_dict()
+        payload["strict"] = bool(strict)
+        payload["strict_ok"] = bool(report.ok and (report.warning_count == 0 or not strict))
+
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if json_enabled:
+            output.print_json(payload, pretty=pretty_enabled)
+        else:
+            rows = []
+            findings = payload.get("findings")
+            if isinstance(findings, list):
+                for finding in findings:
+                    if isinstance(finding, dict):
+                        rows.append(
+                            {
+                                "level": finding.get("level"),
+                                "code": finding.get("code"),
+                                "message": finding.get("message"),
+                                "hint": finding.get("hint"),
+                            }
+                        )
+            if rows:
+                output.print_table(
+                    rows,
+                    columns=[
+                        output.TableColumn("level", "LEVEL", max_width=8),
+                        output.TableColumn("code", "CODE", max_width=36),
+                        output.TableColumn("message", "MESSAGE", max_width=56),
+                        output.TableColumn("hint", "HINT", max_width=72),
+                    ],
+                )
+            output.echo(
+                "errors="
+                f"{report.error_count} "
+                "warnings="
+                f"{report.warning_count} "
+                "info="
+                f"{report.info_count}"
+            )
+
+        exit_code = 0
+        if report.error_count > 0:
+            exit_code = 1
+        elif strict and report.warning_count > 0:
+            exit_code = 1
+
+        if exit_code != 0:
+            raise typer.Exit(exit_code)
 
 
 __all__ = ["register"]
