@@ -161,3 +161,48 @@ jobs:
         with:
           name: advisory-audit
           path: advisory
+
+  deploy-artifacts:
+    name: Deploy Artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev,postgres,redis]"
+
+      - name: Validate Kubernetes manifests
+        run: |
+          python scripts/validate_k8s_manifests.py deploy/k8s
+
+      - name: Validate production preflight example
+        env:
+          REFLEXOR_PROFILE: prod
+          REFLEXOR_ADMIN_API_KEY: test-admin-key
+          REFLEXOR_EVENTS_REQUIRE_ADMIN: "true"
+          REFLEXOR_DATABASE_URL: postgresql+asyncpg://user:pass@example.com:5432/reflexor
+          REFLEXOR_QUEUE_BACKEND: redis_streams
+          REFLEXOR_REDIS_URL: redis://redis.example.com:6379/0
+          REFLEXOR_REDIS_STREAM_MAXLEN: "10000"
+          REFLEXOR_EVENT_SUPPRESSION_ENABLED: "true"
+          REFLEXOR_RATE_LIMITS_ENABLED: "true"
+          REFLEXOR_OTEL_ENABLED: "true"
+          REFLEXOR_REFLEX_RULES_PATH: /tmp/reflex_rules.yaml
+        run: |
+          printf 'rules: []\n' > /tmp/reflex_rules.yaml
+          python -m reflexor.cli.main config validate --strict --json
+
+      - name: Build runtime image
+        run: |
+          docker build -f docker/Dockerfile -t reflexor:test .

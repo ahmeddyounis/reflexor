@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reflexor-maintenance
+spec:
+  schedule: "15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: reflexor
+            app.kubernetes.io/component: maintenance
+        spec:
+          restartPolicy: Never
+          serviceAccountName: reflexor
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: reflexor
+              image: reflexor:1.0.0
+              imagePullPolicy: IfNotPresent
+              args: ["reflexor", "maintenance", "run", "--json"]
+              envFrom:
+                - configMapRef:
+                    name: reflexor-config
+                - secretRef:
+                    name: reflexor-secrets
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: workspace
+                  mountPath: /workspace
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: workspace
+              persistentVolumeClaim:
+                claimName: reflexor-workspace

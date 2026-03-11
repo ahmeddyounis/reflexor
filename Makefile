@@ -6,7 +6,7 @@ VENV_BIN := $(VENV)/bin
 PY := $(VENV_BIN)/python
 VENV_MARKER := $(VENV)/.installed
 
-.PHONY: help venv lint format typecheck test coverage db-upgrade ci clean
+.PHONY: help venv lint format typecheck test coverage db-upgrade prod-preflight validate-manifests docker-build ci clean
 
 help:
 	@echo "Targets:"
@@ -17,6 +17,9 @@ help:
 	@echo "  test       Run pytest"
 	@echo "  coverage   Run tests with coverage report"
 	@echo "  db-upgrade Run alembic migrations (upgrade head)"
+	@echo "  prod-preflight Validate prod-oriented settings via the CLI"
+	@echo "  validate-manifests Validate Kubernetes deployment manifests"
+	@echo "  docker-build Build the production runtime image"
 	@echo "  ci         Run format-check, lint, typecheck, coverage"
 	@echo "  clean      Remove venv and caches"
 
@@ -45,6 +48,15 @@ coverage: $(VENV_MARKER)
 
 db-upgrade: $(VENV_MARKER)
 	$(PY) -m reflexor.infra.db.migrate upgrade
+
+prod-preflight: $(VENV_MARKER)
+	$(PY) -m reflexor.cli.main --profile prod config validate --strict --json
+
+validate-manifests: $(VENV_MARKER)
+	$(PY) scripts/validate_k8s_manifests.py deploy/k8s
+
+docker-build:
+	docker build -f docker/Dockerfile -t reflexor:dev .
 
 ci: $(VENV_MARKER)
 	$(PY) -m ruff format --check .
