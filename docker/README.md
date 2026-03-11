@@ -1,6 +1,6 @@
 # Docker Compose stack (Postgres + Redis Streams)
 
-This directory contains a production-ish local stack for Reflexor v0.2:
+This directory contains a production-shaped local stack for Reflexor:
 - `api` (FastAPI)
 - `worker` (queue consumer + executor)
 - `postgres` (persistence)
@@ -10,6 +10,9 @@ Safety defaults:
 - `REFLEXOR_DRY_RUN=true`
 - allowlists are empty
 - Postgres uses `POSTGRES_HOST_AUTH_METHOD=trust` to avoid embedding secrets in compose (local-only)
+
+This stack is for local verification only. For repo-owned production deployment assets, use
+`deploy/k8s/` plus the guidance in `docs/production_v0.2.md`.
 
 ## Run
 

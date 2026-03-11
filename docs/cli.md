@@ -48,6 +48,7 @@ Local-only commands remain local even when `REFLEXOR_API_URL` is set:
 
 - `tools list`
 - `config show`
+- `config validate`
 - `maintenance run`
 
 ## JSON output
@@ -111,11 +112,15 @@ Note: tool listing is currently **local-mode only**; remote mode returns a `not_
 ### Config (effective settings)
 
 - `reflexor config show`
+- `reflexor config validate [--strict]`
 
 This prints the effective `ReflexorSettings` with secrets redacted:
 
 - `admin_api_key` is always redacted
 - any URL password (e.g., `postgresql://user:pass@...`) is redacted
+
+`config validate` runs a production-oriented preflight against the current settings and exits
+non-zero on errors. `--strict` also fails on warnings, which is useful in CI and deploy pipelines.
 
 ### Maintenance
 

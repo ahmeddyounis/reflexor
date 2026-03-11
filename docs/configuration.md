@@ -56,6 +56,24 @@ Tool discovery via Python entry points is disabled by default.
 - `dev` (default)
 - `prod`
 
+### Production preflight
+
+Reflexor ships a repo-owned production preflight command:
+
+```sh
+reflexor --profile prod config validate --strict --json
+```
+
+It checks for common production misconfigurations such as SQLite/in-memory backends, missing admin
+auth, missing bounded Redis streams, disabled suppression, and missing observability controls.
+
+Equivalent `make` targets:
+
+```sh
+make prod-preflight
+make validate-manifests
+```
+
 ## Reflex routing
 
 - `REFLEXOR_REFLEX_RULES_PATH` (default unset)

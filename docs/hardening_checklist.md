@@ -8,6 +8,13 @@ For configuration details and parsing formats, see `docs/configuration.md`.
 
 ## Checklist (production)
 
+### 0) Run the production preflight before rollout
+
+- `reflexor --profile prod config validate --strict --json`
+- `python scripts/validate_k8s_manifests.py deploy/k8s`
+
+Use these as deploy gates before any staging or production apply.
+
 ### 1) Require admin auth for control planes
 
 - Set `REFLEXOR_ADMIN_API_KEY` (non-empty) and ensure your reverse proxy terminates TLS.

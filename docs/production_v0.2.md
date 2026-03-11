@@ -1,12 +1,12 @@
-# Production deployment (v0.2): Postgres + Redis Streams
+# Production deployment: Postgres + Redis Streams
 
-This doc describes a production-ish deployment shape for Reflexor v0.2 using:
+This doc describes the repo-supported production deployment shape for Reflexor using:
 
 - Postgres for persistence (`asyncpg` + SQLAlchemy async)
 - Redis Streams for the durable queue backend (`redis.asyncio`)
 - Separate API and worker processes
 
-For a one-command local stack that matches this shape, see `docker/docker-compose.yml` and
+For a one-command local stack that approximates this shape, see `docker/docker-compose.yml` and
 `docker/README.md`.
 
 ## Architecture (recommended)
@@ -15,6 +15,18 @@ For a one-command local stack that matches this shape, see `docker/docker-compos
 - **Worker**: long-running queue consumer that executes tasks and persists outcomes.
 - **Postgres**: stores events, runs, tasks, tool calls, approvals, run packets, and memory items.
 - **Redis**: stores queue state (streams + consumer groups + delayed ZSET).
+
+## Repo-owned deployment assets
+
+The repository now ships:
+
+- hardened runtime image build: `docker/Dockerfile`
+- Kubernetes baseline manifests: `deploy/k8s/`
+- production preflight command: `reflexor config validate --strict`
+- manifest validator: `python scripts/validate_k8s_manifests.py deploy/k8s`
+- backup/restore helpers:
+  - `python scripts/postgres_backup.py --output ...`
+  - `python scripts/postgres_restore.py --input ... --format custom --yes`
 
 ## Safe defaults (do not disable lightly)
 
@@ -94,6 +106,10 @@ python scripts/db_upgrade.py
 ```
 
 More details: `docs/storage.md`.
+
+For Kubernetes, the repo includes a dedicated migration job manifest:
+
+- `deploy/k8s/base/migrate-job.yaml`
 
 ## Postgres recommendations
 
@@ -175,8 +191,57 @@ To bound stream length, set:
   - `queue_backend`
 - The endpoint returns `503` when either dependency is unreachable (`ok=false`).
 
+## Kubernetes baseline
+
+Use `deploy/k8s/base/` as the starting point for cluster deployments.
+
+Highlights:
+
+- non-root containers
+- read-only root filesystem
+- PVC-backed workspace
+- dedicated migration job
+- hourly maintenance CronJob
+- PodDisruptionBudgets for API and worker
+
+Apply flow:
+
+```sh
+cp deploy/k8s/base/secret.example.yaml deploy/k8s/base/secret.yaml
+python scripts/validate_k8s_manifests.py deploy/k8s
+kubectl apply -k deploy/k8s/base
+kubectl apply -f deploy/k8s/base/secret.yaml
+kubectl apply -f deploy/k8s/base/migrate-job.yaml
+```
+
+More details: `deploy/k8s/README.md`.
+
+## Backup / restore
+
+Use the shipped Postgres helper scripts from a trusted operator environment:
+
+```sh
+python scripts/postgres_backup.py \
+  --database-url "$REFLEXOR_DATABASE_URL" \
+  --output ./backups/reflexor-$(date +%F).dump
+```
+
+Restore:
+
+```sh
+python scripts/postgres_restore.py \
+  --database-url "$REFLEXOR_DATABASE_URL" \
+  --input ./backups/reflexor-2026-03-11.dump \
+  --format custom \
+  --yes
+```
+
+Run restore drills against a non-production database before relying on backups operationally.
+
 ## Ops checklist (v0.2)
 
+- Run `reflexor --profile prod config validate --strict --json`.
+- Run `python scripts/validate_k8s_manifests.py deploy/k8s`.
 - Run migrations on deploy (`scripts/db_upgrade.py`).
 - Keep `REFLEXOR_DRY_RUN=true` until policy is configured and verified.
 - Start with minimal scopes in `REFLEXOR_ENABLED_SCOPES` and keep allowlists empty until needed.
@@ -184,4 +249,5 @@ To bound stream length, set:
   ingestion protection.
 - Ensure each worker has a unique `REFLEXOR_REDIS_CONSUMER_NAME`.
 - Set `REFLEXOR_REDIS_STREAM_MAXLEN` if you need bounded Redis storage.
+- Schedule maintenance (`reflexor maintenance run`) and backup jobs.
 - Use `/healthz` for readiness gates; use `docs/observability.md` for metrics/log context.

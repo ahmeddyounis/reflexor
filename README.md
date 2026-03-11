@@ -26,7 +26,8 @@ Current release: **1.0.0** (see [CHANGELOG.md](CHANGELOG.md)).
 
 - A free-form autonomous agent runtime; planning is constrained to structured plans and explicit
   tool schemas.
-- A hosted service or production-ready automation system.
+- A hosted service; operators are expected to provide the surrounding deployment, auth, and secret
+  management environment.
 
 ## Key concepts
 
@@ -85,6 +86,9 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [API](docs/api.md)
 - [CLI](docs/cli.md)
 - [Production Deployment (Postgres + Redis Streams)](docs/production_v0.2.md)
+- [Production Readiness](docs/production_readiness.md)
+- [Disaster Recovery](docs/disaster_recovery.md)
+- [Runbooks](docs/runbooks.md)
 - [Threat Model](docs/threat_model.md)
 - [Hardening Checklist](docs/hardening_checklist.md)
 - [Observability](docs/observability.md)
@@ -95,6 +99,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 - [Storage & Migrations](docs/storage.md)
 - [Security: Redaction & Truncation](docs/security_redaction.md)
 - [Examples](examples/README.md)
+- [Kubernetes Baseline](deploy/k8s/README.md)
 - [Benchmark Script](scripts/benchmark_event_to_enqueue.py)
 
 ## Quickstart (local dev)
@@ -111,6 +116,13 @@ Run CI checks:
 
 ```sh
 make ci
+```
+
+Run the production preflight checks:
+
+```sh
+make prod-preflight
+make validate-manifests
 ```
 
 Run the API locally:
@@ -195,7 +207,9 @@ curl -sS -X POST http://localhost:8000/events \
 Docs:
 
 - `docs/production_v0.2.md`
+- `docs/production_readiness.md`
 - `docker/README.md`
+- `deploy/k8s/README.md`
 
 ## Project files
 
