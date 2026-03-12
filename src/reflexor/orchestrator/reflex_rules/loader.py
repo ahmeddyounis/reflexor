@@ -7,6 +7,8 @@ import yaml
 
 from reflexor.orchestrator.reflex_rules.models import ReflexRule
 
+MAX_REFLEX_RULES_FILE_BYTES = 256_000
+
 
 def _extract_rules(data: object) -> list[object]:
     raw_rules: object
@@ -16,7 +18,7 @@ def _extract_rules(data: object) -> list[object]:
         raw_rules = data
 
     if not isinstance(raw_rules, list):
-        raise ValueError("rules JSON must be a list or an object with a 'rules' list")
+        raise ValueError("rules file must be a list or an object with a 'rules' list")
     return raw_rules
 
 
@@ -29,13 +31,34 @@ def _parse_rules(data: object) -> list[ReflexRule]:
     return rules
 
 
+def _read_rules_file(path: str | Path) -> str:
+    resolved = Path(path)
+    if not resolved.is_file():
+        raise ValueError(f"reflex rules file not found or not a regular file: {resolved}")
+
+    size_bytes = resolved.stat().st_size
+    if size_bytes > MAX_REFLEX_RULES_FILE_BYTES:
+        raise ValueError(
+            f"reflex rules file is too large ({size_bytes} bytes); "
+            f"max is {MAX_REFLEX_RULES_FILE_BYTES}"
+        )
+
+    return resolved.read_text(encoding="utf-8")
+
+
 def load_reflex_rules_json(path: str | Path) -> list[ReflexRule]:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        data = json.loads(_read_rules_file(path))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid reflex rules JSON: {exc}") from exc
     return _parse_rules(data)
 
 
 def load_reflex_rules_yaml(path: str | Path) -> list[ReflexRule]:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    try:
+        data = yaml.safe_load(_read_rules_file(path))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid reflex rules YAML: {exc}") from exc
     return _parse_rules(data)
 
 

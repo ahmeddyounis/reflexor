@@ -44,10 +44,10 @@ def resolve_reflex_router(
 
         try:
             return RuleBasedReflexRouter.from_file(rules_path, classifier=reflex_classifier)
-        except FileNotFoundError as exc:
-            raise ValueError(f"reflex_rules_path not found: {rules_path}") from exc
-        except Exception as exc:  # pragma: no cover
-            raise ValueError(f"failed to load reflex rules from {rules_path}: {exc}") from exc
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid reflex rules configuration at {rules_path}: {exc}"
+            ) from exc
 
     if reflex_classifier is not None:
         from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter

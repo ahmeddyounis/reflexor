@@ -29,7 +29,7 @@ class RuleBasedReflexRouter:
         *,
         classifier: ReflexClassifier | None = None,
     ) -> None:
-        self._rules = list(rules)
+        self._rules = _validate_rule_ids_unique(rules)
         self._classifier = classifier
 
     @classmethod
@@ -90,7 +90,9 @@ class RuleBasedReflexRouter:
                     except ReflexTemplateError as exc:
                         raise TemplateResolutionError(f"rule {rule.rule_id}: {exc}") from exc
                     if not isinstance(rendered_note, str):
-                        raise TemplateResolutionError("note_template must render to a string")
+                        raise TemplateResolutionError(
+                            f"rule {rule.rule_id}: note_template must render to a string"
+                        )
                     flag_payload["note"] = rendered_note
                 return ReflexDecision(action="flag", reason=rule.rule_id, flag=flag_payload)
 
@@ -101,7 +103,9 @@ class RuleBasedReflexRouter:
                     raise TemplateResolutionError(f"rule {rule.rule_id}: {exc}") from exc
 
                 if not isinstance(rendered, dict):
-                    raise TemplateResolutionError("args_template must render to a JSON object")
+                    raise TemplateResolutionError(
+                        f"rule {rule.rule_id}: args_template must render to a JSON object"
+                    )
 
                 proposed_task = ProposedTask(
                     name=f"{rule.rule_id}:{rule.action.tool_name}",
@@ -127,6 +131,16 @@ class RuleBasedReflexRouter:
 def _mypy_protocol_conformance_check() -> None:
     router: ReflexRouter = RuleBasedReflexRouter(rules=[])
     _ = router
+
+
+def _validate_rule_ids_unique(rules: list[ReflexRule]) -> list[ReflexRule]:
+    parsed = list(rules)
+    seen: set[str] = set()
+    for rule in parsed:
+        if rule.rule_id in seen:
+            raise ValueError(f"duplicate reflex rule_id: {rule.rule_id!r}")
+        seen.add(rule.rule_id)
+    return parsed
 
 
 __all__ = ["RuleBasedReflexRouter"]

@@ -24,6 +24,7 @@ from reflexor.orchestrator.plans import (
     ProposedTask,
     ReflexDecision,
 )
+from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
 from reflexor.orchestrator.sinks import InMemoryRunPacketSink
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
@@ -272,6 +273,59 @@ async def test_reflex_invalid_args_records_validation_error_and_does_not_enqueue
 
     metrics_text = generate_latest(metrics.registry).decode()
     assert 'orchestrator_rejections_total{reason="validation"} 1.0' in metrics_text
+
+
+async def test_reflex_template_error_is_recorded_and_does_not_enqueue(tmp_path: Path) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=50_000)
+
+    registry = ToolRegistry()
+    registry.register(_CountTool())
+
+    clock = _FixedClock()
+    queue = InMemoryQueue(now_ms=clock.now_ms)
+    sink = InMemoryRunPacketSink(settings=settings)
+    metrics = ReflexorMetrics.build()
+
+    router = RuleBasedReflexRouter.from_raw_rules(
+        [
+            {
+                "rule_id": "missing_count",
+                "match": {"event_type": "webhook"},
+                "action": {
+                    "kind": "fast_tool",
+                    "tool_name": "tests.count",
+                    "args_template": {"count": "${payload.missing}"},
+                },
+            }
+        ]
+    )
+
+    engine = OrchestratorEngine(
+        reflex_router=router,
+        planner=NoOpPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        run_sink=sink,
+        limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
+        clock=clock,
+        metrics=metrics,
+        enabled_scopes=("fs.read",),
+    )
+
+    run_id = await engine.handle_event(_event("55555555-5555-4555-8555-555555555555"))
+    UUID(run_id)
+
+    assert await queue.dequeue(wait_s=0.0) is None
+
+    stored = await sink.get(run_id)
+    assert stored is not None
+    assert stored["tasks"] == []
+    assert stored["policy_decisions"][0]["type"] == "template_resolution_error"
+    assert "rule missing_count" in stored["policy_decisions"][0]["message"]
+    assert "payload missing key 'missing'" in stored["policy_decisions"][0]["message"]
+
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert 'orchestrator_rejections_total{reason="template"} 1.0' in metrics_text
 
 
 @pytest.mark.parametrize(

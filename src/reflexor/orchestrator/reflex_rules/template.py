@@ -35,7 +35,13 @@ class TemplateResolutionError(ReflexTemplateError):
 def _extract_placeholder_expressions(template: str) -> list[str]:
     """Extract `${...}` expressions, raising for unclosed placeholders."""
 
-    expressions: list[str] = []
+    return [expression for _, _, expression in _iter_placeholder_spans(template)]
+
+
+def _iter_placeholder_spans(template: str) -> list[tuple[int, int, str]]:
+    """Return placeholder spans as `(start, end, expression)` tuples."""
+
+    expressions: list[tuple[int, int, str]] = []
     cursor = 0
     while True:
         start = template.find("${", cursor)
@@ -44,7 +50,7 @@ def _extract_placeholder_expressions(template: str) -> list[str]:
         end = template.find("}", start + 2)
         if end == -1:
             raise TemplateValidationError("unclosed placeholder (missing '}')")
-        expressions.append(template[start + 2 : end])
+        expressions.append((start, end + 1, template[start + 2 : end]))
         cursor = end + 1
 
 
@@ -146,21 +152,27 @@ def render_template_value(template: object, *, event: Event) -> object:
     if not isinstance(template, str):
         return template
 
-    expressions = _extract_placeholder_expressions(template)
-    if not expressions:
+    placeholder_spans = _iter_placeholder_spans(template)
+    if not placeholder_spans:
         return template
 
     is_entire_placeholder = (
-        len(expressions) == 1 and template.startswith("${") and template.endswith("}")
+        len(placeholder_spans) == 1
+        and placeholder_spans[0][0] == 0
+        and placeholder_spans[0][1] == len(template)
     )
     if is_entire_placeholder:
-        return _resolve_placeholder(expressions[0], event=event)
+        return _resolve_placeholder(placeholder_spans[0][2], event=event)
 
-    rendered = template
-    for expression in expressions:
+    parts: list[str] = []
+    cursor = 0
+    for start, end, expression in placeholder_spans:
+        parts.append(template[cursor:start])
         value = _resolve_placeholder(expression, event=event)
-        rendered = rendered.replace("${" + expression + "}", _stringify_placeholder_value(value))
-    return rendered
+        parts.append(_stringify_placeholder_value(value))
+        cursor = end
+    parts.append(template[cursor:])
+    return "".join(parts)
 
 
 __all__ = [

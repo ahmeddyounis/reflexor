@@ -14,6 +14,7 @@ from reflexor.orchestrator.reflex_rules import (
     load_reflex_rules,
     load_reflex_rules_json,
 )
+from reflexor.orchestrator.reflex_rules.loader import MAX_REFLEX_RULES_FILE_BYTES
 
 
 def _event(payload: dict[str, object] | None = None) -> Event:
@@ -139,6 +140,31 @@ async def test_missing_payload_key_raises_resolution_error() -> None:
         await router.route(_event(), PlanningInput(trigger="tick", now_ms=0))
 
 
+async def test_template_substitution_does_not_recursively_expand_inserted_placeholders() -> None:
+    router = RuleBasedReflexRouter.from_raw_rules(
+        [
+            {
+                "rule_id": "r1",
+                "match": {"event_type": "webhook"},
+                "action": {
+                    "kind": "fast_tool",
+                    "tool_name": "net.http",
+                    "args_template": {
+                        "combined": "note=${payload.note} source=${event.source}",
+                    },
+                },
+            }
+        ]
+    )
+
+    decision = await router.route(
+        _event({"note": "${event.source}"}),
+        PlanningInput(trigger="tick", now_ms=0),
+    )
+
+    assert decision.proposed_tasks[0].args["combined"] == "note=${event.source} source=tests"
+
+
 async def test_flag_action_returns_flagged_decision() -> None:
     router = RuleBasedReflexRouter.from_raw_rules(
         [
@@ -207,6 +233,40 @@ rules:
     rules = load_reflex_rules(path)
     assert len(rules) == 1
     assert rules[0].rule_id == "r1"
+
+
+def test_load_reflex_rules_rejects_non_regular_files(tmp_path) -> None:
+    path = tmp_path / "rules.json"
+    path.mkdir()
+
+    with pytest.raises(ValueError, match="not found or not a regular file"):
+        load_reflex_rules_json(path)
+
+
+def test_load_reflex_rules_rejects_oversized_files(tmp_path) -> None:
+    path = tmp_path / "rules.json"
+    path.write_text("[" + (" " * MAX_REFLEX_RULES_FILE_BYTES) + "]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reflex rules file is too large"):
+        load_reflex_rules_json(path)
+
+
+def test_duplicate_rule_ids_are_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate reflex rule_id"):
+        RuleBasedReflexRouter.from_raw_rules(
+            [
+                {
+                    "rule_id": "dup",
+                    "match": {"event_type": "webhook"},
+                    "action": {"kind": "drop"},
+                },
+                {
+                    "rule_id": "dup",
+                    "match": {"event_type": "webhook"},
+                    "action": {"kind": "needs_planning"},
+                },
+            ]
+        )
 
 
 class _MockClassifier:

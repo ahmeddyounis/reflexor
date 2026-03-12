@@ -14,6 +14,7 @@ from reflexor.observability.context import correlation_context
 from reflexor.observability.tracing import start_span
 from reflexor.orchestrator.budgets import BudgetTracker, budget_exceeded_to_audit_dict
 from reflexor.orchestrator.plans import PlanningInput
+from reflexor.orchestrator.reflex_rules import ReflexTemplateError
 from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
 from reflexor.storage.ports import RunRecord
 
@@ -170,6 +171,25 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> EventHandleO
                 if engine.metrics is not None:
                     engine.metrics.orchestrator_rejections_total.labels(reason="budget").inc()
                 policy_decisions.append(budget_exceeded_to_audit_dict(exc))
+            except ReflexTemplateError as exc:
+                if engine.metrics is not None:
+                    engine.metrics.orchestrator_rejections_total.labels(reason="template").inc()
+                logger.warning(
+                    "reflex template resolution failed",
+                    extra={
+                        "run_id": run_id,
+                        "event_id": persisted_event.event_id,
+                        "event_type": persisted_event.type,
+                        "event_source": persisted_event.source,
+                        "template_error": str(exc),
+                    },
+                )
+                policy_decisions.append(
+                    {
+                        "type": "template_resolution_error",
+                        "message": str(exc),
+                    }
+                )
             except PlanValidationError as exc:
                 if engine.metrics is not None:
                     engine.metrics.orchestrator_rejections_total.labels(reason="validation").inc()
