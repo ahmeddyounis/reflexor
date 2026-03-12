@@ -41,17 +41,22 @@ local maxlen = ARGV[7]
 
 local acked = redis.call('XACK', stream_key, group, message_id)
 if acked == 0 then
-  return ''
+  return {0, ''}
 end
 
 if enqueue_immediate == '1' then
   if maxlen ~= '' then
-    return redis.call('XADD', stream_key, 'MAXLEN', '~', tonumber(maxlen), '*', field_name, payload)
+    return {
+      1,
+      redis.call(
+        'XADD', stream_key, 'MAXLEN', '~', tonumber(maxlen), '*', field_name, payload
+      )
+    }
   else
-    return redis.call('XADD', stream_key, '*', field_name, payload)
+    return {1, redis.call('XADD', stream_key, '*', field_name, payload)}
   end
 end
 
 redis.call('ZADD', delayed_key, available_at_ms, payload)
-return ''
+return {1, ''}
 """

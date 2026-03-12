@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Callable
 
@@ -13,9 +14,10 @@ from reflexor.infra.queue.redis_streams.codec import (
 )
 from reflexor.infra.queue.redis_streams.delayed import promote_delayed
 from reflexor.infra.queue.redis_streams.depth import queue_depth
-from reflexor.infra.queue.redis_streams.leasing import lease_from_entry
+from reflexor.infra.queue.redis_streams.leasing import InvalidStreamEntryError, lease_from_entry
 from reflexor.infra.queue.redis_streams.lua import _ACK_AND_REQUEUE_LUA
 from reflexor.infra.queue.redis_streams.redis_helpers import (
+    _extract_ack_and_requeue_result,
     _extract_stream_entries,
     _import_redis_asyncio,
 )
@@ -30,6 +32,7 @@ from reflexor.orchestrator.queue.observer import (
     QueueObserver,
     QueueRedeliverObservation,
     build_queue_correlation_ids,
+    notify_queue_observer,
 )
 
 
@@ -93,8 +96,11 @@ class RedisStreamsQueue:
 
         self._now_ms = now_ms or system_now_ms
         self._default_visibility_timeout_s = float(default_visibility_timeout_s)
-        if self._default_visibility_timeout_s <= 0:
-            raise ValueError("default_visibility_timeout_s must be > 0")
+        if (
+            not math.isfinite(self._default_visibility_timeout_s)
+            or self._default_visibility_timeout_s <= 0
+        ):
+            raise ValueError("default_visibility_timeout_s must be finite and > 0")
 
         if self._stream_maxlen is not None and int(self._stream_maxlen) <= 0:
             raise ValueError("stream_maxlen must be > 0 when set")
@@ -193,11 +199,30 @@ class RedisStreamsQueue:
         if self._closed:
             return False
 
+        timeout = float(timeout_s)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout_s must be finite and > 0")
+
         try:
-            await asyncio.wait_for(self._redis.ping(), timeout=float(timeout_s))
+            await asyncio.wait_for(self._redis.ping(), timeout=timeout)
         except Exception:
             return False
         return True
+
+    async def _drop_invalid_entry(self, *, message_id: str, error: InvalidStreamEntryError) -> None:
+        self._logger.warning(
+            "dropping invalid redis stream entry",
+            extra={
+                "event_type": "queue.redis_streams.invalid_entry",
+                "stream_key": self._stream_key,
+                "consumer_group": self._group,
+                "consumer_name": self._consumer,
+                "message_id": message_id,
+                "error": str(error),
+            },
+        )
+        await self._redis.xack(self._stream_key, self._group, message_id)
+        await self._redis.xdel(self._stream_key, message_id)
 
     async def enqueue(self, envelope: TaskEnvelope) -> None:
         if self._closed:
@@ -222,13 +247,15 @@ class RedisStreamsQueue:
             )
 
         depth = await queue_depth(self)
-        self._observer.on_enqueue(
-            QueueEnqueueObservation(
+        notify_queue_observer(
+            self._observer,
+            callback_name="on_enqueue",
+            observation=QueueEnqueueObservation(
                 envelope=envelope,
                 correlation_ids=build_queue_correlation_ids(envelope),
                 now_ms=now_ms,
                 queue_depth=depth,
-            )
+            ),
         )
 
     async def dequeue(
@@ -245,11 +272,12 @@ class RedisStreamsQueue:
         visibility_timeout_s = (
             self._default_visibility_timeout_s if timeout_s is None else float(timeout_s)
         )
-        if visibility_timeout_s <= 0:
-            raise ValueError("timeout_s must be > 0")
+        if not math.isfinite(visibility_timeout_s) or visibility_timeout_s <= 0:
+            raise ValueError("timeout_s must be finite and > 0")
 
-        if wait_s is not None and float(wait_s) < 0:
-            raise ValueError("wait_s must be >= 0")
+        wait_seconds = None if wait_s is None else float(wait_s)
+        if wait_seconds is not None and (not math.isfinite(wait_seconds) or wait_seconds < 0):
+            raise ValueError("wait_s must be finite and >= 0 when provided")
 
         claim_idle_ms = max(
             int(visibility_timeout_s * 1000),
@@ -257,7 +285,7 @@ class RedisStreamsQueue:
         )
 
         started_s = time.monotonic()
-        deadline_s = None if wait_s is None else (started_s + float(wait_s))
+        deadline_s = None if wait_seconds is None else (started_s + wait_seconds)
 
         block_step_s = 0.25
 
@@ -268,17 +296,23 @@ class RedisStreamsQueue:
             expired = await try_claim_expired(self, claim_idle_ms=claim_idle_ms)
             if expired is not None:
                 message_id, fields = expired
-                lease = await lease_from_entry(
-                    self,
-                    message_id=message_id,
-                    fields=fields,
-                    leased_at_ms=now_ms,
-                    visibility_timeout_s=visibility_timeout_s,
-                )
+                try:
+                    lease = await lease_from_entry(
+                        self,
+                        message_id=message_id,
+                        fields=fields,
+                        leased_at_ms=now_ms,
+                        visibility_timeout_s=visibility_timeout_s,
+                    )
+                except InvalidStreamEntryError as exc:
+                    await self._drop_invalid_entry(message_id=message_id, error=exc)
+                    continue
 
                 depth = await queue_depth(self)
-                self._observer.on_redeliver(
-                    QueueRedeliverObservation(
+                notify_queue_observer(
+                    self._observer,
+                    callback_name="on_redeliver",
+                    observation=QueueRedeliverObservation(
                         envelope=lease.envelope,
                         correlation_ids=build_queue_correlation_ids(lease.envelope),
                         expired_lease_id=lease.lease_id,
@@ -288,19 +322,21 @@ class RedisStreamsQueue:
                         visibility_timeout_s=lease.visibility_timeout_s,
                         now_ms=now_ms,
                         queue_depth=depth,
-                    )
+                    ),
                 )
-                self._observer.on_dequeue(
-                    QueueDequeueObservation(
+                notify_queue_observer(
+                    self._observer,
+                    callback_name="on_dequeue",
+                    observation=QueueDequeueObservation(
                         lease=lease,
                         correlation_ids=build_queue_correlation_ids(lease.envelope),
                         now_ms=now_ms,
                         queue_depth=depth,
-                    )
+                    ),
                 )
                 return lease
 
-            if wait_s is not None and float(wait_s) == 0.0:
+            if wait_seconds is not None and wait_seconds == 0.0:
                 block_ms = None
             else:
                 if deadline_s is None:
@@ -311,10 +347,12 @@ class RedisStreamsQueue:
 
                 if remaining_s <= 0:
                     depth = await queue_depth(self)
-                    self._observer.on_dequeue(
-                        QueueDequeueObservation(
+                    notify_queue_observer(
+                        self._observer,
+                        callback_name="on_dequeue",
+                        observation=QueueDequeueObservation(
                             lease=None, correlation_ids=None, now_ms=now_ms, queue_depth=depth
-                        )
+                        ),
                     )
                     return None
 
@@ -330,30 +368,36 @@ class RedisStreamsQueue:
 
             entries = _extract_stream_entries(response)
             if not entries:
-                if wait_s is not None and float(wait_s) == 0.0:
+                if wait_seconds is not None and wait_seconds == 0.0:
                     depth = await queue_depth(self)
-                    self._observer.on_dequeue(
-                        QueueDequeueObservation(
+                    notify_queue_observer(
+                        self._observer,
+                        callback_name="on_dequeue",
+                        observation=QueueDequeueObservation(
                             lease=None, correlation_ids=None, now_ms=now_ms, queue_depth=depth
-                        )
+                        ),
                     )
                     return None
                 continue
 
             message_id, fields = entries[0]
-            lease = await lease_from_entry(
-                self,
-                message_id=message_id,
-                fields=fields,
-                leased_at_ms=now_ms,
-                visibility_timeout_s=visibility_timeout_s,
-            )
+            try:
+                lease = await lease_from_entry(
+                    self,
+                    message_id=message_id,
+                    fields=fields,
+                    leased_at_ms=now_ms,
+                    visibility_timeout_s=visibility_timeout_s,
+                )
+            except InvalidStreamEntryError as exc:
+                await self._drop_invalid_entry(message_id=message_id, error=exc)
+                continue
 
             if (
                 lease.envelope.available_at_ms is not None
                 and lease.envelope.available_at_ms > now_ms
             ):
-                await self._redis.eval(
+                response = await self._redis.eval(
                     _ACK_AND_REQUEUE_LUA,
                     2,
                     self._stream_key,
@@ -366,16 +410,21 @@ class RedisStreamsQueue:
                     _FIELD_ENVELOPE,
                     "" if self._stream_maxlen is None else str(int(self._stream_maxlen)),
                 )
+                acked, _new_message_id = _extract_ack_and_requeue_result(response)
+                if not acked:
+                    continue
                 continue
 
             depth = await queue_depth(self)
-            self._observer.on_dequeue(
-                QueueDequeueObservation(
+            notify_queue_observer(
+                self._observer,
+                callback_name="on_dequeue",
+                observation=QueueDequeueObservation(
                     lease=lease,
                     correlation_ids=build_queue_correlation_ids(lease.envelope),
                     now_ms=now_ms,
                     queue_depth=depth,
-                )
+                ),
             )
             return lease
 
@@ -391,13 +440,15 @@ class RedisStreamsQueue:
 
         now_ms = int(self._now_ms())
         depth = await queue_depth(self)
-        self._observer.on_ack(
-            QueueAckObservation(
+        notify_queue_observer(
+            self._observer,
+            callback_name="on_ack",
+            observation=QueueAckObservation(
                 lease=lease,
                 correlation_ids=build_queue_correlation_ids(lease.envelope),
                 now_ms=now_ms,
                 queue_depth=depth,
-            )
+            ),
         )
 
     async def nack(
@@ -412,8 +463,8 @@ class RedisStreamsQueue:
         await self._ensure_initialized()
 
         delay = 0.0 if delay_s is None else float(delay_s)
-        if delay < 0:
-            raise ValueError("delay_s must be >= 0")
+        if not math.isfinite(delay) or delay < 0:
+            raise ValueError("delay_s must be finite and >= 0")
 
         now_ms = int(self._now_ms())
         available_at_ms = now_ms + int(delay * 1000)
@@ -427,7 +478,7 @@ class RedisStreamsQueue:
         enqueue_immediate = "1" if delay <= 0 else "0"
         maxlen = "" if self._stream_maxlen is None else str(int(self._stream_maxlen))
 
-        await self._redis.eval(
+        response = await self._redis.eval(
             _ACK_AND_REQUEUE_LUA,
             2,
             self._stream_key,
@@ -440,17 +491,22 @@ class RedisStreamsQueue:
             _FIELD_ENVELOPE,
             maxlen,
         )
+        acked, _new_message_id = _extract_ack_and_requeue_result(response)
+        if not acked:
+            return
 
         depth = await queue_depth(self)
-        self._observer.on_nack(
-            QueueNackObservation(
+        notify_queue_observer(
+            self._observer,
+            callback_name="on_nack",
+            observation=QueueNackObservation(
                 lease=lease,
                 correlation_ids=build_queue_correlation_ids(lease.envelope),
                 delay_s=float(delay),
                 reason=reason,
                 now_ms=now_ms,
                 queue_depth=depth,
-            )
+            ),
         )
 
     async def aclose(self) -> None:

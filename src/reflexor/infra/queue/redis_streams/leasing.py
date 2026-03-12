@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from json import JSONDecodeError
 from typing import TYPE_CHECKING
+
+from pydantic import ValidationError
 
 from reflexor.infra.queue.redis_streams.codec import _FIELD_ENVELOPE, _decode_envelope
 from reflexor.infra.queue.redis_streams.redis_helpers import _extract_times_delivered
@@ -8,6 +11,10 @@ from reflexor.orchestrator.queue import Lease
 
 if TYPE_CHECKING:
     from reflexor.infra.queue.redis_streams.core import RedisStreamsQueue
+
+
+class InvalidStreamEntryError(ValueError):
+    pass
 
 
 async def lease_from_entry(
@@ -20,9 +27,11 @@ async def lease_from_entry(
 ) -> Lease:
     payload = fields.get(_FIELD_ENVELOPE)
     if payload is None:
-        raise ValueError("missing envelope field in stream entry")
-
-    envelope = _decode_envelope(payload)
+        raise InvalidStreamEntryError("missing envelope field in stream entry")
+    try:
+        envelope = _decode_envelope(payload)
+    except (JSONDecodeError, TypeError, ValidationError) as exc:
+        raise InvalidStreamEntryError("invalid envelope payload in stream entry") from exc
 
     pending = await queue._redis.xpending_range(
         queue._stream_key,

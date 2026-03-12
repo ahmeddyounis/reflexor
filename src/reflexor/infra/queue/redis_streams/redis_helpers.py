@@ -83,3 +83,22 @@ def _extract_times_delivered(pending_entries: Any, *, default: int = 1) -> int:
         return int(entry[3])
 
     return int(default)
+
+
+def _extract_ack_and_requeue_result(response: Any) -> tuple[bool, str | None]:
+    if isinstance(response, (list, tuple)) and len(response) >= 2:
+        acked_raw, message_id_raw = response[0], response[1]
+        try:
+            acked = int(acked_raw) > 0
+        except (TypeError, ValueError):
+            acked = False
+
+        if message_id_raw is None:
+            return acked, None
+        message_id = message_id_raw if isinstance(message_id_raw, str) else str(message_id_raw)
+        return acked, message_id or None
+
+    if isinstance(response, str):
+        return bool(response), response or None
+
+    return False, None
