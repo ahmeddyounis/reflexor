@@ -224,9 +224,13 @@ async def _close_resource(
     try:
         await _close_callback(callback)
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "app container resource close failed",
-            extra={"event_type": "app_container.close.failed", "resource": name},
+            extra={
+                "event_type": "app_container.close.failed",
+                "resource": name,
+                "exception_type": type(exc).__name__,
+            },
         )
         errors.append(exc)
 
@@ -264,11 +268,15 @@ def _run_or_schedule_cleanup(
     except RuntimeError:
         try:
             asyncio.run(cleanup)
-        except Exception:
-            logger.exception(
+        except Exception as exc:
+            logger.error(
                 "%s cleanup failed",
                 context,
-                extra={"event_type": "app_container.cleanup.failed", "context": context},
+                extra={
+                    "event_type": "app_container.cleanup.failed",
+                    "context": context,
+                    "exception_type": type(exc).__name__,
+                },
             )
         return
 
@@ -278,11 +286,15 @@ def _run_or_schedule_cleanup(
         with suppress(asyncio.CancelledError):
             try:
                 done.result()
-            except Exception:
-                logger.exception(
+            except Exception as exc:
+                logger.error(
                     "%s cleanup failed",
                     context,
-                    extra={"event_type": "app_container.cleanup.failed", "context": context},
+                    extra={
+                        "event_type": "app_container.cleanup.failed",
+                        "context": context,
+                        "exception_type": type(exc).__name__,
+                    },
                 )
 
     task.add_done_callback(_log_cleanup_failure)
@@ -413,13 +425,14 @@ class AppContainer:
                     await result
                 else:
                     await asyncio.wait_for(result, timeout=float(timeout_s))
-        except Exception:
-            effective_logger.exception(
+        except Exception as exc:
+            effective_logger.error(
                 "queue ensure_ready failed",
                 extra={
                     "event_type": "queue.ensure_ready.failed",
                     "queue_backend": self.settings.queue_backend,
                     "required": required,
+                    "exception_type": type(exc).__name__,
                 },
             )
             if required:

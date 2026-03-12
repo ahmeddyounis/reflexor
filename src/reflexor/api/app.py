@@ -50,10 +50,13 @@ def create_app(
         except Exception:
             try:
                 await effective_container.aclose()
-            except Exception:
-                logger.exception(
+            except Exception as exc:
+                logger.error(
                     "application startup cleanup failed",
-                    extra={"event_type": "api.lifespan.startup_cleanup.failed"},
+                    extra={
+                        "event_type": "api.lifespan.startup_cleanup.failed",
+                        "exception_type": type(exc).__name__,
+                    },
                 )
             if hasattr(app.state, "container"):
                 delattr(app.state, "container")

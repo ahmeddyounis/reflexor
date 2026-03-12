@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -70,16 +72,33 @@ def _build_container(
 async def test_app_container_aclose_continues_after_close_failure(tmp_path: Path) -> None:
     container, orchestrator, circuit_breaker, queue, engine = _build_container(
         tmp_path=tmp_path,
-        orchestrator_error=RuntimeError("orchestrator boom"),
+        orchestrator_error=RuntimeError("Bearer sk-bootstrap-secret-should-not-leak"),
     )
+    stream = io.StringIO()
+    logger = bootstrap_container.logger
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
 
-    with pytest.raises(RuntimeError, match="orchestrator boom"):
-        await container.aclose()
+    try:
+        with pytest.raises(RuntimeError, match="sk-bootstrap-secret-should-not-leak"):
+            await container.aclose()
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
 
     assert orchestrator.close_calls == 1
     assert circuit_breaker.close_calls == 1
     assert queue.close_calls == 1
     assert engine.dispose_calls == 1
+    assert "app container resource close failed" in stream.getvalue()
+    assert "sk-bootstrap-secret-should-not-leak" not in stream.getvalue()
 
 
 def test_app_container_build_cleans_up_owned_resources_on_failure(
