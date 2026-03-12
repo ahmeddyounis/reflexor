@@ -12,19 +12,15 @@ from reflexor.domain.execution_state import (
 )
 from reflexor.domain.models import Task, ToolCall
 from reflexor.executor.service.types import ExecutionDisposition
-from reflexor.security.policy.decision import PolicyDecision
 
 
 def apply_state_transition(
     *,
     task: Task,
     tool_call: ToolCall,
-    decision: PolicyDecision,
     disposition: ExecutionDisposition,
     now_ms: int,
 ) -> ExecutionState:
-    _ = decision
-
     if disposition == ExecutionDisposition.WAITING_APPROVAL:
         return mark_waiting_approval(task=task, tool_call=tool_call)
 

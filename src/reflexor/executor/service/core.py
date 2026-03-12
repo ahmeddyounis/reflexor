@@ -12,6 +12,7 @@ Clean Architecture:
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Mapping
 
@@ -27,6 +28,7 @@ from reflexor.executor.service.persistence import (
     persist_approval,
     persist_outcome,
     persist_started,
+    queue_ready_dependents_after_success,
 )
 from reflexor.executor.service.types import (
     ExecutionDisposition,
@@ -183,9 +185,10 @@ class ExecutorService:
                     if isinstance(raw_delay_s, (int, float, str)):
                         try:
                             parsed_delay_s = float(raw_delay_s)
-                        except ValueError:
+                        except (TypeError, ValueError):
                             parsed_delay_s = 0.0
-                        delay_s = max(0.0, parsed_delay_s)
+                        if math.isfinite(parsed_delay_s):
+                            delay_s = max(0.0, parsed_delay_s)
 
                     will_retry = int(task.attempts) < int(task.max_attempts)
                     uow = self._uow_factory()
@@ -302,6 +305,7 @@ class ExecutorService:
                     )
 
                 if task.status == TaskStatus.SUCCEEDED:
+                    await queue_ready_dependents_after_success(self, task=task)
                     await self._queue.ack(lease)
                     return ExecutionReport(
                         task_id=task.task_id,

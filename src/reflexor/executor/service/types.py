@@ -60,6 +60,10 @@ class ApprovalPersistError(ExecutorError):
     """Raised when an approval exists but cannot be persisted."""
 
 
+class DependentEnqueueError(ExecutorError):
+    """Raised when a dependency-unblocked task cannot be enqueued safely."""
+
+
 class RunPacketPersistError(ExecutorError):
     """Raised when run-packet persistence fails."""
 

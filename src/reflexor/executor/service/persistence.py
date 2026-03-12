@@ -8,7 +8,7 @@ from reflexor.domain.enums import TaskStatus
 from reflexor.domain.execution_state import ExecutionState, complete_canceled, start_execution
 from reflexor.domain.lifecycle import transition_task
 from reflexor.domain.models import ToolCall
-from reflexor.executor.service.audit import append_audit
+from reflexor.executor.service.audit import append_audit, upsert_task_snapshots
 from reflexor.executor.service.dependencies import (
     blocked_dependents_after_failure,
     dependency_ready_envelope,
@@ -18,6 +18,7 @@ from reflexor.executor.service.outcomes import classify_outcome, did_attempt_too
 from reflexor.executor.service.state_transitions import apply_state_transition
 from reflexor.executor.service.types import (
     ApprovalPersistError,
+    DependentEnqueueError,
     ExecutionDisposition,
     ExecutionReport,
 )
@@ -114,7 +115,6 @@ async def persist_outcome(
     state = apply_state_transition(
         task=task,
         tool_call=tool_call,
-        decision=decision,
         disposition=disposition,
         now_ms=now_ms,
     )
@@ -125,7 +125,7 @@ async def persist_outcome(
 
     attempted_tool_run = did_attempt_tool_run(outcome)
     tool_is_idempotent = _is_tool_idempotent(service, tool_call.tool_name)
-    dependent_envelopes = []
+    ready_dependents: tuple[Task, ...] = ()
 
     uow = service._uow_factory()
     async with uow:
@@ -172,25 +172,20 @@ async def persist_outcome(
 
         all_run_tasks = await task_repo.list_by_run(state.task.run_id)
         if state.task.status == TaskStatus.SUCCEEDED:
-            ready_dependents = ready_dependents_after_success(
-                task=state.task,
-                all_tasks=all_run_tasks,
-            )
-            for dependent in ready_dependents:
-                queued_task = transition_task(dependent, TaskStatus.QUEUED)
-                await task_repo.update(queued_task)
-                dependent_envelopes.append(
-                    dependency_ready_envelope(
-                        task=queued_task,
-                        now_ms=now_ms,
-                        upstream_task_id=state.task.task_id,
-                    )
+            ready_dependents = tuple(
+                ready_dependents_after_success(
+                    task=state.task,
+                    all_tasks=all_run_tasks,
                 )
-        elif state.task.status in {TaskStatus.CANCELED, TaskStatus.FAILED} and not will_retry:
-            blocked_dependents = blocked_dependents_after_failure(
-                task=state.task,
-                all_tasks=all_run_tasks,
             )
+        elif state.task.status in {TaskStatus.CANCELED, TaskStatus.FAILED} and not will_retry:
+            blocked_dependents = tuple(
+                blocked_dependents_after_failure(
+                    task=state.task,
+                    all_tasks=all_run_tasks,
+                )
+            )
+            canceled_dependents: list[Task] = []
             for dependent in blocked_dependents:
                 if dependent.tool_call is None:
                     continue
@@ -201,6 +196,14 @@ async def persist_outcome(
                 )
                 await tool_call_repo.update(canceled_state.tool_call)
                 await task_repo.update(canceled_state.task)
+                canceled_dependents.append(canceled_state.task)
+            if canceled_dependents:
+                await upsert_task_snapshots(
+                    run_packet_repo=run_packet_repo,
+                    anchor_task=state.task,
+                    tasks=canceled_dependents,
+                    now_ms=now_ms,
+                )
 
     if service._metrics is not None:
         service._metrics.tasks_completed_total.labels(status=state.task.status.value).inc()
@@ -218,8 +221,13 @@ async def persist_outcome(
                 ok="true" if result.ok else "false",
             ).observe(float(tool_latency_s))
 
-    for envelope in dependent_envelopes:
-        await service._queue.enqueue(envelope)
+    if state.task.status == TaskStatus.SUCCEEDED and ready_dependents:
+        await queue_ready_dependents_after_success(
+            service,
+            task=state.task,
+            ready_dependents=ready_dependents,
+            now_ms=now_ms,
+        )
 
     return ExecutionReport(
         task_id=state.task.task_id,
@@ -235,3 +243,79 @@ async def persist_outcome(
         approval_id=outcome.approval_id,
         approval_status=outcome.approval_status,
     )
+
+
+async def queue_ready_dependents_after_success(
+    service: ExecutorService,
+    *,
+    task: Task,
+    ready_dependents: tuple[Task, ...] | None = None,
+    now_ms: int | None = None,
+) -> None:
+    queued_now_ms = int(service._clock.now_ms()) if now_ms is None else int(now_ms)
+    dependents = ready_dependents
+    if dependents is None:
+        uow = service._uow_factory()
+        async with uow:
+            session = uow.session
+            task_repo = service._repos.task_repo(session)
+            all_run_tasks = await task_repo.list_by_run(task.run_id)
+        dependents = tuple(
+            ready_dependents_after_success(
+                task=task,
+                all_tasks=all_run_tasks,
+            )
+        )
+
+    for dependent in dependents:
+        await _enqueue_ready_dependent(
+            service,
+            task=dependent,
+            upstream_task_id=task.task_id,
+            now_ms=queued_now_ms,
+        )
+
+
+async def _enqueue_ready_dependent(
+    service: ExecutorService,
+    *,
+    task: Task,
+    upstream_task_id: str,
+    now_ms: int,
+) -> None:
+    queued_task = transition_task(task, TaskStatus.QUEUED)
+    await _persist_dependent_task_state(service, task=queued_task, now_ms=now_ms)
+
+    envelope = dependency_ready_envelope(
+        task=queued_task,
+        now_ms=now_ms,
+        upstream_task_id=upstream_task_id,
+    )
+    try:
+        await service._queue.enqueue(envelope)
+    except Exception as exc:
+        await _persist_dependent_task_state(service, task=task, now_ms=now_ms)
+        raise DependentEnqueueError(
+            f"failed to enqueue dependent task {task.task_id!r} "
+            f"after upstream success {upstream_task_id!r}"
+        ) from exc
+
+
+async def _persist_dependent_task_state(
+    service: ExecutorService,
+    *,
+    task: Task,
+    now_ms: int,
+) -> None:
+    uow = service._uow_factory()
+    async with uow:
+        session = uow.session
+        task_repo = service._repos.task_repo(session)
+        run_packet_repo = service._repos.run_packet_repo(session)
+        await task_repo.update(task)
+        await upsert_task_snapshots(
+            run_packet_repo=run_packet_repo,
+            anchor_task=task,
+            tasks=[task],
+            now_ms=now_ms,
+        )

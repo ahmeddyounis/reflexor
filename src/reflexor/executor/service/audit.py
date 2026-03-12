@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import uuid4
 
 from reflexor.config import ReflexorSettings
@@ -15,6 +16,11 @@ from reflexor.storage.ports import RunPacketRepo
 from reflexor.tools.sdk import ToolResult
 
 DEFAULT_MAX_EXECUTION_RESULT_SUMMARY_BYTES = 8_000
+_TERMINAL_TASK_STATUSES = {
+    TaskStatus.SUCCEEDED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELED,
+}
 
 
 def new_fallback_packet(*, task: Task, now_ms: int) -> RunPacket:
@@ -56,9 +62,7 @@ async def append_audit(
     settings: ReflexorSettings,
     guard_decision: GuardDecision | None = None,
 ) -> None:
-    packet = await run_packet_repo.get(task.run_id)
-    if packet is None:
-        packet = new_fallback_packet(task=task, now_ms=now_ms)
+    packet = await _load_packet(run_packet_repo=run_packet_repo, task=task, now_ms=now_ms)
 
     summary_budget = min(
         int(settings.max_tool_output_bytes),
@@ -99,22 +103,49 @@ async def append_audit(
         **decision.to_audit_dict(),
     }
 
-    updated = packet.with_task_upserted(task)
-    if updated.started_at_ms is None and task.started_at_ms is not None:
-        updated = updated.model_copy(update={"started_at_ms": task.started_at_ms}, deep=True)
-
-    all_tasks_terminal = bool(updated.tasks) and all(
-        candidate.status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}
-        for candidate in updated.tasks
-    )
-    if all_tasks_terminal:
-        updated = updated.model_copy(update={"completed_at_ms": now_ms}, deep=True)
-
+    updated = _apply_task_updates(packet=packet, tasks=[task], now_ms=now_ms)
     updated = updated.with_tool_result_added(tool_result_entry).with_policy_decision_added(
         decision_entry
     )
 
+    await _persist_packet(run_packet_repo=run_packet_repo, packet=updated)
+
+
+async def upsert_task_snapshots(
+    *,
+    run_packet_repo: RunPacketRepo,
+    anchor_task: Task,
+    tasks: Sequence[Task],
+    now_ms: int,
+) -> None:
+    packet = await _load_packet(run_packet_repo=run_packet_repo, task=anchor_task, now_ms=now_ms)
+    updated = _apply_task_updates(packet=packet, tasks=tasks, now_ms=now_ms)
+    await _persist_packet(run_packet_repo=run_packet_repo, packet=updated)
+
+
+async def _load_packet(*, run_packet_repo: RunPacketRepo, task: Task, now_ms: int) -> RunPacket:
+    packet = await run_packet_repo.get(task.run_id)
+    if packet is None:
+        return new_fallback_packet(task=task, now_ms=now_ms)
+    return packet
+
+
+def _apply_task_updates(*, packet: RunPacket, tasks: Sequence[Task], now_ms: int) -> RunPacket:
+    updated = packet
+    for task in tasks:
+        updated = updated.with_task_upserted(task)
+        if updated.started_at_ms is None and task.started_at_ms is not None:
+            updated = updated.model_copy(update={"started_at_ms": task.started_at_ms}, deep=True)
+
+    all_tasks_terminal = bool(updated.tasks) and all(
+        candidate.status in _TERMINAL_TASK_STATUSES for candidate in updated.tasks
+    )
+    completed_at_ms = now_ms if all_tasks_terminal else None
+    return updated.model_copy(update={"completed_at_ms": completed_at_ms}, deep=True)
+
+
+async def _persist_packet(*, run_packet_repo: RunPacketRepo, packet: RunPacket) -> None:
     try:
-        await run_packet_repo.create(updated)
+        await run_packet_repo.create(packet)
     except Exception as exc:  # pragma: no cover
         raise RunPacketPersistError("failed to persist run packet") from exc

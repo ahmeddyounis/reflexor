@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -21,11 +22,17 @@ from reflexor.executor.service import (
     ExecutorRepoFactory,
     ExecutorService,
 )
+from reflexor.executor.service.types import DependentEnqueueError
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue, TaskEnvelope
 from reflexor.security.policy.approvals import InMemoryApprovalStore
-from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
+from reflexor.security.policy.decision import PolicyDecision
+from reflexor.security.policy.enforcement import (
+    EXECUTION_DELAYED_ERROR_CODE,
+    PolicyEnforcedToolRunner,
+    ToolExecutionOutcome,
+)
 from reflexor.security.policy.gate import PolicyGate
 from reflexor.security.policy.rules import ApprovalRequiredRule, ScopeEnabledRule
 from reflexor.storage.idempotency import (
@@ -34,6 +41,7 @@ from reflexor.storage.idempotency import (
     LedgerStatus,
     OutcomeToCache,
 )
+from reflexor.storage.ports import ApprovalRepo, RunPacketRepo, TaskRepo, ToolCallRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 from reflexor.tools.mock_tool import MockTool
 from reflexor.tools.registry import ToolRegistry
@@ -126,6 +134,40 @@ class _RecordingQueue(Queue):
     ) -> None:  # pragma: no cover
         _ = (lease, delay_s, reason)
         raise NotImplementedError
+
+    async def aclose(self) -> None:  # pragma: no cover
+        return None
+
+
+class _LeaseRecordingQueue(Queue):
+    def __init__(self, *, enqueue_failures: int = 0) -> None:
+        self._enqueue_failures = enqueue_failures
+        self.enqueued: list[TaskEnvelope] = []
+        self.acked: list[Lease] = []
+        self.nacked: list[tuple[Lease, float | None, str | None]] = []
+
+    async def enqueue(self, envelope: TaskEnvelope) -> None:
+        if self._enqueue_failures > 0:
+            self._enqueue_failures -= 1
+            raise RuntimeError("queue unavailable")
+        self.enqueued.append(envelope)
+
+    async def dequeue(
+        self,
+        timeout_s: float | None = None,
+        *,
+        wait_s: float | None = 0.0,
+    ) -> Lease | None:  # pragma: no cover
+        _ = (timeout_s, wait_s)
+        raise NotImplementedError
+
+    async def ack(self, lease: Lease) -> None:
+        self.acked.append(lease)
+
+    async def nack(
+        self, lease: Lease, delay_s: float | None = None, reason: str | None = None
+    ) -> None:
+        self.nacked.append((lease, delay_s, reason))
 
     async def aclose(self) -> None:  # pragma: no cover
         return None
@@ -325,6 +367,22 @@ def _packet(*, run_id: str, task: Task) -> RunPacket:
     return RunPacket(run_id=run_id, event=event, tasks=[task], created_at_ms=0)
 
 
+def _lease(*, task: Task, attempt: int = 0) -> Lease:
+    envelope = TaskEnvelope(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        attempt=attempt,
+        created_at_ms=0,
+        available_at_ms=0,
+    )
+    return Lease(
+        envelope=envelope,
+        leased_at_ms=0,
+        visibility_timeout_s=60.0,
+        attempt=attempt,
+    )
+
+
 async def _build_service(
     *,
     tmp_path: Path,
@@ -349,10 +407,10 @@ async def _build_service(
     await packet_repo.create(_packet(run_id=task.run_id, task=task))
 
     repos = ExecutorRepoFactory(
-        task_repo=lambda _session: task_repo,
-        tool_call_repo=lambda _session: tool_call_repo,
-        approval_repo=lambda _session: approval_repo,
-        run_packet_repo=lambda _session: packet_repo,
+        task_repo=lambda _session: cast(TaskRepo, task_repo),
+        tool_call_repo=lambda _session: cast(ToolCallRepo, tool_call_repo),
+        approval_repo=lambda _session: cast(ApprovalRepo, approval_repo),
+        run_packet_repo=lambda _session: cast(RunPacketRepo, packet_repo),
     )
 
     session_obj: object = object()
@@ -930,6 +988,7 @@ async def test_execute_task_success_queues_newly_ready_dependents(tmp_path: Path
     task_repo = _InMemoryTaskRepo()
     tool_call_repo = _InMemoryToolCallRepo()
     queue = _RecordingQueue()
+    packet_repo = _InMemoryRunPacketRepo()
     service = await _build_service(
         tmp_path=tmp_path,
         settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
@@ -938,7 +997,7 @@ async def test_execute_task_success_queues_newly_ready_dependents(tmp_path: Path
         task_repo=task_repo,
         tool_call_repo=tool_call_repo,
         approval_repo=_InMemoryApprovalRepo(),
-        packet_repo=_InMemoryRunPacketRepo(),
+        packet_repo=packet_repo,
         ledger=_FakeLedger(),
         queue=queue,
     )
@@ -953,6 +1012,11 @@ async def test_execute_task_success_queues_newly_ready_dependents(tmp_path: Path
     assert updated_child.status == TaskStatus.QUEUED
     assert len(queue.enqueued) == 1
     assert queue.enqueued[0].task_id == child_task.task_id
+    packet = await packet_repo.get(run_id)
+    assert packet is not None
+    child_snapshots = [task for task in packet.tasks if task.task_id == child_task.task_id]
+    assert len(child_snapshots) == 1
+    assert child_snapshots[0].status == TaskStatus.QUEUED
 
 
 @pytest.mark.asyncio
@@ -1001,6 +1065,7 @@ async def test_execute_task_terminal_failure_cancels_blocked_dependents(tmp_path
 
     task_repo = _InMemoryTaskRepo()
     tool_call_repo = _InMemoryToolCallRepo()
+    packet_repo = _InMemoryRunPacketRepo()
     service = await _build_service(
         tmp_path=tmp_path,
         settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
@@ -1009,7 +1074,7 @@ async def test_execute_task_terminal_failure_cancels_blocked_dependents(tmp_path
         task_repo=task_repo,
         tool_call_repo=tool_call_repo,
         approval_repo=_InMemoryApprovalRepo(),
-        packet_repo=_InMemoryRunPacketRepo(),
+        packet_repo=packet_repo,
         ledger=_FakeLedger(),
     )
     await task_repo.create(child_task)
@@ -1024,3 +1089,189 @@ async def test_execute_task_terminal_failure_cancels_blocked_dependents(tmp_path
     assert updated_child.status == TaskStatus.CANCELED
     assert updated_child_tool_call is not None
     assert updated_child_tool_call.status == ToolCallStatus.CANCELED
+    packet = await packet_repo.get(run_id)
+    assert packet is not None
+    child_snapshots = [task for task in packet.tasks if task.task_id == child_task.task_id]
+    assert len(child_snapshots) == 1
+    assert child_snapshots[0].status == TaskStatus.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_execute_task_reverts_dependent_and_repairs_on_redelivery(tmp_path: Path) -> None:
+    tool = _RecordingTool(result=ToolResult(ok=True, data={"ok": True}), idempotent=True)
+
+    run_id = str(uuid4())
+    parent_tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "parent"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-parent",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    parent_task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="parent",
+        status=TaskStatus.QUEUED,
+        tool_call=parent_tool_call,
+        created_at_ms=0,
+    )
+    child_tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "child"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-child",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    child_task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="child",
+        status=TaskStatus.PENDING,
+        tool_call=child_tool_call,
+        depends_on=[parent_task.task_id],
+        created_at_ms=0,
+    )
+
+    task_repo = _InMemoryTaskRepo()
+    tool_call_repo = _InMemoryToolCallRepo()
+    packet_repo = _InMemoryRunPacketRepo()
+    queue = _LeaseRecordingQueue(enqueue_failures=1)
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
+        tool=tool,
+        task=parent_task,
+        task_repo=task_repo,
+        tool_call_repo=tool_call_repo,
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=packet_repo,
+        ledger=_FakeLedger(),
+        queue=queue,
+    )
+    await task_repo.create(child_task)
+    await tool_call_repo.create(child_tool_call)
+
+    with pytest.raises(DependentEnqueueError):
+        await service.execute_task(parent_task.task_id)
+
+    updated_parent = await task_repo.get(parent_task.task_id)
+    updated_child = await task_repo.get(child_task.task_id)
+    assert updated_parent is not None
+    assert updated_parent.status == TaskStatus.SUCCEEDED
+    assert updated_child is not None
+    assert updated_child.status == TaskStatus.PENDING
+    packet_after_failure = await packet_repo.get(run_id)
+    assert packet_after_failure is not None
+    child_failure_snapshots = [
+        task for task in packet_after_failure.tasks if task.task_id == child_task.task_id
+    ]
+    assert len(child_failure_snapshots) == 1
+    assert child_failure_snapshots[0].status == TaskStatus.PENDING
+
+    report = await service.process_lease(_lease(task=updated_parent))
+
+    assert report.disposition == ExecutionDisposition.SUCCEEDED
+    repaired_child = await task_repo.get(child_task.task_id)
+    assert repaired_child is not None
+    assert repaired_child.status == TaskStatus.QUEUED
+    assert len(queue.enqueued) == 1
+    assert queue.enqueued[0].task_id == child_task.task_id
+    assert len(queue.acked) == 1
+    packet_after_repair = await packet_repo.get(run_id)
+    assert packet_after_repair is not None
+    child_repair_snapshots = [
+        task for task in packet_after_repair.tasks if task.task_id == child_task.task_id
+    ]
+    assert len(child_repair_snapshots) == 1
+    assert child_repair_snapshots[0].status == TaskStatus.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_process_lease_normalizes_non_finite_delayed_retry(tmp_path: Path) -> None:
+    tool = _RecordingTool(result=ToolResult(ok=True, data={"ok": True}), idempotent=True)
+
+    run_id = str(uuid4())
+    tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "hello"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-delay",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="delay",
+        status=TaskStatus.QUEUED,
+        tool_call=tool_call,
+        created_at_ms=0,
+    )
+
+    queue = _LeaseRecordingQueue()
+    packet_repo = _InMemoryRunPacketRepo()
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=["fs.read"]),
+        tool=tool,
+        task=task,
+        task_repo=_InMemoryTaskRepo(),
+        tool_call_repo=_InMemoryToolCallRepo(),
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=packet_repo,
+        ledger=_FakeLedger(),
+        queue=queue,
+    )
+
+    async def _delayed_outcome(
+        tool_call: ToolCall,
+        *,
+        ctx: ToolContext,
+        decided_by: str | None = None,
+        on_before_execute: object | None = None,
+    ) -> ToolExecutionOutcome:
+        _ = (tool_call, ctx, decided_by, on_before_execute)
+        return ToolExecutionOutcome(
+            tool_call_id=task.tool_call.tool_call_id,  # type: ignore[union-attr]
+            tool_name=task.tool_call.tool_name,  # type: ignore[union-attr]
+            decision=PolicyDecision.allow(
+                reason_code="rate_limited",
+                message="rate limited",
+                rule_id="guard.rate_limit",
+                metadata={"delay_s": "inf"},
+            ),
+            result=ToolResult(
+                ok=False,
+                error_code=EXECUTION_DELAYED_ERROR_CODE,
+                error_message="rate limited",
+                debug={"delay_s": "inf"},
+            ),
+        )
+
+    service._policy_runner.execute_tool_call = _delayed_outcome  # type: ignore[method-assign]
+
+    report = await service.process_lease(_lease(task=task))
+
+    assert report.disposition == ExecutionDisposition.FAILED_TRANSIENT
+    assert report.retry_after_s == 0.0
+    assert len(queue.nacked) == 1
+    _lease_used, delay_s, reason = queue.nacked[0]
+    assert delay_s == 0.0
+    assert reason == f"transient_failure:{EXECUTION_DELAYED_ERROR_CODE}"
+    stored_packet = await packet_repo.get(run_id)
+    assert stored_packet is not None
+    delayed_entries = [
+        entry
+        for entry in stored_packet.tool_results
+        if entry.get("error_code") == EXECUTION_DELAYED_ERROR_CODE
+    ]
+    assert len(delayed_entries) == 1
+    retry = delayed_entries[0].get("retry")
+    assert isinstance(retry, dict)
+    assert retry.get("retry_after_s") == 0.0
