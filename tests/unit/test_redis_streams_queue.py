@@ -27,6 +27,7 @@ class _FakeRedis:
         self.xdel_calls: list[tuple[str, str]] = []
         self.xadd_calls: list[tuple[str, dict[str, str], int | None, bool]] = []
         self.zadd_calls: list[tuple[str, dict[str, int]]] = []
+        self.zcard_error: Exception | None = None
         self.closed = False
 
     async def xgroup_create(self, *args: object, **kwargs: object) -> None:
@@ -101,6 +102,8 @@ class _FakeRedis:
 
     async def zcard(self, key: str) -> int:
         _ = key
+        if self.zcard_error is not None:
+            raise self.zcard_error
         return 0
 
     async def aclose(self, *, close_connection_pool: bool = True) -> None:
@@ -254,6 +257,28 @@ async def test_redis_streams_queue_observer_failures_do_not_break_redelivery(
     assert lease is not None
     assert lease.envelope.envelope_id == envelope.envelope_id
     assert lease.envelope.attempt == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_queue_depth_failures_do_not_break_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeRedis()
+    envelope = _envelope()
+    client.stream_entries.append(("1-0", {_FIELD_ENVELOPE: _canonical_envelope_json(envelope)}))
+    client.pending_by_id["1-0"] = [{"times_delivered": 1}]
+    client.zcard_error = RuntimeError("depth lookup failed")
+
+    queue = _make_queue(monkeypatch, client=client, observer=_RecordingObserver())
+
+    await queue.enqueue(envelope)
+    assert client.xadd_calls
+
+    lease = await queue.dequeue(timeout_s=5, wait_s=0.0)
+    assert lease is not None
+
+    await queue.ack(lease)
+    assert client.xack_calls[-1] == ("stream", "group", lease.lease_id)
 
 
 @pytest.mark.asyncio

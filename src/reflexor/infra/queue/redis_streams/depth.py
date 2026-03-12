@@ -34,5 +34,8 @@ async def queue_depth(queue: RedisStreamsQueue) -> int:
                 lag = 0
         break
 
-    delayed = int(await queue._redis.zcard(queue._delayed_zset_key))
+    try:
+        delayed = int(await queue._redis.zcard(queue._delayed_zset_key))
+    except Exception:
+        delayed = 0
     return int(pending + lag + delayed)
