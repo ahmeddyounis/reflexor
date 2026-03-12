@@ -314,7 +314,7 @@ async def test_unexpected_reflex_errors_do_not_leak_raw_messages(
         enabled_scopes=("net.http",),
     )
 
-    caplog.set_level(logging.ERROR)
+    caplog.set_level(logging.ERROR, logger="reflexor.orchestrator.engine.reflex")
 
     run_id = await engine.handle_event(_event(tmp_path))
     stored = await sink.get(run_id)

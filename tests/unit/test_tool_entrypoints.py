@@ -169,7 +169,11 @@ def test_load_entrypoints_rejects_unknown_scopes(
 
     monkeypatch.setattr(importlib.metadata, "entry_points", _fake_entry_points)
 
-    settings = ReflexorSettings(workspace_root=tmp_path, enable_tool_entrypoints=True)
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        profile="dev",
+        enable_tool_entrypoints=True,
+    )
     registry = ToolRegistry()
 
     with pytest.raises(ValueError, match=r"unknown permission_scope"):
@@ -291,7 +295,11 @@ def test_load_entrypoints_rejects_duplicate_tool_names(
 
     monkeypatch.setattr(importlib.metadata, "entry_points", _fake_entry_points)
 
-    settings = ReflexorSettings(workspace_root=tmp_path, enable_tool_entrypoints=True)
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        profile="dev",
+        enable_tool_entrypoints=True,
+    )
     registry = ToolRegistry()
 
     with pytest.raises(ValueError, match=r"duplicate tool name"):

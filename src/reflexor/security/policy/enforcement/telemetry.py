@@ -8,8 +8,6 @@ from reflexor.guards import GuardAction, GuardDecision
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.decision import REASON_OK, PolicyAction, PolicyDecision
 
-_logger = structlog.get_logger(__name__)
-
 
 def emit_guard_metrics(
     *,
@@ -73,6 +71,7 @@ def log_decision(
     approval_id: str | None = None,
     approval_status: ApprovalStatus | None = None,
 ) -> None:
+    logger = structlog.get_logger(__name__)
     payload = {
         "tool_call_id": tool_call.tool_call_id,
         "tool_name": tool_call.tool_name,
@@ -82,11 +81,11 @@ def log_decision(
         "decision": decision.to_audit_dict(),
     }
     if decision.action == PolicyAction.DENY:
-        _logger.warning("policy denied tool call", **payload)
+        logger.warning("policy denied tool call", **payload)
     elif decision.action == PolicyAction.REQUIRE_APPROVAL:
-        _logger.info("policy requires approval", **payload)
+        logger.info("policy requires approval", **payload)
     elif decision.reason_code != REASON_OK:
-        _logger.info("policy allowed tool call with non-ok reason", **payload)
+        logger.info("policy allowed tool call with non-ok reason", **payload)
 
 
 __all__ = ["emit_decision_metric", "emit_guard_metrics", "log_decision"]

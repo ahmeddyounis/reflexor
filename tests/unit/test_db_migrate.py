@@ -56,6 +56,7 @@ def test_main_reset_dev_rejects_non_local_database_without_allow_remote(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(migrate, "_require_driver", lambda _url: None)
+    monkeypatch.setenv("REFLEXOR_PROFILE", "dev")
 
     exit_code = migrate.main(
         [

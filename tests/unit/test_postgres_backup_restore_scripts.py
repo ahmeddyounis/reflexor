@@ -14,6 +14,7 @@ def _run_script(
     repo_root = Path(__file__).resolve().parents[2]
     command = [sys.executable, str(repo_root / "scripts" / script_name), *args]
     combined_env = os.environ.copy()
+    combined_env.setdefault("REFLEXOR_PROFILE", "dev")
     if env is not None:
         combined_env.update(env)
     return subprocess.run(

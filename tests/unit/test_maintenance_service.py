@@ -157,6 +157,7 @@ async def test_maintenance_service_compacts_prunes_archives_and_expires_dedupe(
                 dedupe_key=dedupe_key,
                 event=event,
                 dedupe_window_ms=1_000,
+                active_at_ms=1_000,
             )
             assert created is True
             await tool_call_repo.create(tool_call)
