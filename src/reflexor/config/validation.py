@@ -4,7 +4,7 @@ import ipaddress
 import os
 import re
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
@@ -34,14 +34,16 @@ def normalize_webhook_targets(targets: list[str], *, allow_wildcards: bool = Fal
 
         split = urlsplit(value)
         scheme = split.scheme.lower()
-        if scheme not in {"http", "https"}:
-            raise ValueError(f"webhook target must be an http(s) URL: {raw!r}")
+        if scheme != "https":
+            raise ValueError(f"webhook target must be an https URL: {raw!r}")
 
         if not split.netloc or split.hostname is None:
             raise ValueError(f"webhook target must include a host: {raw!r}")
 
         if split.username is not None or split.password is not None:
             raise ValueError(f"webhook target must not include credentials: {raw!r}")
+        if split.fragment:
+            raise ValueError(f"webhook target must not include a fragment: {raw!r}")
 
         if "*" in value:
             if not allow_wildcards:
@@ -56,8 +58,9 @@ def normalize_webhook_targets(targets: list[str], *, allow_wildcards: bool = Fal
         _validate_domain(host, raw=raw)
 
         netloc = host
-        if split.port is not None:
-            netloc = f"{host}:{split.port}"
+        port = _split_port_or_error(split, raw=raw)
+        if port is not None:
+            netloc = f"{host}:{port}"
 
         normalized.append(
             urlunsplit(
@@ -191,3 +194,10 @@ def _validate_domain_labels(value: str, *, raw: str) -> None:
             raise ValueError(f"domain label is too long: {raw!r}")
         if not DOMAIN_LABEL_RE.fullmatch(label):
             raise ValueError(f"domain label contains invalid characters: {raw!r}")
+
+
+def _split_port_or_error(split: SplitResult, *, raw: str) -> int | None:
+    try:
+        return split.port
+    except ValueError as exc:
+        raise ValueError(f"webhook target has invalid port: {raw!r}") from exc

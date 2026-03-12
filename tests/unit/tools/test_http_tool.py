@@ -112,7 +112,7 @@ async def test_response_size_cap_truncation(tmp_path) -> None:  # type: ignore[n
 
 def test_invalid_method_rejected() -> None:
     with pytest.raises(ValidationError, match="Input should be 'GET' or 'POST'"):
-        HttpRequestArgs(method="PUT", url="https://example.com/")
+        HttpRequestArgs.model_validate({"method": "PUT", "url": "https://example.com/"})
 
 
 def test_non_finite_params_rejected() -> None:
@@ -205,3 +205,21 @@ async def test_follow_redirects_blocks_cross_origin_redirects(tmp_path) -> None:
         assert result.error_code == "SSRF_BLOCKED"
         assert route1.called is True
         assert route2.called is False
+
+
+@pytest.mark.asyncio
+async def test_fragmented_url_is_rejected_without_network_call(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
+        route = router.get("https://example.com/").mock(return_value=httpx.Response(200, text="ok"))
+
+        tool = HttpTool(
+            settings=ReflexorSettings(workspace_root=tmp_path, http_allowed_domains=["example.com"])
+        )
+        args = HttpRequestArgs(method="GET", url="https://example.com/#frag")
+        ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+        result = await tool.run(args, ctx)
+
+        assert result.ok is False
+        assert result.error_code == "INVALID_ARGS"
+        assert route.called is False

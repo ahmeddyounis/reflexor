@@ -52,14 +52,20 @@ def test_normalize_webhook_targets_normalizes_scheme_and_host() -> None:
 
 
 def test_normalize_webhook_targets_rejects_bad_schemes_credentials_ips_and_wildcards() -> None:
-    with pytest.raises(ValueError, match="http\\(s\\) URL"):
+    with pytest.raises(ValueError, match="https URL"):
         normalize_webhook_targets(["ftp://example.com/hook"])
+
+    with pytest.raises(ValueError, match="https URL"):
+        normalize_webhook_targets(["http://example.com/hook"])
 
     with pytest.raises(ValueError, match="credentials"):
         normalize_webhook_targets(["https://user:pass@example.com/hook"])
 
     with pytest.raises(ValueError, match="IP literals are not allowed"):
         normalize_webhook_targets(["https://127.0.0.1/hook"])
+
+    with pytest.raises(ValueError, match="fragment"):
+        normalize_webhook_targets(["https://example.com/hook#fragment"])
 
     with pytest.raises(ValueError, match="wildcards are disabled"):
         normalize_webhook_targets(["https://*.example.com/hook"])

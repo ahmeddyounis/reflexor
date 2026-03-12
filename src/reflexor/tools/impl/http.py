@@ -7,7 +7,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -38,6 +38,14 @@ _MAX_HEADER_NAME_BYTES = 256
 _MAX_HEADER_VALUE_BYTES = 4_096
 _MAX_TOTAL_HEADER_BYTES = 8_192
 _MAX_REDIRECTS = 5
+_URL_ARGS_INVALID_MESSAGES: frozenset[str] = frozenset(
+    {
+        "url must use https",
+        "url must include a host",
+        "url must not include credentials",
+        "url has invalid port",
+    }
+)
 
 
 def _utf8_len(value: str) -> int:
@@ -51,7 +59,18 @@ class _HttpToolValidationError(Exception):
 
 
 def _classify_url_validation_error(message: str) -> str:
-    return "DOMAIN_NOT_ALLOWLISTED" if "allowed_domains" in message else "SSRF_BLOCKED"
+    if "allowed_domains" in message:
+        return "DOMAIN_NOT_ALLOWLISTED"
+    if message in _URL_ARGS_INVALID_MESSAGES:
+        return "INVALID_ARGS"
+    return "SSRF_BLOCKED"
+
+
+def _fragmentless_url(url: str) -> str:
+    split = urlsplit(url)
+    if not split.fragment:
+        return url
+    return urlunsplit((split.scheme, split.netloc, split.path, split.query, ""))
 
 
 def _origin(url: str) -> tuple[str, str, int]:
@@ -266,6 +285,13 @@ class HttpTool:
     async def run(self, args: HttpRequestArgs, ctx: ToolContext) -> ToolResult:
         settings = self.settings or get_settings()
 
+        if urlsplit(args.url).fragment:
+            return ToolResult(
+                ok=False,
+                error_code="INVALID_ARGS",
+                error_message="url fragments are not supported",
+            )
+
         try:
             normalized_url = await validate_and_normalize_url_async(
                 args.url,
@@ -416,7 +442,7 @@ class HttpTool:
                 if follow_redirects and response.status_code in {301, 302, 303, 307, 308}:
                     location = response.headers.get("location")
                     if location:
-                        next_url = urljoin(str(response.url), location)
+                        next_url = _fragmentless_url(urljoin(str(response.url), location))
                         try:
                             normalized_next = await validate_and_normalize_url_async(
                                 next_url,

@@ -44,6 +44,16 @@ def test_url_rejects_private_ranges_by_default() -> None:
         )
 
 
+def test_url_allowlist_rejects_ip_literals_even_when_enabled() -> None:
+    with pytest.raises(ValueError, match="allowed_domains"):
+        validate_and_normalize_url(
+            "https://1.2.3.4/path",
+            allowed_domains=["example.com"],
+            allow_ip_literals=True,
+            allow_private_ips=True,
+        )
+
+
 def test_url_blocks_metadata_ip_by_default_even_when_private_ips_allowed() -> None:
     with pytest.raises(ValueError, match="metadata endpoints"):
         validate_and_normalize_url(
@@ -151,4 +161,11 @@ def test_webhook_target_matches_allowlist_supports_wildcard_hosts() -> None:
     assert webhook_target_matches_allowlist(
         "https://hooks.example.com/hook",
         ["https://*.example.com/hook"],
+    )
+
+
+def test_webhook_target_matches_allowlist_rejects_fragmented_urls() -> None:
+    assert not webhook_target_matches_allowlist(
+        "https://hooks.example.com/hook#fragment",
+        ["https://hooks.example.com/hook"],
     )

@@ -5,7 +5,7 @@ import ipaddress
 import math
 import socket
 from collections.abc import Awaitable, Callable, Iterable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 _METADATA_IPS: frozenset[ipaddress.IPv4Address] = frozenset(
     {
@@ -75,20 +75,27 @@ def validate_and_normalize_url(
     if normalized_host in _DISALLOWED_HOSTNAMES:
         raise ValueError(f"hostname is not allowed: {normalized_host!r}")
 
+    normalized_allowlist: list[str] | None = None
+    if allowed_domains is not None:
+        normalized_allowlist = [_normalize_allow_domain(item) for item in allowed_domains]
+
     ip = _try_parse_ip_literal(normalized_host)
     if ip is not None:
         if not allow_ip_literals:
             raise ValueError("IP literals are not allowed in URLs")
+        if normalized_allowlist is not None:
+            raise ValueError("IP literals are not allowed when allowed_domains is configured")
         _validate_ip_address(ip, allow_private=allow_private_ips, allow_metadata=allow_metadata)
     else:
-        if allowed_domains is not None:
-            normalized_allowlist = [_normalize_allow_domain(item) for item in allowed_domains]
-            if not _hostname_in_allowlist(normalized_host, normalized_allowlist):
-                raise ValueError(f"hostname is not in allowed_domains: {normalized_host!r}")
+        if normalized_allowlist is not None and not _hostname_in_allowlist(
+            normalized_host, normalized_allowlist
+        ):
+            raise ValueError(f"hostname is not in allowed_domains: {normalized_host!r}")
 
     netloc = normalized_host
-    if split.port is not None and not _is_default_port(scheme, split.port):
-        netloc = f"{normalized_host}:{split.port}"
+    port = _split_port_or_error(split, context="url")
+    if port is not None and not _is_default_port(scheme, port):
+        netloc = f"{normalized_host}:{port}"
 
     return urlunsplit((scheme, netloc, split.path, split.query, split.fragment))
 
@@ -100,14 +107,21 @@ def hostname_matches_allowlist(hostname: str, allowlist: Iterable[str]) -> bool:
 
 
 def webhook_target_matches_allowlist(url: str, allowlist: Iterable[str]) -> bool:
-    normalized_url = validate_and_normalize_url(url, require_https=False)
+    try:
+        normalized_url = validate_and_normalize_url(url, require_https=True)
+    except ValueError:
+        return False
     split = urlsplit(normalized_url)
     if split.hostname is None:  # pragma: no cover
+        return False
+    if split.fragment:
         return False
 
     scheme = split.scheme.lower()
     host = normalize_hostname(split.hostname)
-    port = split.port if split.port is not None else _default_port_for_scheme(scheme)
+    port = _split_port_or_error(split, context="url")
+    if port is None:
+        port = _default_port_for_scheme(scheme)
 
     for raw_target in allowlist:
         try:
@@ -308,12 +322,14 @@ def _normalize_webhook_target(
     text = target.strip()
     split = urlsplit(text)
     scheme = split.scheme.lower()
-    if scheme not in {"http", "https"}:
-        raise ValueError("webhook target must use http(s)")
+    if scheme != "https":
+        raise ValueError("webhook target must use https")
     if split.hostname is None:
         raise ValueError("webhook target must include a host")
     if split.username is not None or split.password is not None:
         raise ValueError("webhook target must not include credentials")
+    if split.fragment:
+        raise ValueError("webhook target must not include a fragment")
 
     raw_host = split.hostname
     if "*" in raw_host:
@@ -328,8 +344,17 @@ def _normalize_webhook_target(
         if _try_parse_ip_literal(host) is not None:
             raise ValueError("IP literals are not allowed in webhook target allowlists")
 
-    port = split.port if split.port is not None else _default_port_for_scheme(scheme)
+    port = _split_port_or_error(split, context="webhook target")
+    if port is None:
+        port = _default_port_for_scheme(scheme)
     return (scheme, host, port, split.path, split.query, split.fragment)
+
+
+def _split_port_or_error(split: SplitResult, *, context: str) -> int | None:
+    try:
+        return split.port
+    except ValueError as exc:
+        raise ValueError(f"{context} has invalid port") from exc
 
 
 def _normalize_allow_domain(value: str) -> str:

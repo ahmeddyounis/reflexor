@@ -63,6 +63,7 @@ _NETWORK_ARGS_INVALID_MESSAGES: frozenset[str] = frozenset(
         "url must use https",
         "url must include a host",
         "url must not include credentials",
+        "url has invalid port",
     }
 )
 
@@ -154,6 +155,13 @@ class NetworkAllowlistRule:
                 message="network-scoped tools must include a URL in args",
                 rule_id=self.rule_id,
                 metadata={"scope": scope, "tool_name": tool_spec.tool_name},
+            )
+        if urlsplit(raw_url).fragment:
+            return PolicyDecision.deny(
+                reason_code=REASON_ARGS_INVALID,
+                message="url fragments are not supported",
+                rule_id=self.rule_id,
+                metadata={"scope": scope, "tool_name": tool_spec.tool_name, "url": raw_url},
             )
 
         try:

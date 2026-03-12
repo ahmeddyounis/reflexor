@@ -301,6 +301,39 @@ def test_network_allowlist_rule_classifies_invalid_url_shape_as_args_invalid(
     assert decision.metadata["url"] == "ftp://example.com/path"
 
 
+def test_network_allowlist_rule_classifies_fragmented_url_as_args_invalid(
+    tmp_path: Path,
+) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["net.http"],
+        http_allowed_domains=["example.com"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.http",
+        version="0.1.0",
+        description="http tool",
+        permission_scope="net.http",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = NetworkAllowlistRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="net.http"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://example.com/path#frag"),
+        ctx=ctx,
+    )
+
+    assert decision is not None
+    assert decision.action == PolicyAction.DENY
+    assert decision.reason_code == REASON_ARGS_INVALID
+    assert decision.metadata["url"] == "https://example.com/path#frag"
+
+
 def test_network_allowlist_rule_allows_allowlisted_webhook_target(tmp_path: Path) -> None:
     settings = ReflexorSettings(
         workspace_root=tmp_path,

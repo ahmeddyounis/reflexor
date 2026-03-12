@@ -9,6 +9,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
@@ -43,6 +44,14 @@ _MAX_HEADER_NAME_BYTES = 256
 _MAX_HEADER_VALUE_BYTES = 4_096
 _MAX_TOTAL_HEADER_BYTES = 8_192
 _MANAGED_HEADER_NAMES: frozenset[str] = frozenset({"content-type", "idempotency-key"})
+_URL_ARGS_INVALID_MESSAGES: frozenset[str] = frozenset(
+    {
+        "url must use https",
+        "url must include a host",
+        "url must not include credentials",
+        "url has invalid port",
+    }
+)
 
 
 def _utf8_len(value: str) -> int:
@@ -73,6 +82,12 @@ def _lookup_header_case_insensitive(
         if header_name.lower() == name_lower:
             return (header_name, header_value)
     return None
+
+
+def _classify_url_validation_error(message: str) -> str:
+    if message in _URL_ARGS_INVALID_MESSAGES:
+        return "INVALID_ARGS"
+    return "SSRF_BLOCKED"
 
 
 class WebhookSignatureArgs(BaseModel):
@@ -254,6 +269,13 @@ class WebhookEmitTool:
     async def run(self, args: WebhookEmitArgs, ctx: ToolContext) -> ToolResult:
         settings = self.settings or get_settings()
 
+        if urlsplit(args.url).fragment:
+            return ToolResult(
+                ok=False,
+                error_code="INVALID_ARGS",
+                error_message="url fragments are not supported",
+            )
+
         try:
             normalized_url = await validate_and_normalize_url_async(
                 args.url,
@@ -262,7 +284,12 @@ class WebhookEmitTool:
                 dns_timeout_s=float(settings.net_safety_dns_timeout_s),
             )
         except ValueError as exc:
-            return ToolResult(ok=False, error_code="SSRF_BLOCKED", error_message=str(exc))
+            message = str(exc)
+            return ToolResult(
+                ok=False,
+                error_code=_classify_url_validation_error(message),
+                error_message=message,
+            )
 
         if not webhook_target_matches_allowlist(normalized_url, settings.webhook_allowed_targets):
             return ToolResult(
