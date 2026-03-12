@@ -9,6 +9,7 @@ from prometheus_client import generate_latest
 from prometheus_client.parser import text_string_to_metric_families
 
 from reflexor.config import ReflexorSettings
+from reflexor.config.settings.parsing import RateLimitSpecConfig
 from reflexor.domain.enums import ApprovalStatus
 from reflexor.domain.models import ToolCall
 from reflexor.observability.metrics import ReflexorMetrics
@@ -283,7 +284,7 @@ async def test_rate_limited_delay_increments_metrics_and_observes_retry_after(
         workspace_root=tmp_path,
         enabled_scopes=["fs.read"],
         rate_limits_enabled=True,
-        rate_limit_default={"capacity": 1, "refill_rate_per_s": 1.0, "burst": 0.0},
+        rate_limit_default=RateLimitSpecConfig(capacity=1, refill_rate_per_s=1.0, burst=0.0),
     )
     tool = MockTool(tool_name="tests.recording", permission_scope="fs.read")
     metrics = ReflexorMetrics.build()

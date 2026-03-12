@@ -302,6 +302,12 @@ async def _execute_approved(
             guard_decision=post_approval_guard,
         )
     if post_approval_guard.action == GuardAction.DELAY:
+        decision = PolicyDecision.allow(
+            reason_code=post_approval_guard.reason_code,
+            message=post_approval_guard.message,
+            rule_id=post_approval_guard.guard_id,
+            metadata=dict(post_approval_guard.metadata),
+        )
         result = ToolResult(
             ok=False,
             error_code=EXECUTION_DELAYED_ERROR_CODE,
@@ -309,15 +315,49 @@ async def _execute_approved(
             debug=dict(post_approval_guard.metadata),
             data={"approval_id": approval_id},
         )
+        log_decision(
+            decision=decision,
+            tool_call=tool_call,
+            approval_id=approval_id,
+            approval_status=approval_status,
+        )
         return ToolExecutionOutcome(
             tool_call_id=tool_call.tool_call_id,
             tool_name=tool_call.tool_name,
-            decision=PolicyDecision.allow(
-                reason_code=post_approval_guard.reason_code,
-                message=post_approval_guard.message,
-                rule_id=post_approval_guard.guard_id,
-                metadata=dict(post_approval_guard.metadata),
-            ),
+            decision=decision,
+            result=result,
+            approval_id=approval_id,
+            approval_status=approval_status,
+            guard_decision=post_approval_guard,
+        )
+    if post_approval_guard.action == GuardAction.REQUIRE_APPROVAL:
+        still_required = PolicyDecision.require_approval(
+            reason_code=post_approval_guard.reason_code,
+            message=post_approval_guard.message,
+            rule_id=post_approval_guard.guard_id,
+            metadata={
+                **dict(post_approval_guard.metadata),
+                "approval_id": approval_id,
+                "approval_status": approval_status.value,
+            },
+        )
+        emit_decision_metric(metrics=service._metrics, decision=still_required)
+        result = ToolResult(
+            ok=False,
+            error_code=APPROVAL_REQUIRED_ERROR_CODE,
+            error_message=still_required.message or "approval required",
+            data={"approval_id": approval_id},
+        )
+        log_decision(
+            decision=still_required,
+            tool_call=tool_call,
+            approval_id=approval_id,
+            approval_status=approval_status,
+        )
+        return ToolExecutionOutcome(
+            tool_call_id=tool_call.tool_call_id,
+            tool_name=tool_call.tool_name,
+            decision=still_required,
             result=result,
             approval_id=approval_id,
             approval_status=approval_status,
@@ -339,6 +379,12 @@ async def _execute_approved(
     if on_before_execute is not None:
         await on_before_execute()
     result = await service._runner.run_tool(tool_call.tool_name, tool_call.args, ctx=ctx)
+    log_decision(
+        decision=override,
+        tool_call=tool_call,
+        approval_id=approval_id,
+        approval_status=approval_status,
+    )
     return ToolExecutionOutcome(
         tool_call_id=tool_call.tool_call_id,
         tool_name=tool_call.tool_name,

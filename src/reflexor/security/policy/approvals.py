@@ -151,6 +151,13 @@ class ApprovalBuilder:
     ) -> None:
         self._settings = settings or get_settings()
         self._redactor = redactor or Redactor()
+        self._hash_redactor = Redactor(
+            redact_keys=self._redactor.redact_keys,
+            patterns=self._redactor.patterns,
+            replacement=self._redactor.replacement,
+            max_depth=max(self._redactor.max_depth, 64),
+            max_items=max(self._redactor.max_items, 10_000),
+        )
         self._max_preview_bytes = max_preview_bytes
         if self._max_preview_bytes <= 0:
             raise ValueError("max_preview_bytes must be > 0")
@@ -170,12 +177,7 @@ class ApprovalBuilder:
     def build_payload_hash_for_args(self, *, args: dict[str, object]) -> tuple[str, str]:
         """Return (payload_hash, canonical_json_input) for a tool-call args dict."""
 
-        max_bytes = min(
-            self.settings.max_event_payload_bytes,
-            self.settings.max_tool_output_bytes,
-            self.settings.max_run_packet_bytes,
-        )
-        redacted = self.redactor.redact(args, max_bytes=max_bytes)
+        redacted = self._hash_redactor.redact(args)
         hash_input = canonical_json(redacted)
         return stable_sha256(hash_input), hash_input
 
@@ -279,7 +281,9 @@ def _safe_url_preview(raw_url: str) -> str:
     parts = urlsplit(trimmed)
     host = (parts.hostname or "").lower().rstrip(".")
     if not host:
-        return trimmed
+        prefix = f"{parts.scheme}:" if parts.scheme else ""
+        path = parts.path or ""
+        return f"{prefix}{path}"
 
     if parts.port is not None:
         host = f"{host}:{parts.port}"

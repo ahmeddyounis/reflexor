@@ -202,21 +202,23 @@ class PolicyEnforcedToolRunner:
         )
 
         if guard_decision.action == GuardAction.DELAY:
+            decision = PolicyDecision.allow(
+                reason_code=guard_decision.reason_code,
+                message=guard_decision.message,
+                rule_id=guard_decision.guard_id,
+                metadata=dict(guard_decision.metadata),
+            )
             result = ToolResult(
                 ok=False,
                 error_code=EXECUTION_DELAYED_ERROR_CODE,
                 error_message=guard_decision.message or "execution delayed",
                 debug=dict(guard_decision.metadata),
             )
+            log_decision(decision=decision, tool_call=tool_call)
             return ToolExecutionOutcome(
                 tool_call_id=tool_call.tool_call_id,
                 tool_name=tool_call.tool_name,
-                decision=PolicyDecision.allow(
-                    reason_code=guard_decision.reason_code,
-                    message=guard_decision.message,
-                    rule_id=guard_decision.guard_id,
-                    metadata=dict(guard_decision.metadata),
-                ),
+                decision=decision,
                 result=result,
                 guard_decision=guard_decision,
             )
