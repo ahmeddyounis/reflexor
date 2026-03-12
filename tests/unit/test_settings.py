@@ -208,6 +208,19 @@ def test_database_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_pa
         ReflexorSettings(db_pool_timeout_s=0)
 
 
+def test_event_suppression_durations_must_be_finite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="event_suppression_window_s must be finite and > 0"):
+        ReflexorSettings(event_suppression_window_s=float("nan"))
+    with pytest.raises(ValueError, match="event_suppression_ttl_s must be finite and > 0"):
+        ReflexorSettings(event_suppression_ttl_s=float("inf"))
+    with pytest.raises(ValueError, match="event_dedupe_window_s must be finite and > 0"):
+        ReflexorSettings(event_dedupe_window_s=float("inf"))
+
+
 def test_planner_settings_are_validated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -303,7 +316,7 @@ def test_orchestrator_settings_reject_non_positive_values(
     with pytest.raises(ValueError, match="max_events_per_planning_cycle must be > 0"):
         ReflexorSettings(max_events_per_planning_cycle=0)
 
-    with pytest.raises(ValueError, match="event_dedupe_window_s must be > 0"):
+    with pytest.raises(ValueError, match="event_dedupe_window_s must be finite and > 0"):
         ReflexorSettings(event_dedupe_window_s=0)
 
     with pytest.raises(ValueError, match="maintenance_batch_size must be > 0"):

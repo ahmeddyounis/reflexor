@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import typer
 
 from reflexor.cli import output
@@ -36,7 +38,20 @@ def _require_prod_clear_confirmation(
             pretty=pretty_enabled,
         )
         raise typer.Exit(2) from None
-    output.abort(message, exit_code=2)
+
+    if not sys.stdin.isatty():
+        output.abort(message, exit_code=2)
+
+    try:
+        confirmed = typer.confirm(
+            "Clear this suppression? Matching events may resume immediately.",
+            default=False,
+        )
+    except (EOFError, OSError):
+        confirmed = False
+
+    if not confirmed:
+        output.abort("aborted", exit_code=2)
 
 
 def register(app: typer.Typer) -> None:

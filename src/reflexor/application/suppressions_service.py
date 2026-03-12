@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.storage.ports import EventSuppressionRecord, EventSuppressionRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 
 
+def _is_active_suppression(record: EventSuppressionRecord, *, now_ms: int) -> bool:
+    suppressed_until_ms = record.suppressed_until_ms
+    if suppressed_until_ms is None:
+        return False
+    return int(suppressed_until_ms) > now_ms and int(record.expires_at_ms) > now_ms
+
+
 @dataclass(frozen=True, slots=True)
 class EventSuppressionQueryService:
     uow_factory: Callable[[], UnitOfWork]
     repo: Callable[[DatabaseSession], EventSuppressionRepo]
-    clock: Clock = SystemClock()
+    clock: Clock = field(default_factory=SystemClock)
 
     async def list_active(
         self, *, limit: int, offset: int
@@ -32,7 +39,7 @@ class EventSuppressionQueryService:
 class EventSuppressionCommandService:
     uow_factory: Callable[[], UnitOfWork]
     repo: Callable[[DatabaseSession], EventSuppressionRepo]
-    clock: Clock = SystemClock()
+    clock: Clock = field(default_factory=SystemClock)
 
     async def clear(
         self,
@@ -53,7 +60,7 @@ class EventSuppressionCommandService:
         async with uow:
             repo = self.repo(uow.session)
             record = await repo.get(normalized_hash)
-            if record is None:
+            if record is None or not _is_active_suppression(record, now_ms=now_ms):
                 raise KeyError(f"event suppression not found: {normalized_hash!r}")
 
             updated = EventSuppressionRecord(

@@ -13,6 +13,7 @@ Clean Architecture:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, cast
@@ -76,7 +77,7 @@ class DbEventSuppressor:
 
     uow_factory: Callable[[], UnitOfWork]
     repo: Callable[[DatabaseSession], EventSuppressionRepo]
-    clock: Clock = SystemClock()
+    clock: Clock = field(default_factory=SystemClock)
     signature_fields: Sequence[str] = field(default_factory=tuple)
     window_s: float = 60.0
     threshold: int = 50
@@ -85,12 +86,14 @@ class DbEventSuppressor:
     max_signature_bytes: int = 4096
 
     def __post_init__(self) -> None:
-        if float(self.window_s) <= 0:
-            raise ValueError("window_s must be > 0")
+        window_s = float(self.window_s)
+        if not math.isfinite(window_s) or window_s <= 0:
+            raise ValueError("window_s must be finite and > 0")
         if int(self.threshold) <= 0:
             raise ValueError("threshold must be > 0")
-        if float(self.ttl_s) <= 0:
-            raise ValueError("ttl_s must be > 0")
+        ttl_s = float(self.ttl_s)
+        if not math.isfinite(ttl_s) or ttl_s <= 0:
+            raise ValueError("ttl_s must be finite and > 0")
         if int(self.max_signature_bytes) <= 0:
             raise ValueError("max_signature_bytes must be > 0")
 

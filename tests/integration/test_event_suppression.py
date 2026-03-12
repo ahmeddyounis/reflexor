@@ -226,6 +226,14 @@ def test_event_suppression_clear_endpoint_resumes_immediately(tmp_path: Path) ->
         assert cleared.json()["cleared_by"] == "operator@example.com"
         assert int(cleared.json()["cleared_at_ms"]) == 1_000
 
+        cleared_again = client.post(
+            f"/v1/suppressions/{signature_hash}/clear",
+            headers={"X-Request-ID": "repeat-clear-request"},
+            json={"cleared_by": "operator@example.com"},
+        )
+        assert cleared_again.status_code == 404
+        assert cleared_again.json()["message"] == "suppression not found"
+
         suppressions = client.get("/v1/suppressions")
         assert suppressions.status_code == 200
         assert suppressions.json()["total"] == 0
@@ -259,3 +267,82 @@ def test_event_suppression_clear_endpoint_resumes_immediately(tmp_path: Path) ->
             assert row["cleared_request_id"] == clear_request_id
     finally:
         engine.dispose()
+
+
+def test_event_suppression_clear_endpoint_rejects_inactive_signature(tmp_path: Path) -> None:
+    db_path = tmp_path / "reflexor_event_suppression_inactive_clear.db"
+    _create_schema(db_path)
+
+    clock = _MutableClock(now=1_000)
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["fs.read"],
+        database_url=f"sqlite+aiosqlite:///{db_path}",
+        event_suppression_enabled=True,
+        event_suppression_signature_fields=["ticket"],
+        event_suppression_window_s=60.0,
+        event_suppression_threshold=2,
+        event_suppression_ttl_s=30.0,
+        max_run_packet_bytes=50_000,
+    )
+
+    router = RuleBasedReflexRouter.from_raw_rules(
+        [
+            {
+                "rule_id": "readme",
+                "match": {"event_type": "webhook"},
+                "action": {
+                    "kind": "fast_tool",
+                    "tool_name": "fs.read_text",
+                    "args_template": {"path": "README.md"},
+                },
+            }
+        ]
+    )
+
+    container = AppContainer.build(settings=settings, reflex_router=router, clock=clock)
+    app = create_app(container=container)
+
+    body = {
+        "type": "webhook",
+        "source": "tests",
+        "payload": {"ticket": "T-1"},
+    }
+
+    with TestClient(app) as client:
+        assert (
+            client.post(
+                "/v1/events", json={**body, "payload": {**body["payload"], "seq": 1}}
+            ).status_code
+            == 202
+        )
+        assert (
+            client.post(
+                "/v1/events", json={**body, "payload": {**body["payload"], "seq": 2}}
+            ).status_code
+            == 202
+        )
+
+        listed = client.get("/v1/suppressions")
+        assert listed.status_code == 200
+        assert listed.json()["total"] == 0
+
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+    )
+    try:
+        with engine.connect() as conn:
+            signature_hash = str(
+                conn.execute(text("SELECT signature_hash FROM event_suppressions")).scalar_one()
+            )
+    finally:
+        engine.dispose()
+
+    with TestClient(app) as client:
+        cleared = client.post(
+            f"/v1/suppressions/{signature_hash}/clear",
+            json={"cleared_by": "operator@example.com"},
+        )
+        assert cleared.status_code == 404
+        assert cleared.json()["message"] == "suppression not found"

@@ -22,6 +22,7 @@ from reflexor.infra.db.models import Base, RunPacketRow
 from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyEventRepo,
+    SqlAlchemyEventSuppressionRepo,
     SqlAlchemyMemoryRepo,
     SqlAlchemyRunPacketRepo,
     SqlAlchemyRunRepo,
@@ -30,7 +31,7 @@ from reflexor.infra.db.repos import (
 )
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.memory.models import MemoryItem
-from reflexor.storage.ports import RunRecord
+from reflexor.storage.ports import EventSuppressionRecord, RunRecord
 
 
 @asynccontextmanager
@@ -310,6 +311,64 @@ async def test_approval_repo_rejects_unsupported_status_update() -> None:
             approval_repo = SqlAlchemyApprovalRepo(session)
             with pytest.raises(ValueError, match="unsupported approval status"):
                 await approval_repo.update_status(_uuid(), ApprovalStatus.EXPIRED)
+
+
+@pytest.mark.asyncio
+async def test_event_suppression_repo_validates_and_normalizes_records() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            repo = SqlAlchemyEventSuppressionRepo(session)
+
+            with pytest.raises(ValueError, match="count must be >= 0"):
+                await repo.upsert(
+                    EventSuppressionRecord(
+                        signature_hash="sig-1",
+                        event_type="webhook",
+                        event_source="tests",
+                        signature={},
+                        window_start_ms=0,
+                        count=-1,
+                        threshold=2,
+                        window_ms=60_000,
+                        suppressed_until_ms=1_000,
+                        resume_required=False,
+                        cleared_at_ms=None,
+                        cleared_by=None,
+                        cleared_request_id=None,
+                        created_at_ms=0,
+                        updated_at_ms=0,
+                        expires_at_ms=1_000,
+                    )
+                )
+
+            stored = await repo.upsert(
+                EventSuppressionRecord(
+                    signature_hash=" sig-1 ",
+                    event_type=" webhook ",
+                    event_source=" tests ",
+                    signature={"ticket": "T-1"},
+                    window_start_ms=0,
+                    count=3,
+                    threshold=2,
+                    window_ms=60_000,
+                    suppressed_until_ms=61_000,
+                    resume_required=False,
+                    cleared_at_ms=100,
+                    cleared_by=" operator@example.com ",
+                    cleared_request_id=" request-1 ",
+                    created_at_ms=0,
+                    updated_at_ms=100,
+                    expires_at_ms=61_000,
+                )
+            )
+
+            assert stored.signature_hash == "sig-1"
+            assert stored.event_type == "webhook"
+            assert stored.event_source == "tests"
+            assert stored.cleared_by == "operator@example.com"
+            assert stored.cleared_request_id == "request-1"
 
 
 @pytest.mark.asyncio

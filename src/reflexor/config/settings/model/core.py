@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from pydantic import ValidationInfo, field_validator, model_validator
 
 from reflexor.config.settings.model.events import _ReflexorSettingsEvents
@@ -46,8 +48,8 @@ class ReflexorSettings(_ReflexorSettingsEvents):
     def _validate_positive_floats(cls, value: float, info: ValidationInfo) -> float:
         field_name = info.field_name or "value"
         parsed = float(value)
-        if parsed <= 0:
-            raise ValueError(f"{field_name} must be > 0")
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ValueError(f"{field_name} must be finite and > 0")
         return parsed
 
     @field_validator("event_suppression_threshold")
