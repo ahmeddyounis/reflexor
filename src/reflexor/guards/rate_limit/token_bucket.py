@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from reflexor.guards.rate_limit.spec import RateLimitSpec
@@ -13,10 +14,10 @@ class TokenBucketState:
     def __post_init__(self) -> None:
         tokens = float(self.tokens)
         updated_at = float(self.updated_at_s)
-        if tokens < 0:
-            raise ValueError("tokens must be >= 0")
-        if updated_at < 0:
-            raise ValueError("updated_at_s must be >= 0")
+        if not math.isfinite(tokens) or tokens < 0:
+            raise ValueError("tokens must be finite and >= 0")
+        if not math.isfinite(updated_at) or updated_at < 0:
+            raise ValueError("updated_at_s must be finite and >= 0")
         object.__setattr__(self, "tokens", tokens)
         object.__setattr__(self, "updated_at_s", updated_at)
 
@@ -32,11 +33,21 @@ class TokenBucket:
     tokens: float
     updated_at_s: float
 
+    def __post_init__(self) -> None:
+        tokens = float(self.tokens)
+        updated_at = float(self.updated_at_s)
+        if not math.isfinite(tokens) or tokens < 0:
+            raise ValueError("tokens must be finite and >= 0")
+        if not math.isfinite(updated_at) or updated_at < 0:
+            raise ValueError("updated_at_s must be finite and >= 0")
+        self.tokens = tokens
+        self.updated_at_s = updated_at
+
     @classmethod
     def new(cls, spec: RateLimitSpec, *, now_s: float) -> TokenBucket:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
         return cls(spec=spec, tokens=spec.max_tokens, updated_at_s=now)
 
     @classmethod
@@ -53,8 +64,8 @@ class TokenBucket:
 
     def _refill(self, *, now_s: float) -> None:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
 
         elapsed_s = max(0.0, now - float(self.updated_at_s))
         if elapsed_s <= 0:
@@ -77,8 +88,8 @@ class TokenBucket:
         """
 
         cost_f = float(cost)
-        if cost_f < 0:
-            raise ValueError("cost must be >= 0")
+        if not math.isfinite(cost_f) or cost_f < 0:
+            raise ValueError("cost must be finite and >= 0")
 
         self._refill(now_s=now_s)
 

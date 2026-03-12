@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 
 from reflexor.guards.rate_limit.key import RateLimitKey
@@ -104,8 +105,8 @@ class RedisRateLimiterConfig:
             ttl_s: float | None = None
         else:
             ttl_s = float(self.ttl_s)
-            if ttl_s <= 0:
-                raise ValueError("ttl_s must be > 0 when set")
+            if not math.isfinite(ttl_s) or ttl_s <= 0:
+                raise ValueError("ttl_s must be finite and > 0 when set")
 
         object.__setattr__(self, "redis_url", url)
         object.__setattr__(self, "key_prefix", prefix)
@@ -137,6 +138,11 @@ class RedisRateLimiter(RateLimiter):
     def config(self) -> RedisRateLimiterConfig:
         return self._config
 
+    def _ttl_ms(self) -> int:
+        if self._config.ttl_s is None:
+            return 0
+        return max(1, math.ceil(float(self._config.ttl_s) * 1000.0))
+
     async def aclose(self) -> None:
         if not self._owns_client:
             return
@@ -151,14 +157,15 @@ class RedisRateLimiter(RateLimiter):
         now_s: float,
     ) -> RateLimitResult:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
+        cost_f = float(cost)
+        if not math.isfinite(cost_f) or cost_f < 0:
+            raise ValueError("cost must be finite and >= 0")
 
         redis_key = _redis_key(self._config.key_prefix, key)
         now_ms = int(now * 1000)
-        ttl_ms = 0
-        if self._config.ttl_s is not None:
-            ttl_ms = int(float(self._config.ttl_s) * 1000)
+        ttl_ms = self._ttl_ms()
 
         response = await self._redis.eval(
             _CONSUME_LUA,
@@ -167,7 +174,7 @@ class RedisRateLimiter(RateLimiter):
             str(int(now_ms)),
             str(float(spec.max_tokens)),
             str(float(spec.refill_rate_per_s)),
-            str(float(cost)),
+            str(cost_f),
             str(int(ttl_ms)),
         )
 

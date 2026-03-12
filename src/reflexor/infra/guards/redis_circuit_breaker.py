@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
@@ -54,8 +55,8 @@ class RedisCircuitBreakerConfig:
             ttl_s: float | None = None
         else:
             ttl_s = float(self.ttl_s)
-            if ttl_s <= 0:
-                raise ValueError("ttl_s must be > 0 when set")
+            if not math.isfinite(ttl_s) or ttl_s <= 0:
+                raise ValueError("ttl_s must be finite and > 0 when set")
 
         object.__setattr__(self, "redis_url", url)
         object.__setattr__(self, "key_prefix", prefix)
@@ -93,6 +94,21 @@ class RedisCircuitBreaker(CircuitBreaker):
     def config(self) -> RedisCircuitBreakerConfig:
         return self._config
 
+    @staticmethod
+    def _duration_ms(value_s: float, *, field_name: str, allow_zero: bool = False) -> int:
+        value = float(value_s)
+        if not math.isfinite(value):
+            comparator = ">= 0" if allow_zero else "> 0"
+            raise ValueError(f"{field_name} must be finite and {comparator}")
+        if allow_zero:
+            if value < 0:
+                raise ValueError(f"{field_name} must be finite and >= 0")
+            if value == 0:
+                return 0
+        elif value <= 0:
+            raise ValueError(f"{field_name} must be finite and > 0")
+        return max(1, math.ceil(value * 1000.0))
+
     async def aclose(self) -> None:
         if not self._owns_client:
             return
@@ -101,12 +117,12 @@ class RedisCircuitBreaker(CircuitBreaker):
     def _ttl_ms(self) -> int:
         if self._config.ttl_s is None:
             return 0
-        return int(float(self._config.ttl_s) * 1000)
+        return self._duration_ms(self._config.ttl_s, field_name="ttl_s")
 
     async def allow_call(self, *, key: CircuitBreakerKey, now_s: float) -> CircuitBreakerDecision:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
 
         state_key, failures_key = _redis_keys(self._config.key_prefix, key)
 
@@ -118,8 +134,14 @@ class RedisCircuitBreaker(CircuitBreaker):
             failures_key,
             str(int(now * 1000)),
             str(int(spec.failure_threshold)),
-            str(int(float(spec.window_s) * 1000)),
-            str(int(float(spec.open_cooldown_s) * 1000)),
+            str(self._duration_ms(spec.window_s, field_name="window_s")),
+            str(
+                self._duration_ms(
+                    spec.open_cooldown_s,
+                    field_name="open_cooldown_s",
+                    allow_zero=True,
+                )
+            ),
             str(int(spec.half_open_max_calls)),
             str(int(spec.success_threshold)),
             str(int(self._ttl_ms())),
@@ -161,8 +183,8 @@ class RedisCircuitBreaker(CircuitBreaker):
 
     async def record_result(self, *, key: CircuitBreakerKey, ok: bool, now_s: float) -> None:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
 
         state_key, failures_key = _redis_keys(self._config.key_prefix, key)
 
@@ -175,8 +197,14 @@ class RedisCircuitBreaker(CircuitBreaker):
             str(int(now * 1000)),
             "1" if bool(ok) else "0",
             str(int(spec.failure_threshold)),
-            str(int(float(spec.window_s) * 1000)),
-            str(int(float(spec.open_cooldown_s) * 1000)),
+            str(self._duration_ms(spec.window_s, field_name="window_s")),
+            str(
+                self._duration_ms(
+                    spec.open_cooldown_s,
+                    field_name="open_cooldown_s",
+                    allow_zero=True,
+                )
+            ),
             str(int(spec.half_open_max_calls)),
             str(int(spec.success_threshold)),
             str(int(self._ttl_ms())),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections import OrderedDict
 
 from reflexor.guards.rate_limit.key import RateLimitKey
@@ -22,8 +23,8 @@ class InMemoryRateLimiter(RateLimiter):
         ttl_f = float(ttl_s)
         if max_keys_i <= 0:
             raise ValueError("max_keys must be > 0")
-        if ttl_f <= 0:
-            raise ValueError("ttl_s must be > 0")
+        if not math.isfinite(ttl_f) or ttl_f <= 0:
+            raise ValueError("ttl_s must be finite and > 0")
 
         self._max_keys = max_keys_i
         self._ttl_s = ttl_f
@@ -71,8 +72,8 @@ class InMemoryRateLimiter(RateLimiter):
         now_s: float,
     ) -> RateLimitResult:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
 
         async with self._lock:
             self._evict_expired(now_s=now)

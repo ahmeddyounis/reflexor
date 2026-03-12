@@ -70,3 +70,33 @@ async def test_redis_circuit_breaker_open_is_shared_across_instances() -> None:
         await breaker_a.aclose()
         await breaker_b.aclose()
         await _cleanup(url, key_prefix=prefix)
+
+
+@pytest.mark.asyncio
+async def test_redis_circuit_breaker_counts_failures_on_window_boundary() -> None:
+    url = _redis_url()
+    prefix = f"test:reflexor:circuit_breaker:{uuid4().hex}"
+    spec = CircuitBreakerSpec(
+        failure_threshold=2,
+        window_s=1.0,
+        open_cooldown_s=5.0,
+        half_open_max_calls=1,
+        success_threshold=1,
+    )
+    key = CircuitBreakerKey(tool_name="tests.circuit_breaker.boundary")
+
+    breaker = RedisCircuitBreaker(
+        spec=spec,
+        config=RedisCircuitBreakerConfig(redis_url=url, key_prefix=prefix),
+    )
+    try:
+        await breaker.record_result(key=key, ok=False, now_s=0.0)
+        await breaker.record_result(key=key, ok=False, now_s=1.0)
+
+        decision = await breaker.allow_call(key=key, now_s=1.0)
+        assert decision.allowed is False
+        assert decision.state == CircuitState.OPEN
+        assert decision.retry_after_s == pytest.approx(5.0)
+    finally:
+        await breaker.aclose()
+        await _cleanup(url, key_prefix=prefix)

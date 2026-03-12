@@ -45,7 +45,7 @@ local successes = tonumber(raw[4]) or 0
 
 local cutoff = now_ms - window_ms
 if cutoff < 0 then cutoff = 0 end
-redis.call('ZREMRANGEBYSCORE', failures_key, 0, cutoff)
+redis.call('ZREMRANGEBYSCORE', failures_key, 0, '(' .. tostring(cutoff))
 
 local allowed = 1
 local out_state = state
@@ -150,7 +150,7 @@ local successes = tonumber(raw[4]) or 0
 
 local cutoff = now_ms - window_ms
 if cutoff < 0 then cutoff = 0 end
-redis.call('ZREMRANGEBYSCORE', failures_key, 0, cutoff)
+redis.call('ZREMRANGEBYSCORE', failures_key, 0, '(' .. tostring(cutoff))
 
 if state == '{CircuitState.HALF_OPEN.value}' then
   if in_flight > 0 then
@@ -182,7 +182,7 @@ elseif state == '{CircuitState.CLOSED.value}' then
     local seq = redis.call('HINCRBY', state_key, '{_FAILURE_SEQ_FIELD}', 1)
     local member = tostring(now_ms) .. ':' .. tostring(seq)
     redis.call('ZADD', failures_key, now_ms, member)
-    redis.call('ZREMRANGEBYSCORE', failures_key, 0, cutoff)
+    redis.call('ZREMRANGEBYSCORE', failures_key, 0, '(' .. tostring(cutoff))
     local count = redis.call('ZCARD', failures_key)
     if count >= failure_threshold then
       state = '{CircuitState.OPEN.value}'

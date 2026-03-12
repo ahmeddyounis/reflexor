@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 
@@ -34,8 +35,8 @@ class InMemoryCircuitBreaker(CircuitBreaker):
         ttl_f = float(ttl_s)
         if max_keys_i <= 0:
             raise ValueError("max_keys must be > 0")
-        if ttl_f <= 0:
-            raise ValueError("ttl_s must be > 0")
+        if not math.isfinite(ttl_f) or ttl_f <= 0:
+            raise ValueError("ttl_s must be finite and > 0")
 
         self._spec = spec
         self._max_keys = max_keys_i
@@ -121,8 +122,8 @@ class InMemoryCircuitBreaker(CircuitBreaker):
 
     async def allow_call(self, *, key: CircuitBreakerKey, now_s: float) -> CircuitBreakerDecision:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
 
         async with self._lock:
             self._evict_expired(now_s=now)
@@ -164,8 +165,8 @@ class InMemoryCircuitBreaker(CircuitBreaker):
 
     async def record_result(self, *, key: CircuitBreakerKey, ok: bool, now_s: float) -> None:
         now = float(now_s)
-        if now < 0:
-            raise ValueError("now_s must be >= 0")
+        if not math.isfinite(now) or now < 0:
+            raise ValueError("now_s must be finite and >= 0")
 
         async with self._lock:
             self._evict_expired(now_s=now)

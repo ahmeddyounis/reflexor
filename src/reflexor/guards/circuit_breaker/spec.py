@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -22,18 +23,27 @@ class CircuitBreakerSpec:
     success_threshold: int
 
     def __post_init__(self) -> None:
-        failure_threshold = int(self.failure_threshold)
+        try:
+            failure_threshold = int(self.failure_threshold)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("failure_threshold must be > 0") from exc
         window_s = float(self.window_s)
         open_cooldown_s = float(self.open_cooldown_s)
-        half_open_max_calls = int(self.half_open_max_calls)
-        success_threshold = int(self.success_threshold)
+        try:
+            half_open_max_calls = int(self.half_open_max_calls)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("half_open_max_calls must be > 0") from exc
+        try:
+            success_threshold = int(self.success_threshold)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("success_threshold must be > 0") from exc
 
         if failure_threshold <= 0:
             raise ValueError("failure_threshold must be > 0")
-        if window_s <= 0:
-            raise ValueError("window_s must be > 0")
-        if open_cooldown_s < 0:
-            raise ValueError("open_cooldown_s must be >= 0")
+        if not math.isfinite(window_s) or window_s <= 0:
+            raise ValueError("window_s must be finite and > 0")
+        if not math.isfinite(open_cooldown_s) or open_cooldown_s < 0:
+            raise ValueError("open_cooldown_s must be finite and >= 0")
         if half_open_max_calls <= 0:
             raise ValueError("half_open_max_calls must be > 0")
         if success_threshold <= 0:

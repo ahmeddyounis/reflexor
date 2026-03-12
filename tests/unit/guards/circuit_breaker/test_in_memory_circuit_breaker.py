@@ -250,3 +250,34 @@ async def test_in_memory_circuit_breaker_max_keys_eviction_is_lru() -> None:
 
     assert breaker.size == 2
     assert breaker.snapshot_keys() == (k1, k3)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_circuit_breaker_rejects_non_finite_ttl_and_time() -> None:
+    with pytest.raises(ValueError, match="window_s must be finite and > 0"):
+        CircuitBreakerSpec(
+            failure_threshold=1,
+            window_s=float("nan"),
+            open_cooldown_s=0.0,
+            half_open_max_calls=1,
+            success_threshold=1,
+        )
+
+    spec = CircuitBreakerSpec(
+        failure_threshold=1,
+        window_s=10.0,
+        open_cooldown_s=1.0,
+        half_open_max_calls=1,
+        success_threshold=1,
+    )
+
+    with pytest.raises(ValueError, match="ttl_s must be finite and > 0"):
+        InMemoryCircuitBreaker(spec=spec, ttl_s=float("inf"))
+
+    breaker = InMemoryCircuitBreaker(spec=spec)
+    key = CircuitBreakerKey(tool_name="tests.invalid")
+    with pytest.raises(ValueError, match="now_s must be finite and >= 0"):
+        await breaker.allow_call(key=key, now_s=float("nan"))
+
+    with pytest.raises(ValueError, match="now_s must be finite and >= 0"):
+        await breaker.record_result(key=key, ok=False, now_s=float("inf"))

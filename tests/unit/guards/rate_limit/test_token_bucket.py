@@ -82,5 +82,22 @@ def test_token_bucket_rejects_negative_cost() -> None:
     spec = RateLimitSpec(capacity=1.0, refill_rate_per_s=1.0, burst=0.0)
     bucket = TokenBucket.new(spec, now_s=0.0)
 
-    with pytest.raises(ValueError, match="cost must be >= 0"):
+    with pytest.raises(ValueError, match="cost must be finite and >= 0"):
         bucket.consume(cost=-1.0, now_s=0.0)
+
+
+def test_token_bucket_rejects_non_finite_inputs() -> None:
+    with pytest.raises(ValueError, match="capacity must be finite and >= 0"):
+        RateLimitSpec(capacity=float("inf"), refill_rate_per_s=1.0, burst=0.0)
+
+    spec = RateLimitSpec(capacity=1.0, refill_rate_per_s=1.0, burst=0.0)
+
+    with pytest.raises(ValueError, match="tokens must be finite and >= 0"):
+        TokenBucket(spec=spec, tokens=float("nan"), updated_at_s=0.0)
+
+    with pytest.raises(ValueError, match="now_s must be finite and >= 0"):
+        TokenBucket.new(spec, now_s=float("inf"))
+
+    bucket = TokenBucket.new(spec, now_s=0.0)
+    with pytest.raises(ValueError, match="cost must be finite and >= 0"):
+        bucket.consume(cost=float("nan"), now_s=0.0)

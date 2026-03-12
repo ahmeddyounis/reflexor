@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -23,12 +24,12 @@ class RateLimitSpec:
         refill = float(self.refill_rate_per_s)
         burst = float(self.burst)
 
-        if capacity < 0:
-            raise ValueError("capacity must be >= 0")
-        if refill < 0:
-            raise ValueError("refill_rate_per_s must be >= 0")
-        if burst < 0:
-            raise ValueError("burst must be >= 0")
+        if not math.isfinite(capacity) or capacity < 0:
+            raise ValueError("capacity must be finite and >= 0")
+        if not math.isfinite(refill) or refill < 0:
+            raise ValueError("refill_rate_per_s must be finite and >= 0")
+        if not math.isfinite(burst) or burst < 0:
+            raise ValueError("burst must be finite and >= 0")
         if capacity + burst <= 0:
             raise ValueError("capacity + burst must be > 0")
 

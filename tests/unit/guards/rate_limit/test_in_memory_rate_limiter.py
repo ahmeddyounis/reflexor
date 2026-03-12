@@ -70,3 +70,20 @@ async def test_in_memory_rate_limiter_is_concurrency_safe() -> None:
         limiter.consume(key=key, spec=spec, cost=1.0, now_s=0.0),
     )
     assert (r1.allowed + r2.allowed) == 1
+
+
+@pytest.mark.asyncio
+async def test_in_memory_rate_limiter_rejects_non_finite_ttl_and_time() -> None:
+    with pytest.raises(ValueError, match="ttl_s must be finite and > 0"):
+        InMemoryRateLimiter(ttl_s=float("nan"))
+
+    limiter = InMemoryRateLimiter(max_keys=10, ttl_s=3600.0)
+    spec = RateLimitSpec(capacity=1.0, refill_rate_per_s=0.0, burst=0.0)
+
+    with pytest.raises(ValueError, match="now_s must be finite and >= 0"):
+        await limiter.consume(
+            key=RateLimitKey(tool_name="tests.invalid"),
+            spec=spec,
+            cost=0.0,
+            now_s=float("inf"),
+        )
