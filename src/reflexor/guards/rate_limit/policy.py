@@ -17,16 +17,13 @@ from reflexor.security.net_safety import normalize_hostname
 def _normalize_tool_name(tool_name: str) -> str:
     return tool_name.strip().lower()
 
+
 def _extract_destination_hostname(parsed_args: BaseModel) -> str | None:
-    url_value = getattr(parsed_args, "url", None)
-    if not isinstance(url_value, str):
+    url_value = _extract_url_like_arg(parsed_args)
+    if url_value is None:
         return None
 
-    text = url_value.strip()
-    if not text:
-        return None
-
-    split = urlsplit(text)
+    split = urlsplit(url_value)
     hostname = split.hostname
     if hostname is None:
         return None
@@ -35,6 +32,27 @@ def _extract_destination_hostname(parsed_args: BaseModel) -> str | None:
     except ValueError:
         return None
     return normalized or None
+
+
+def _extract_url_like_arg(parsed_args: BaseModel) -> str | None:
+    preferred = ("url", "target_url", "webhook_url", "endpoint_url")
+    for field_name in preferred:
+        value = getattr(parsed_args, field_name, None)
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                return trimmed
+
+    for field_name in type(parsed_args).model_fields:
+        if "url" not in field_name.lower():
+            continue
+        value = getattr(parsed_args, field_name, None)
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                return trimmed
+
+    return None
 
 
 class RateLimitPolicy:

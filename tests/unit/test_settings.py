@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from reflexor.config import ReflexorSettings, clear_settings_cache, get_settings
+from reflexor.config.settings.parsing import RateLimitSpecConfig
 from reflexor.domain.models_event import DEFAULT_MAX_PAYLOAD_BYTES
 from reflexor.domain.models_run_packet import (
     DEFAULT_MAX_PACKET_BYTES,
@@ -440,33 +441,33 @@ def test_rate_limit_settings_reject_malformed_specs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="capacity"):
         ReflexorSettings(
             workspace_root=tmp_path,
-            rate_limit_default={"capacity": -1, "refill_rate_per_s": 1},
+            rate_limit_default=RateLimitSpecConfig(capacity=-1, refill_rate_per_s=1),
         )
 
     with pytest.raises(ValueError, match="refill_rate_per_s"):
         ReflexorSettings(
             workspace_root=tmp_path,
-            rate_limit_default={"capacity": 1, "refill_rate_per_s": -1},
+            rate_limit_default=RateLimitSpecConfig(capacity=1, refill_rate_per_s=-1),
         )
 
     with pytest.raises(ValueError, match="capacity \\+ burst must be > 0"):
         ReflexorSettings(
             workspace_root=tmp_path,
-            rate_limit_default={"capacity": 0, "refill_rate_per_s": 1, "burst": 0},
+            rate_limit_default=RateLimitSpecConfig(capacity=0, refill_rate_per_s=1, burst=0),
         )
 
     with pytest.raises(ValueError, match="keys must be non-empty"):
         ReflexorSettings(
             workspace_root=tmp_path,
-            rate_limit_per_tool={"   ": {"capacity": 1, "refill_rate_per_s": 1}},
+            rate_limit_per_tool={"   ": RateLimitSpecConfig(capacity=1, refill_rate_per_s=1)},
         )
 
     with pytest.raises(ValueError, match="duplicate tool names"):
         ReflexorSettings(
             workspace_root=tmp_path,
             rate_limit_per_tool={
-                "NET.HTTP": {"capacity": 1, "refill_rate_per_s": 1},
-                " net.http ": {"capacity": 1, "refill_rate_per_s": 1},
+                "NET.HTTP": RateLimitSpecConfig(capacity=1, refill_rate_per_s=1),
+                " net.http ": RateLimitSpecConfig(capacity=1, refill_rate_per_s=1),
             },
         )
 
@@ -474,6 +475,6 @@ def test_rate_limit_settings_reject_malformed_specs(tmp_path: Path) -> None:
         ReflexorSettings(
             workspace_root=tmp_path,
             rate_limit_per_destination={
-                "https://example.com": {"capacity": 1, "refill_rate_per_s": 1}
+                "https://example.com": RateLimitSpecConfig(capacity=1, refill_rate_per_s=1)
             },
         )

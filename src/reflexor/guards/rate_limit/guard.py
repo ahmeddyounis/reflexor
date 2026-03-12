@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from pydantic import BaseModel
 
 from reflexor.domain.models import ToolCall
@@ -22,7 +24,10 @@ class RateLimitGuard:
         cost: float = 1.0,
     ) -> None:
         self._policy = policy
-        self._cost = float(cost)
+        cost_f = float(cost)
+        if not math.isfinite(cost_f) or cost_f < 0:
+            raise ValueError("cost must be finite and >= 0")
+        self._cost = cost_f
 
     async def check(
         self,

@@ -6,6 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
+from reflexor.config.settings.parsing import RateLimitSpecConfig
 from reflexor.domain.models import ToolCall
 from reflexor.guards.rate_limit import RateLimitKey, RateLimitResult, RateLimitSpec
 from reflexor.guards.rate_limit.policy import RateLimitPolicy
@@ -17,6 +18,10 @@ class _ArgsWithUrl(BaseModel):
 
 class _ArgsNoUrl(BaseModel):
     n: int = 1
+
+
+class _ArgsWithTargetUrl(BaseModel):
+    target_url: str
 
 
 class _StubLimiter:
@@ -44,7 +49,7 @@ async def test_rate_limit_policy_disabled_imposes_no_limits(tmp_path: Path) -> N
     settings = ReflexorSettings(
         workspace_root=tmp_path,
         rate_limits_enabled=False,
-        rate_limit_default={"capacity": 1, "refill_rate_per_s": 1},
+        rate_limit_default=RateLimitSpecConfig(capacity=1, refill_rate_per_s=1),
     )
     policy = RateLimitPolicy(settings=settings, limiter=limiter, now_s=lambda: 1.0)
 
@@ -70,10 +75,14 @@ def test_rate_limit_policy_resolves_checks_with_precedence_and_stable_keys(tmp_p
     settings = ReflexorSettings(
         workspace_root=tmp_path,
         rate_limits_enabled=True,
-        rate_limit_default={"capacity": 10, "refill_rate_per_s": 10},
-        rate_limit_per_tool={"NET.HTTP": {"capacity": 1, "refill_rate_per_s": 1}},
-        rate_limit_per_destination={"api.example.com": {"capacity": 2, "refill_rate_per_s": 2}},
-        rate_limit_per_run={"capacity": 3, "refill_rate_per_s": 3},
+        rate_limit_default=RateLimitSpecConfig(capacity=10, refill_rate_per_s=10),
+        rate_limit_per_tool={
+            "NET.HTTP": RateLimitSpecConfig(capacity=1, refill_rate_per_s=1)
+        },
+        rate_limit_per_destination={
+            "api.example.com": RateLimitSpecConfig(capacity=2, refill_rate_per_s=2)
+        },
+        rate_limit_per_run=RateLimitSpecConfig(capacity=3, refill_rate_per_s=3),
     )
     policy = RateLimitPolicy(settings=settings, limiter=limiter, now_s=lambda: 1.0)
 
@@ -94,6 +103,7 @@ def test_rate_limit_policy_resolves_checks_with_precedence_and_stable_keys(tmp_p
 
     dest_key, dest_spec = checks[1]
     assert dest_key == RateLimitKey(destination="api.example.com")
+    assert dest_key.destination is not None
     assert "/" not in dest_key.destination
     assert dest_spec.capacity == 2
 
@@ -108,7 +118,7 @@ def test_rate_limit_policy_normalizes_idna_destination_keys(tmp_path: Path) -> N
         workspace_root=tmp_path,
         rate_limits_enabled=True,
         rate_limit_per_destination={
-            "xn--bcher-kva.example": {"capacity": 2, "refill_rate_per_s": 2}
+            "xn--bcher-kva.example": RateLimitSpecConfig(capacity=2, refill_rate_per_s=2)
         },
     )
     policy = RateLimitPolicy(settings=settings, limiter=limiter, now_s=lambda: 1.0)
@@ -131,6 +141,35 @@ def test_rate_limit_policy_normalizes_idna_destination_keys(tmp_path: Path) -> N
     ]
 
 
+def test_rate_limit_policy_extracts_destination_from_alternate_url_fields(tmp_path: Path) -> None:
+    limiter = _StubLimiter()
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        rate_limits_enabled=True,
+        rate_limit_per_destination={
+            "api.example.com": RateLimitSpecConfig(capacity=2, refill_rate_per_s=2)
+        },
+    )
+    policy = RateLimitPolicy(settings=settings, limiter=limiter, now_s=lambda: 1.0)
+
+    tool_call = ToolCall(
+        tool_name="tests.alt_url",
+        permission_scope="fs.read",
+        idempotency_key="k",
+        args={"target_url": "https://Api.Example.com/path"},
+    )
+    parsed = _ArgsWithTargetUrl.model_validate(tool_call.args)
+
+    checks = policy.resolve_checks(tool_call=tool_call, parsed_args=parsed, run_id=None)
+
+    assert checks == [
+        (
+            RateLimitKey(destination="api.example.com"),
+            RateLimitSpec(capacity=2.0, refill_rate_per_s=2.0, burst=0.0),
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_rate_limit_policy_aggregates_retry_after(tmp_path: Path) -> None:
     limiter = _StubLimiter(
@@ -142,7 +181,7 @@ async def test_rate_limit_policy_aggregates_retry_after(tmp_path: Path) -> None:
     settings = ReflexorSettings(
         workspace_root=tmp_path,
         rate_limits_enabled=True,
-        rate_limit_default={"capacity": 1, "refill_rate_per_s": 0},
+        rate_limit_default=RateLimitSpecConfig(capacity=1, refill_rate_per_s=0),
     )
     policy = RateLimitPolicy(settings=settings, limiter=limiter, now_s=lambda: 123.0)
 

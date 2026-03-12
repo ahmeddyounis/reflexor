@@ -78,6 +78,23 @@ def test_token_bucket_cost_above_max_never_allows() -> None:
     assert retry_after_s is None
 
 
+def test_token_bucket_from_state_clamps_tokens_when_spec_tightens() -> None:
+    bucket_state = TokenBucket.new(
+        RateLimitSpec(capacity=10.0, refill_rate_per_s=0.0, burst=0.0),
+        now_s=0.0,
+    ).state
+    assert bucket_state.tokens == 10.0
+
+    tightened_spec = RateLimitSpec(capacity=1.0, refill_rate_per_s=0.0, burst=0.0)
+    bucket = TokenBucket.from_state(tightened_spec, bucket_state, now_s=0.0)
+
+    assert bucket.tokens == 1.0
+    allowed, retry_after_s = bucket.consume(cost=1.0, now_s=0.0)
+    assert allowed is True
+    assert retry_after_s == 0.0
+    assert bucket.tokens == 0.0
+
+
 def test_token_bucket_rejects_negative_cost() -> None:
     spec = RateLimitSpec(capacity=1.0, refill_rate_per_s=1.0, burst=0.0)
     bucket = TokenBucket.new(spec, now_s=0.0)

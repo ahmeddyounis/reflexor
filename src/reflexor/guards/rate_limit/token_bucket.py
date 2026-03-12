@@ -56,7 +56,11 @@ class TokenBucket:
     ) -> TokenBucket:
         if state is None:
             return cls.new(spec, now_s=now_s)
-        return cls(spec=spec, tokens=float(state.tokens), updated_at_s=float(state.updated_at_s))
+        return cls(
+            spec=spec,
+            tokens=min(float(spec.max_tokens), float(state.tokens)),
+            updated_at_s=float(state.updated_at_s),
+        )
 
     @property
     def state(self) -> TokenBucketState:
