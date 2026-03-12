@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -29,6 +30,8 @@ from reflexor.infra.db.repos import (
     SqlAlchemyTaskRepo,
     SqlAlchemyToolCallRepo,
 )
+from reflexor.infra.db.repos.runs.summaries import _list_run_summaries_stmt
+from reflexor.infra.db.repos.tasks import _task_summary_stmt
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.memory.models import MemoryItem
 from reflexor.storage.ports import EventSuppressionRecord, RunRecord
@@ -52,6 +55,36 @@ async def _in_memory_session_factory() -> AsyncIterator[AsyncSessionFactory]:
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+def test_run_summary_query_projects_event_fields_without_selecting_full_packet_blob() -> None:
+    stmt = _list_run_summaries_stmt(limit=10, offset=0)
+    selected = {
+        (getattr(column, "name", None), getattr(getattr(column, "table", None), "name", None))
+        for column in stmt.selected_columns
+    }
+
+    assert ("packet", "run_packets") not in selected
+    assert ("event_type", None) in selected
+    assert ("event_source", None) in selected
+
+    compiled = str(stmt.compile(dialect=sqlite_dialect(), compile_kwargs={"literal_binds": True}))
+    assert "run_packets.packet" in compiled
+    assert " AS event_type" in compiled
+    assert " AS event_source" in compiled
+
+
+def test_task_summary_query_omits_tool_call_args_from_projection() -> None:
+    stmt = _task_summary_stmt(limit=10, offset=0)
+    selected = {
+        (getattr(column, "name", None), getattr(getattr(column, "table", None), "name", None))
+        for column in stmt.selected_columns
+    }
+
+    assert ("args", "tool_calls") not in selected
+    assert ("result_ref", "tool_calls") not in selected
+    assert ("tool_call_id", "tool_calls") in selected
+    assert ("tool_name", "tool_calls") in selected
 
 
 @pytest.mark.asyncio

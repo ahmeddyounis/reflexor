@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import httpx
 import typer
 
 from reflexor.cli import output
+from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 from reflexor.domain.enums import TaskStatus
 
@@ -34,14 +36,18 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        page = container.run(
-            lambda client: client.list_tasks(
-                limit=limit, offset=offset, run_id=run_id, status=status
-            )
-        )
-
         pretty_enabled = bool(container.output_pretty or pretty)
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        try:
+            page = container.run(
+                lambda client: client.list_tasks(
+                    limit=limit, offset=offset, run_id=run_id, status=status
+                )
+            )
+        except (KeyError, ValueError, httpx.HTTPStatusError) as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            return
+
         if json_enabled:
             output.print_json(page, pretty=pretty_enabled)
             return

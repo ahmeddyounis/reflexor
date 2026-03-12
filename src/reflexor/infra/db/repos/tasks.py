@@ -55,6 +55,37 @@ def _task_from_rows(task_row: TaskRow, tool_call_row: ToolCallRow | None) -> Tas
     )
 
 
+def _task_summary_stmt(
+    *,
+    limit: int,
+    offset: int,
+    run_id: str | None = None,
+    status: TaskStatus | None = None,
+) -> Select[tuple[TaskRow, str | None, str | None, str | None, str | None, str | None]]:
+    stmt = cast(
+        Select[tuple[TaskRow, str | None, str | None, str | None, str | None, str | None]],
+        select(
+            TaskRow,
+            ToolCallRow.tool_call_id,
+            ToolCallRow.tool_name,
+            ToolCallRow.permission_scope,
+            ToolCallRow.idempotency_key,
+            ToolCallRow.status,
+        ).outerjoin(ToolCallRow, TaskRow.tool_call_id == ToolCallRow.tool_call_id),
+    )
+    if run_id is not None:
+        normalized = _normalize_optional_str(run_id)
+        if normalized is None:
+            raise ValueError("run_id must be non-empty when provided")
+        stmt = stmt.where(TaskRow.run_id == normalized)
+    if status is not None:
+        stmt = stmt.where(TaskRow.status == status.value)
+
+    return stmt.order_by(TaskRow.created_at_ms.desc(), TaskRow.task_id.desc()).limit(
+        int(limit)
+    ).offset(int(offset))
+
+
 class SqlAlchemyTaskRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -158,42 +189,29 @@ class SqlAlchemyTaskRepo:
         if limit_int == 0:
             return []
 
-        stmt = cast(
-            Select[tuple[TaskRow, ToolCallRow | None]],
-            select(TaskRow, ToolCallRow).outerjoin(
-                ToolCallRow, TaskRow.tool_call_id == ToolCallRow.tool_call_id
-            ),
-        )
-        if run_id is not None:
-            normalized = _normalize_optional_str(run_id)
-            if normalized is None:
-                raise ValueError("run_id must be non-empty when provided")
-            stmt = stmt.where(TaskRow.run_id == normalized)
-        if status is not None:
-            stmt = stmt.where(TaskRow.status == status.value)
-
-        stmt = (
-            stmt.order_by(TaskRow.created_at_ms.desc(), TaskRow.task_id.desc())
-            .limit(limit_int)
-            .offset(offset_int)
+        stmt = _task_summary_stmt(
+            limit=limit_int,
+            offset=offset_int,
+            run_id=run_id,
+            status=status,
         )
         result = await self._session.execute(stmt)
         rows = result.all()
 
         summaries: list[TaskSummary] = []
-        for task_row, tool_call_row in rows:
-            tool_call_status = None
-            tool_call_id = None
-            tool_name = None
-            permission_scope = None
-            idempotency_key = None
-
-            if tool_call_row is not None:
-                tool_call_id = tool_call_row.tool_call_id
-                tool_name = tool_call_row.tool_name
-                permission_scope = tool_call_row.permission_scope
-                idempotency_key = tool_call_row.idempotency_key
-                tool_call_status = ToolCallStatus(str(tool_call_row.status))
+        for (
+            task_row,
+            tool_call_id,
+            tool_name,
+            permission_scope,
+            idempotency_key,
+            tool_call_status_value,
+        ) in rows:
+            tool_call_status = (
+                None
+                if tool_call_status_value is None
+                else ToolCallStatus(str(tool_call_status_value))
+            )
 
             summaries.append(
                 TaskSummary(

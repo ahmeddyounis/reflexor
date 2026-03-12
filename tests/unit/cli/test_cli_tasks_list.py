@@ -100,3 +100,27 @@ def test_tasks_list_text_output_includes_run_id_and_tool_name() -> None:
     assert "TASK_ID" in result.output
     assert "RUN_ID" in result.output
     assert "mock.echo" in result.output
+
+
+def test_tasks_list_returns_json_error_for_invalid_run_id() -> None:
+    class _InvalidRunIdClient:
+        async def list_tasks(self, **_kwargs):  # type: ignore[no-untyped-def]
+            raise ValueError("run_id must be non-empty when provided")
+
+    container = CliContainer.build(
+        settings=ReflexorSettings(),
+        client=_InvalidRunIdClient(),  # type: ignore[arg-type]
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tasks", "list", "--run-id", "   ", "--json"],
+        obj=container,
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "invalid_input"
+    assert payload["message"] == "run_id must be non-empty when provided"

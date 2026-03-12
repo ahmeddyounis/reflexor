@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+import httpx
 import typer
 
 from reflexor.cli import output
 from reflexor.cli.client import CliClient, ReplayModeStr
+from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 from reflexor.domain.enums import RunStatus
 
@@ -60,7 +62,7 @@ def _run_packet_summary(run_packet: object) -> dict[str, object]:
     return summary
 
 
-def _task_status_counts(tasks_page: dict[str, object]) -> dict[str, int]:
+def _task_status_counts_from_page(tasks_page: dict[str, object]) -> dict[str, int]:
     items = tasks_page.get("items")
     rows: list[dict[str, object]] = (
         [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
@@ -75,9 +77,55 @@ def _task_status_counts(tasks_page: dict[str, object]) -> dict[str, int]:
     return counts
 
 
+def _task_status_counts(
+    run_detail: dict[str, object],
+    tasks_page: dict[str, object],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+
+    summary_obj = run_detail.get("summary")
+    if isinstance(summary_obj, dict):
+        for status, key in (
+            ("pending", "tasks_pending"),
+            ("queued", "tasks_queued"),
+            ("running", "tasks_running"),
+            ("succeeded", "tasks_succeeded"),
+            ("failed", "tasks_failed"),
+            ("canceled", "tasks_canceled"),
+        ):
+            value = summary_obj.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value > 0:
+                counts[status] = value
+
+    page_counts = _task_status_counts_from_page(tasks_page)
+    items = tasks_page.get("items")
+    rows: list[dict[str, object]] = (
+        [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+    )
+    total_obj = tasks_page.get("total")
+    total = total_obj if isinstance(total_obj, int) else None
+    loaded_all = total is not None and total <= len(rows)
+    if loaded_all:
+        for status, count in page_counts.items():
+            counts.setdefault(status, count)
+
+    return counts
+
+
 async def _build_run_show_payload(client: CliClient, run_id: str) -> dict[str, object]:
-    run = await client.get_run(run_id)
-    tasks = await client.list_tasks(limit=SHOW_TASKS_LIMIT, offset=0, run_id=run_id, status=None)
+    normalized_run_id = run_id.strip()
+    if not normalized_run_id:
+        raise ValueError("run_id must be non-empty")
+
+    run = await client.get_run(normalized_run_id)
+    tasks = await client.list_tasks(
+        limit=SHOW_TASKS_LIMIT,
+        offset=0,
+        run_id=normalized_run_id,
+        status=None,
+    )
 
     run_packet_obj = run.get("run_packet")
     run_packet = run_packet_obj if isinstance(run_packet_obj, dict) else {}
@@ -86,7 +134,7 @@ async def _build_run_show_payload(client: CliClient, run_id: str) -> dict[str, o
         "run": run,
         "run_packet_summary": _run_packet_summary(run_packet),
         "tasks": tasks,
-        "task_status_counts": _task_status_counts(tasks),
+        "task_status_counts": _task_status_counts(run, tasks),
     }
 
 
@@ -133,14 +181,18 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        page = container.run(
-            lambda client: client.list_runs(
-                limit=limit, offset=offset, status=status, since_ms=since_ms
-            )
-        )
-
         pretty_enabled = bool(container.output_pretty or pretty)
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        try:
+            page = container.run(
+                lambda client: client.list_runs(
+                    limit=limit, offset=offset, status=status, since_ms=since_ms
+                )
+            )
+        except (KeyError, ValueError, httpx.HTTPStatusError) as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            return
+
         if json_enabled:
             output.print_json(page, pretty=pretty_enabled)
             return
@@ -157,10 +209,14 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
-        result = container.run(lambda client: _build_run_show_payload(client, run_id))
-
         pretty_enabled = bool(container.output_pretty or pretty)
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        try:
+            result = container.run(lambda client: _build_run_show_payload(client, run_id))
+        except (KeyError, ValueError, httpx.HTTPStatusError) as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            return
+
         if json_enabled:
             output.print_json(result, pretty=pretty_enabled)
             return

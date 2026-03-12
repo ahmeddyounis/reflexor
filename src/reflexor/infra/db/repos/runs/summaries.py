@@ -107,34 +107,20 @@ def _computed_status_expr(
     )
 
 
-def _extract_event_type_source(packet: object) -> tuple[str | None, str | None]:
-    event_type = None
-    event_source = None
-    if isinstance(packet, dict):
-        event = packet.get("event")
-        if isinstance(event, dict):
-            candidate_type = event.get("type")
-            if isinstance(candidate_type, str) and candidate_type.strip():
-                event_type = candidate_type
-            candidate_source = event.get("source")
-            if isinstance(candidate_source, str) and candidate_source.strip():
-                event_source = candidate_source
-    return event_type, event_source
+def _event_field_expr(*, field: str, label: str) -> Any:
+    # Project only the specific scalar fields needed for summaries instead of
+    # materializing the full sanitized packet blob on every operator read.
+    return func.nullif(func.trim(RunPacketRow.packet["event"][field].as_string()), "").label(label)
 
 
-async def list_run_summaries(
-    session: AsyncSession,
+def _list_run_summaries_stmt(
     *,
     limit: int,
     offset: int,
     status: RunStatus | None = None,
     created_after_ms: int | None = None,
     created_before_ms: int | None = None,
-) -> list[RunSummary]:
-    limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)
-    if limit_int == 0:
-        return []
-
+) -> Any:
     task_agg = _task_agg_subquery()
     approvals_agg = _approvals_agg_subquery()
 
@@ -152,11 +138,14 @@ async def list_run_summaries(
 
     approvals_total = func.coalesce(approvals_agg.c.approvals_total, 0)
     approvals_pending = func.coalesce(approvals_agg.c.approvals_pending, 0)
+    event_type = _event_field_expr(field="type", label="event_type")
+    event_source = _event_field_expr(field="source", label="event_source")
 
     stmt = (
         select(
             RunRow,
-            RunPacketRow.packet,
+            event_type,
+            event_source,
             computed_status,
             tasks_total.label("tasks_total"),
             tasks_pending.label("tasks_pending"),
@@ -180,10 +169,79 @@ async def list_run_summaries(
     if created_before_ms is not None:
         stmt = stmt.where(RunRow.created_at_ms <= int(created_before_ms))
 
-    stmt = (
+    return (
         stmt.order_by(RunRow.created_at_ms.desc(), RunRow.run_id.desc())
-        .limit(limit_int)
-        .offset(offset_int)
+        .limit(int(limit))
+        .offset(int(offset))
+    )
+
+
+def _get_run_summary_stmt(run_id: str) -> Any:
+    normalized = run_id.strip()
+    if not normalized:
+        raise ValueError("run_id must be non-empty")
+
+    task_agg = _task_agg_subquery()
+    approvals_agg = _approvals_agg_subquery()
+
+    (
+        computed_status,
+        tasks_total,
+        tasks_pending,
+        tasks_queued,
+        tasks_running,
+        tasks_succeeded,
+        tasks_failed,
+        tasks_canceled,
+        _tasks_archived,
+    ) = _computed_status_expr(task_agg=task_agg)
+
+    approvals_total = func.coalesce(approvals_agg.c.approvals_total, 0)
+    approvals_pending = func.coalesce(approvals_agg.c.approvals_pending, 0)
+
+    return (
+        select(
+            RunRow,
+            _event_field_expr(field="type", label="event_type"),
+            _event_field_expr(field="source", label="event_source"),
+            computed_status,
+            tasks_total.label("tasks_total"),
+            tasks_pending.label("tasks_pending"),
+            tasks_queued.label("tasks_queued"),
+            tasks_running.label("tasks_running"),
+            tasks_succeeded.label("tasks_succeeded"),
+            tasks_failed.label("tasks_failed"),
+            tasks_canceled.label("tasks_canceled"),
+            approvals_total.label("approvals_total"),
+            approvals_pending.label("approvals_pending"),
+        )
+        .outerjoin(task_agg, task_agg.c.run_id == RunRow.run_id)
+        .outerjoin(approvals_agg, approvals_agg.c.run_id == RunRow.run_id)
+        .outerjoin(RunPacketRow, RunPacketRow.run_id == RunRow.run_id)
+        .where(RunRow.run_id == normalized)
+        .limit(1)
+    )
+
+
+async def list_run_summaries(
+    session: AsyncSession,
+    *,
+    limit: int,
+    offset: int,
+    status: RunStatus | None = None,
+    created_after_ms: int | None = None,
+    created_before_ms: int | None = None,
+) -> list[RunSummary]:
+    limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)
+    if limit_int == 0:
+        return []
+
+    stmt = _list_run_summaries_stmt(
+        limit=limit_int,
+        offset=offset_int,
+        status=status,
+        created_after_ms=created_after_ms,
+        created_before_ms=created_before_ms,
     )
     result = await session.execute(stmt)
     rows = result.all()
@@ -191,7 +249,8 @@ async def list_run_summaries(
     summaries: list[RunSummary] = []
     for (
         run_row,
-        packet,
+        event_type_value,
+        event_source_value,
         status_value,
         tasks_total_value,
         tasks_pending_value,
@@ -203,8 +262,6 @@ async def list_run_summaries(
         approvals_total_value,
         approvals_pending_value,
     ) in rows:
-        event_type, event_source = _extract_event_type_source(packet)
-
         summaries.append(
             RunSummary(
                 run_id=run_row.run_id,
@@ -212,8 +269,8 @@ async def list_run_summaries(
                 started_at_ms=run_row.started_at_ms,
                 completed_at_ms=run_row.completed_at_ms,
                 status=RunStatus(str(status_value)),
-                event_type=event_type,
-                event_source=event_source,
+                event_type=None if event_type_value is None else str(event_type_value),
+                event_source=None if event_source_value is None else str(event_source_value),
                 tasks_total=int(tasks_total_value),
                 tasks_pending=int(tasks_pending_value),
                 tasks_queued=int(tasks_queued_value),
@@ -237,14 +294,12 @@ async def count_run_summaries(
     created_before_ms: int | None = None,
 ) -> int:
     task_agg = _task_agg_subquery()
-    approvals_agg = _approvals_agg_subquery()
     computed_status, *_ = _computed_status_expr(task_agg=task_agg, label=None)
 
     stmt: Select[tuple[int]] = (
         select(func.count(RunRow.run_id))
         .select_from(RunRow)
         .outerjoin(task_agg, task_agg.c.run_id == RunRow.run_id)
-        .outerjoin(approvals_agg, approvals_agg.c.run_id == RunRow.run_id)
     )
 
     if status is not None:
@@ -259,49 +314,7 @@ async def count_run_summaries(
 
 
 async def get_run_summary(session: AsyncSession, run_id: str) -> RunSummary | None:
-    normalized = run_id.strip()
-    if not normalized:
-        raise ValueError("run_id must be non-empty")
-
-    task_agg = _task_agg_subquery()
-    approvals_agg = _approvals_agg_subquery()
-
-    (
-        computed_status,
-        tasks_total,
-        tasks_pending,
-        tasks_queued,
-        tasks_running,
-        tasks_succeeded,
-        tasks_failed,
-        tasks_canceled,
-        _tasks_archived,
-    ) = _computed_status_expr(task_agg=task_agg)
-
-    approvals_total = func.coalesce(approvals_agg.c.approvals_total, 0)
-    approvals_pending = func.coalesce(approvals_agg.c.approvals_pending, 0)
-
-    stmt = (
-        select(
-            RunRow,
-            RunPacketRow.packet,
-            computed_status,
-            tasks_total.label("tasks_total"),
-            tasks_pending.label("tasks_pending"),
-            tasks_queued.label("tasks_queued"),
-            tasks_running.label("tasks_running"),
-            tasks_succeeded.label("tasks_succeeded"),
-            tasks_failed.label("tasks_failed"),
-            tasks_canceled.label("tasks_canceled"),
-            approvals_total.label("approvals_total"),
-            approvals_pending.label("approvals_pending"),
-        )
-        .outerjoin(task_agg, task_agg.c.run_id == RunRow.run_id)
-        .outerjoin(approvals_agg, approvals_agg.c.run_id == RunRow.run_id)
-        .outerjoin(RunPacketRow, RunPacketRow.run_id == RunRow.run_id)
-        .where(RunRow.run_id == normalized)
-        .limit(1)
-    )
+    stmt = _get_run_summary_stmt(run_id)
     result = await session.execute(stmt)
     row = result.one_or_none()
     if row is None:
@@ -309,7 +322,8 @@ async def get_run_summary(session: AsyncSession, run_id: str) -> RunSummary | No
 
     (
         run_row,
-        packet,
+        event_type_value,
+        event_source_value,
         status_value,
         tasks_total_value,
         tasks_pending_value,
@@ -322,16 +336,14 @@ async def get_run_summary(session: AsyncSession, run_id: str) -> RunSummary | No
         approvals_pending_value,
     ) = row
 
-    event_type, event_source = _extract_event_type_source(packet)
-
     return RunSummary(
         run_id=run_row.run_id,
         created_at_ms=run_row.created_at_ms,
         started_at_ms=run_row.started_at_ms,
         completed_at_ms=run_row.completed_at_ms,
         status=RunStatus(str(status_value)),
-        event_type=event_type,
-        event_source=event_source,
+        event_type=None if event_type_value is None else str(event_type_value),
+        event_source=None if event_source_value is None else str(event_source_value),
         tasks_total=int(tasks_total_value),
         tasks_pending=int(tasks_pending_value),
         tasks_queued=int(tasks_queued_value),

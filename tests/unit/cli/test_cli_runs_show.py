@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,10 +11,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine
 from sqlalchemy.pool import StaticPool
+from typer.testing import CliRunner
 
 from reflexor.application.services import RunQueryService, TaskQueryService
 from reflexor.cli.client import ApiClient, LocalClient
 from reflexor.cli.commands.runs import _build_run_show_payload
+from reflexor.cli.container import CliContainer
+from reflexor.cli.main import app
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
 from reflexor.domain.models import Task, ToolCall
@@ -290,3 +294,99 @@ async def test_runs_show_payload_uses_api_client_calls() -> None:
     assert payload["run"]["summary"]["run_id"] == run_id
     assert payload["task_status_counts"] == {"queued": 1, "succeeded": 1}
     assert len(seen) == 2
+
+
+@pytest.mark.asyncio
+async def test_runs_show_payload_uses_summary_counts_when_task_preview_is_truncated() -> None:
+    run_id = "00000000-0000-4000-8000-000000000099"
+
+    class _TruncatedClient:
+        async def get_run(self, requested_run_id: str) -> dict[str, object]:
+            assert requested_run_id == run_id
+            return {
+                "summary": {
+                    "run_id": run_id,
+                    "created_at_ms": 1_000,
+                    "started_at_ms": None,
+                    "completed_at_ms": None,
+                    "status": "running",
+                    "event_type": "webhook",
+                    "event_source": "tests",
+                    "tasks_total": 250,
+                    "tasks_pending": 0,
+                    "tasks_queued": 125,
+                    "tasks_running": 25,
+                    "tasks_succeeded": 100,
+                    "tasks_failed": 0,
+                    "tasks_canceled": 0,
+                    "approvals_total": 0,
+                    "approvals_pending": 0,
+                },
+                "run_packet": {"run_id": run_id, "event": {"event_id": "e1"}},
+            }
+
+        async def list_tasks(
+            self,
+            *,
+            limit: int,
+            offset: int,
+            run_id: str | None = None,
+            status: TaskStatus | None = None,
+        ) -> dict[str, object]:
+            assert limit == 200
+            assert offset == 0
+            assert run_id == "00000000-0000-4000-8000-000000000099"
+            assert status is None
+            return {
+                "limit": limit,
+                "offset": offset,
+                "total": 250,
+                "items": [
+                    {
+                        "task_id": "t1",
+                        "run_id": run_id,
+                        "name": "task-1",
+                        "status": "queued",
+                        "attempts": 0,
+                        "max_attempts": 3,
+                        "timeout_s": 60,
+                        "depends_on": [],
+                        "tool_call_id": None,
+                        "tool_name": None,
+                        "permission_scope": None,
+                        "idempotency_key": None,
+                        "tool_call_status": None,
+                    }
+                ],
+            }
+
+    payload = await _build_run_show_payload(_TruncatedClient(), run_id)  # type: ignore[arg-type]
+
+    assert payload["task_status_counts"] == {
+        "queued": 125,
+        "running": 25,
+        "succeeded": 100,
+    }
+
+
+def test_runs_show_returns_json_not_found_error_for_missing_run() -> None:
+    class _MissingRunClient:
+        async def get_run(self, _run_id: str) -> dict[str, object]:
+            raise KeyError("run not found")
+
+        async def list_tasks(self, **_kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("not used")
+
+    container = CliContainer.build(
+        settings=ReflexorSettings(),
+        client=_MissingRunClient(),  # type: ignore[arg-type]
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["runs", "show", "missing-run", "--json"], obj=container)
+
+    assert result.exit_code == 1
+    payload = cast(dict[str, object], json.loads(result.output))
+    assert payload["ok"] is False
+    assert payload["error_code"] == "not_found"
+    assert payload["message"] == "run not found"
