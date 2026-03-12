@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 
 import httpx
 
@@ -22,6 +23,13 @@ class ApiClient:
     _owns_http: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        normalized_base_url = self.base_url.strip()
+        parsed_base_url = httpx.URL(normalized_base_url)
+        if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.host:
+            raise ValueError("base_url must be an absolute http(s) URL")
+        if parsed_base_url.query or parsed_base_url.fragment:
+            raise ValueError("base_url must not include query params or fragments")
+        self.base_url = str(parsed_base_url).rstrip("/")
         if self.http is None:
             self.http = httpx.AsyncClient(timeout=10.0)
             self._owns_http = True
@@ -37,6 +45,12 @@ class ApiClient:
             headers["X-API-Key"] = self.admin_api_key
         return headers
 
+    def _path_segment(self, value: str, *, field_name: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"{field_name} must be non-empty")
+        return quote(normalized, safe="")
+
     async def _request_json(
         self,
         method: str,
@@ -47,15 +61,29 @@ class ApiClient:
     ) -> object:
         http = self.http
         assert http is not None
-        response = await http.request(
-            method=method,
-            url=self._url(path),
-            headers=self._headers(),
-            params=params,
-            json=json_body,
-        )
+        filtered_params = None
+        if params is not None:
+            filtered_params = {key: value for key, value in params.items() if value is not None}
+        if json_body is None:
+            response = await http.request(
+                method=method,
+                url=self._url(path),
+                headers=self._headers(),
+                params=filtered_params,
+            )
+        else:
+            response = await http.request(
+                method=method,
+                url=self._url(path),
+                headers=self._headers(),
+                params=filtered_params,
+                json=json_body,
+            )
         response.raise_for_status()
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise httpx.RemoteProtocolError("response did not contain valid JSON") from exc
 
     async def submit_event(self, event: Event) -> dict[str, object]:
         payload = {
@@ -88,7 +116,8 @@ class ApiClient:
         return cast(dict[str, object], data)
 
     async def get_run(self, run_id: str) -> dict[str, object]:
-        data = await self._request_json("GET", f"/v1/runs/{run_id}")
+        path = f"/v1/runs/{self._path_segment(run_id, field_name='run_id')}"
+        data = await self._request_json("GET", path)
         return cast(dict[str, object], data)
 
     async def list_tasks(
@@ -134,14 +163,18 @@ class ApiClient:
     ) -> dict[str, object]:
         json_body = None if decided_by is None else {"decided_by": decided_by}
         data = await self._request_json(
-            "POST", f"/v1/approvals/{approval_id}/approve", json_body=json_body
+            "POST",
+            f"/v1/approvals/{self._path_segment(approval_id, field_name='approval_id')}/approve",
+            json_body=json_body,
         )
         return cast(dict[str, object], data)
 
     async def deny(self, approval_id: str, *, decided_by: str | None = None) -> dict[str, object]:
         json_body = None if decided_by is None else {"decided_by": decided_by}
         data = await self._request_json(
-            "POST", f"/v1/approvals/{approval_id}/deny", json_body=json_body
+            "POST",
+            f"/v1/approvals/{self._path_segment(approval_id, field_name='approval_id')}/deny",
+            json_body=json_body,
         )
         return cast(dict[str, object], data)
 
@@ -204,7 +237,10 @@ class ApiClient:
         json_body = None if cleared_by is None else {"cleared_by": cleared_by}
         data = await self._request_json(
             "POST",
-            f"/v1/suppressions/{signature_hash}/clear",
+            (
+                "/v1/suppressions/"
+                f"{self._path_segment(signature_hash, field_name='signature_hash')}/clear"
+            ),
             json_body=json_body,
         )
         return cast(dict[str, object], data)

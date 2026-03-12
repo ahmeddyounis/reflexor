@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from reflexor.cli.container import CliContainer
 from reflexor.cli.main import app
+from reflexor.cli.output import TableColumn, render_table
 from reflexor.config import ReflexorSettings
 
 
@@ -64,3 +65,13 @@ def test_runs_list_json_output_is_valid_and_has_expected_keys() -> None:
     assert payload["total"] == 1
     assert isinstance(payload["items"], list)
     assert payload["items"][0]["run_id"] == "run-1"
+
+
+def test_render_table_escapes_terminal_control_characters() -> None:
+    rendered = render_table(
+        [{"name": "bad\x1b[31mname\nnext"}],
+        columns=[TableColumn("name", "NAME", max_width=40)],
+    )
+
+    assert "\x1b" not in rendered
+    assert "bad\\x1b[31mname\\x0anext" in rendered

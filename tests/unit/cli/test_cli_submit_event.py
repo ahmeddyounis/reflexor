@@ -172,3 +172,55 @@ def test_submit_event_submits_via_api_client() -> None:
         assert len(seen) == 1
     finally:
         asyncio.run(http.aclose())
+
+
+def test_submit_event_returns_json_error_for_remote_request_failures() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.AsyncClient(transport=transport)
+    try:
+        client = ApiClient(base_url="https://example.test/base", admin_api_key="k", http=http)
+        container = CliContainer.build(settings=ReflexorSettings(), client=client)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["submit-event", "--type", "t", "--payload", '{"x": true}', "--json"],
+            obj=container,
+        )
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert data["error_code"] == "request_failed"
+        assert "connection failed" in data["message"]
+    finally:
+        asyncio.run(http.aclose())
+
+
+def test_submit_event_returns_json_error_for_invalid_remote_json() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(202, text="not-json")
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.AsyncClient(transport=transport)
+    try:
+        client = ApiClient(base_url="https://example.test/base", admin_api_key="k", http=http)
+        container = CliContainer.build(settings=ReflexorSettings(), client=client)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["submit-event", "--type", "t", "--payload", '{"x": true}', "--json"],
+            obj=container,
+        )
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert data["error_code"] == "request_failed"
+        assert data["message"] == "response did not contain valid JSON"
+    finally:
+        asyncio.run(http.aclose())

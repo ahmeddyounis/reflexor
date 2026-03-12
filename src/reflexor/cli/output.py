@@ -14,7 +14,7 @@ import typer
 
 
 def echo(message: str = "", *, err: bool = False) -> None:
-    typer.echo(message, err=err)
+    typer.echo(_sanitize_terminal_text(message, preserve_newlines=True), err=err)
 
 
 def print_json(data: object, *, pretty: bool = True) -> None:
@@ -55,12 +55,27 @@ def _truncate(text: str, *, max_width: int) -> str:
     return f"{text[: max_width - 3]}..."
 
 
+def _sanitize_terminal_text(text: object, *, preserve_newlines: bool) -> str:
+    rendered = str(text)
+    sanitized: list[str] = []
+    for char in rendered:
+        codepoint = ord(char)
+        if char == "\n" and preserve_newlines:
+            sanitized.append(char)
+            continue
+        if codepoint < 32 or codepoint == 127:
+            sanitized.append(f"\\x{codepoint:02x}")
+            continue
+        sanitized.append(char)
+    return "".join(sanitized)
+
+
 def _stringify_cell(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
-    return str(value)
+    return _sanitize_terminal_text(value, preserve_newlines=False)
 
 
 def render_table(

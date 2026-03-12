@@ -38,6 +38,13 @@ def _http_error_payload(exc: httpx.HTTPStatusError) -> tuple[str, str, int]:
     return error_code, message, exit_code
 
 
+def _request_error_payload(exc: httpx.RequestError) -> tuple[str, str, int]:
+    message = str(exc).strip()
+    if not message:
+        message = "request failed"
+    return "request_failed", message, 1
+
+
 def print_query_error(
     exc: Exception,
     *,
@@ -66,6 +73,8 @@ def print_query_error(
         exit_code = 2
     elif isinstance(exc, httpx.HTTPStatusError):
         error_code, message, exit_code = _http_error_payload(exc)
+    elif isinstance(exc, httpx.RequestError):
+        error_code, message, exit_code = _request_error_payload(exc)
     else:
         raise exc
 

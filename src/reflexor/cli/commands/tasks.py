@@ -44,7 +44,7 @@ def register(app: typer.Typer) -> None:
                     limit=limit, offset=offset, run_id=run_id, status=status
                 )
             )
-        except (KeyError, ValueError, httpx.HTTPStatusError) as exc:
+        except (KeyError, ValueError, httpx.HTTPError) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return
 

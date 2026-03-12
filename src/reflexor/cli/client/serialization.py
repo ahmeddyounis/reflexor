@@ -52,6 +52,7 @@ def _task_summary_to_dict(summary: StoredTaskSummary) -> dict[str, object]:
         "max_attempts": int(summary.max_attempts),
         "timeout_s": int(summary.timeout_s),
         "depends_on": list(summary.depends_on),
+        "created_at_ms": int(summary.created_at_ms),
         "tool_call_id": summary.tool_call_id,
         "tool_name": summary.tool_name,
         "permission_scope": summary.permission_scope,

@@ -9,7 +9,7 @@ JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
 PRETTY_OPT = typer.Option(False, "--pretty", help="Pretty-print JSON (implies --json).")
 HOST_OPT = typer.Option("127.0.0.1", help="Bind host.")
 PORT_OPT = typer.Option(8000, help="Bind port.")
-RELOAD_OPT = typer.Option(True, help="Enable auto-reload (dev only).")
+RELOAD_OPT = typer.Option(False, help="Enable auto-reload (dev only).")
 
 
 def register(app: typer.Typer) -> None:
@@ -30,6 +30,15 @@ def register(app: typer.Typer) -> None:
 
         pretty_enabled = bool(container.output_pretty or pretty)
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        if reload and container.settings.profile != "dev":
+            message = "reload is only supported when profile=dev"
+            if json_enabled:
+                output.print_json(
+                    {"ok": False, "error_code": "invalid_input", "message": message},
+                    pretty=pretty_enabled,
+                )
+                raise typer.Exit(2) from None
+            output.abort(message, exit_code=2)
         if json_enabled:
             output.print_json(
                 {"ok": True, "command": "api", "host": host, "port": port, "reload": reload},
