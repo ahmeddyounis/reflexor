@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class DomainError(Exception):
     """Base class for domain-level errors.
 
@@ -20,17 +20,17 @@ class DomainError(Exception):
         return f"{self.message} (context={self.context})"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class SchemaViolation(DomainError):
     """Raised when input violates a schema/contract."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class InvariantViolation(DomainError):
     """Raised when a domain invariant is violated."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class InvalidTransition(DomainError):
     """Raised when attempting an invalid state transition."""
 
@@ -46,7 +46,7 @@ class InvalidTransition(DomainError):
         object.__setattr__(self, "context", merged)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class PolicyDenied(DomainError):
     """Raised when policy denies an action (placeholder; policy system TBD)."""
 
@@ -59,7 +59,7 @@ class PolicyDenied(DomainError):
         object.__setattr__(self, "context", merged)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class BudgetExceeded(DomainError):
     """Raised when a run exceeds budget (time/tokens/cost) (placeholder)."""
 

@@ -65,3 +65,9 @@ def test_budget_exceeded_includes_budget_field() -> None:
 def test_budget_exceeded_with_none_budget_keeps_context_clean() -> None:
     err = BudgetExceeded("over budget", budget=None, context={"a": 1})
     assert err.context == {"a": 1}
+
+
+def test_domain_errors_allow_traceback_assignment() -> None:
+    err = InvalidTransition("bad transition")
+    err.__traceback__ = None
+    assert err.__traceback__ is None

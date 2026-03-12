@@ -26,20 +26,31 @@ from reflexor.domain.errors import (
 from reflexor.observability.context import correlation_context
 
 logger = logging.getLogger(__name__)
+_MAX_REQUEST_ID_CHARS = 200
+
+
+def normalize_request_id_header(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    trimmed = value.strip()
+    if not trimmed or len(trimmed) > _MAX_REQUEST_ID_CHARS:
+        return None
+    if any(ord(ch) < 33 or ord(ch) > 126 for ch in trimmed):
+        return None
+    return trimmed
 
 
 def _get_request_id(request: Request) -> str:
     state_id = getattr(getattr(request, "state", None), "request_id", None)
     if isinstance(state_id, str):
-        trimmed = state_id.strip()
-        if trimmed:
-            return trimmed
+        normalized = normalize_request_id_header(state_id)
+        if normalized is not None:
+            return normalized
 
-    header_id = request.headers.get("X-Request-ID")
-    if header_id is not None:
-        trimmed = header_id.strip()
-        if trimmed:
-            return trimmed
+    normalized_header = normalize_request_id_header(request.headers.get("X-Request-ID"))
+    if normalized_header is not None:
+        return normalized_header
 
     return str(uuid4())
 
@@ -93,6 +104,11 @@ def _validation_errors(exc: ValidationError | RequestValidationError) -> list[ob
         return list(exc.errors())
 
 
+def _is_not_found_key_error(message: str) -> bool:
+    normalized = message.strip().lower()
+    return normalized.startswith("unknown ") or "not found" in normalized
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _handle_request_validation_error(
@@ -132,17 +148,25 @@ def install_error_handlers(app: FastAPI) -> None:
 
         if status_code == 401:
             error_code = "unauthorized"
+            message = _str_detail(detail) or "unauthorized"
         elif status_code == 404:
             error_code = "not_found"
+            message = _str_detail(detail) or "not found"
         elif status_code == 409:
             error_code = "conflict"
+            message = _str_detail(detail) or "conflict"
+        elif status_code == 501:
+            error_code = "not_implemented"
+            message = "not implemented"
         elif status_code >= 500:
             error_code = "http_error"
+            message = "internal server error"
         else:
             error_code = "bad_request"
+            message = _str_detail(detail) or "request failed"
 
         with correlation_context(**_extract_correlation_ids(request)):
-            if status_code >= 500:
+            if status_code >= 500 and status_code != 501:
                 logger.exception(
                     "http exception",
                     extra={"request_id": _get_request_id(request), "status_code": status_code},
@@ -154,14 +178,14 @@ def install_error_handlers(app: FastAPI) -> None:
                 )
 
         details_payload: dict[str, object] | None = None
-        if detail is not None and not isinstance(detail, str):
+        if status_code < 500 and detail is not None and not isinstance(detail, str):
             details_payload = {"detail": detail}
 
         return _error_response(
             request,
             status_code=status_code,
             error_code=error_code,
-            message=_str_detail(detail) or "request failed",
+            message=message,
             details=details_payload,
             headers=headers,
         )
@@ -208,12 +232,21 @@ def install_error_handlers(app: FastAPI) -> None:
     async def _handle_key_error(request: Request, exc: KeyError) -> JSONResponse:
         message = str(exc.args[0]) if exc.args else str(exc)
         with correlation_context(**_extract_correlation_ids(request)):
-            logger.info("not found", extra={"request_id": _get_request_id(request)})
+            if _is_not_found_key_error(message):
+                logger.info("not found", extra={"request_id": _get_request_id(request)})
+                return _error_response(
+                    request,
+                    status_code=404,
+                    error_code="not_found",
+                    message=message,
+                )
+
+            logger.exception("unhandled key error", extra={"request_id": _get_request_id(request)})
         return _error_response(
             request,
-            status_code=404,
-            error_code="not_found",
-            message=message,
+            status_code=500,
+            error_code="internal_error",
+            message="internal server error",
         )
 
     @app.exception_handler(Exception)
@@ -229,4 +262,4 @@ def install_error_handlers(app: FastAPI) -> None:
         )
 
 
-__all__ = ["ErrorResponse", "install_error_handlers"]
+__all__ = ["ErrorResponse", "install_error_handlers", "normalize_request_id_header"]

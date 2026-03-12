@@ -16,6 +16,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from reflexor.api.errors import normalize_request_id_header
 from reflexor.api.schemas import ErrorResponse
 from reflexor.observability.context import correlation_context, request_id_context
 from reflexor.observability.metrics import ReflexorMetrics
@@ -92,11 +93,9 @@ def install_middleware(app: FastAPI) -> None:
 
 
 def _get_or_create_request_id(request: Request) -> str:
-    header_id = request.headers.get("X-Request-ID")
-    if header_id is not None:
-        trimmed = header_id.strip()
-        if trimmed:
-            return trimmed
+    normalized = normalize_request_id_header(request.headers.get("X-Request-ID"))
+    if normalized is not None:
+        return normalized
     return str(uuid4())
 
 

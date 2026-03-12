@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from pathlib import Path
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
@@ -176,3 +177,79 @@ def test_domain_invariant_errors_return_409_and_structured_error(tmp_path: Path)
         payload = response.json()
         _assert_error_shape(payload)
         assert payload["error_code"] == "invariant_violation"
+
+
+def test_non_not_found_key_errors_return_500(tmp_path: Path) -> None:
+    db_path = tmp_path / "reflexor_api_error_keyerror_500.db"
+    _create_schema(db_path)
+
+    app = create_app(
+        settings=ReflexorSettings(
+            workspace_root=tmp_path,
+            enabled_scopes=[],
+            database_url=f"sqlite+aiosqlite:///{db_path}",
+        )
+    )
+
+    @app.get("/boom-keyerror")
+    async def _boom_keyerror() -> dict[str, object]:
+        raise KeyError("boom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/boom-keyerror")
+        assert response.status_code == 500
+        payload = response.json()
+        _assert_error_shape(payload)
+        assert payload["error_code"] == "internal_error"
+        assert payload["message"] == "internal server error"
+
+
+def test_not_found_like_key_errors_still_return_404(tmp_path: Path) -> None:
+    db_path = tmp_path / "reflexor_api_error_keyerror_404.db"
+    _create_schema(db_path)
+
+    app = create_app(
+        settings=ReflexorSettings(
+            workspace_root=tmp_path,
+            enabled_scopes=[],
+            database_url=f"sqlite+aiosqlite:///{db_path}",
+        )
+    )
+
+    @app.get("/missing-keyerror")
+    async def _missing_keyerror() -> dict[str, object]:
+        raise KeyError("unknown run_id: 'run-1'")
+
+    with TestClient(app) as client:
+        response = client.get("/missing-keyerror")
+        assert response.status_code == 404
+        payload = response.json()
+        _assert_error_shape(payload)
+        assert payload["error_code"] == "not_found"
+        assert "unknown run_id" in payload["message"]
+
+
+def test_http_exception_500_redacts_detail(tmp_path: Path) -> None:
+    db_path = tmp_path / "reflexor_api_error_http_500.db"
+    _create_schema(db_path)
+
+    app = create_app(
+        settings=ReflexorSettings(
+            workspace_root=tmp_path,
+            enabled_scopes=[],
+            database_url=f"sqlite+aiosqlite:///{db_path}",
+        )
+    )
+
+    @app.get("/boom-http")
+    async def _boom_http() -> dict[str, object]:
+        raise HTTPException(status_code=500, detail="secret internal detail")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/boom-http")
+        assert response.status_code == 500
+        payload = response.json()
+        _assert_error_shape(payload)
+        assert payload["error_code"] == "http_error"
+        assert payload["message"] == "internal server error"
+        assert "secret internal detail" not in response.text

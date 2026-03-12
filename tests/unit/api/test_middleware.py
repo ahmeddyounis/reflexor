@@ -125,3 +125,21 @@ def test_install_middleware_passes_inbound_trace_headers_to_request_span(
     assert captured_traceparents == [
         "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     ]
+
+
+def test_install_middleware_replaces_invalid_request_id_header() -> None:
+    app = FastAPI()
+    install_middleware(app)
+
+    @app.get("/ping")
+    async def _ping() -> dict[str, bool]:
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.get("/ping", headers={"X-Request-ID": "bad id"})
+
+    assert response.status_code == 200
+    request_id = response.headers.get("X-Request-ID")
+    assert request_id is not None
+    assert request_id != "bad id"
+    assert " " not in request_id
