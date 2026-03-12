@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from reflexor.config import ReflexorSettings
 from reflexor.tools.sdk import Tool, ToolContext, ToolResult
@@ -23,7 +24,7 @@ class InProcessBackend:
     ) -> ToolResult:
         _ = settings
         try:
-            return await asyncio.wait_for(tool.run(args, ctx), timeout=ctx.timeout_s)
+            raw_result = await asyncio.wait_for(tool.run(args, ctx), timeout=ctx.timeout_s)
         except TimeoutError:
             return ToolResult(
                 ok=False,
@@ -36,4 +37,15 @@ class InProcessBackend:
                 error_code="TOOL_ERROR",
                 error_message=f"tool raised {type(exc).__name__}",
                 debug={"exception": repr(exc)},
+            )
+
+        try:
+            return ToolResult.model_validate(raw_result)
+        except ValidationError as exc:
+            errors = json.loads(exc.json(include_input=False))
+            return ToolResult(
+                ok=False,
+                error_code="TOOL_ERROR",
+                error_message="tool returned invalid result",
+                debug={"errors": errors},
             )

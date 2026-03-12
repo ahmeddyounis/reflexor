@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -45,8 +47,9 @@ class SubprocessSandboxBackend:
     max_stderr_bytes: int = 32_000
 
     def __post_init__(self) -> None:
-        allowlist = {name.strip() for name in self.env_allowlist if name.strip()}
-        if len(allowlist) != len(list(self.env_allowlist)):
+        raw_allowlist = tuple(self.env_allowlist)
+        allowlist = {name.strip() for name in raw_allowlist if name.strip()}
+        if len(allowlist) != len(raw_allowlist):
             raise ValueError("env_allowlist entries must be non-empty and unique after trimming")
 
         self.env_allowlist = tuple(sorted(allowlist))
@@ -54,6 +57,28 @@ class SubprocessSandboxBackend:
         for key in self.extra_env:
             if key not in allowlist:
                 raise ValueError("extra_env keys must be present in env_allowlist")
+
+        python_executable = str(self.python_executable).strip()
+        if not python_executable:
+            raise ValueError("python_executable must be non-empty")
+        python_path = Path(python_executable).expanduser()
+        resolved_python = str(python_path)
+        if not python_path.is_absolute():
+            resolved_python = shutil.which(python_executable) or ""
+        if not resolved_python:
+            raise ValueError("python_executable could not be resolved")
+        self.python_executable = resolved_python
+
+        module = str(self.module).strip()
+        if not module:
+            raise ValueError("module must be non-empty")
+        self.module = module
+
+        if self.registry_factory is not None:
+            registry_factory = self.registry_factory.strip()
+            if not registry_factory:
+                raise ValueError("registry_factory must be non-empty when provided")
+            self.registry_factory = registry_factory
 
         if int(self.protocol_version) != 1:
             raise ValueError("unsupported protocol_version")

@@ -121,6 +121,23 @@ class SlowTool:
         return ToolResult(ok=True, data={"ok": True})
 
 
+class InvalidResultTool:
+    manifest = ToolManifest(
+        name="tests.invalid_result",
+        version="0.1.0",
+        description="Tool that returns an invalid result payload.",
+        permission_scope="fs.read",
+        idempotent=True,
+        max_output_bytes=10_000,
+    )
+    ArgsModel = SleepArgs
+
+    async def run(self, args: SleepArgs, ctx: ToolContext) -> ToolResult:
+        _ = args
+        _ = ctx
+        return {"ok": False}  # type: ignore[return-value]
+
+
 def test_runner_invalid_args_fail_fast(tmp_path: Path) -> None:
     registry = ToolRegistry()
     registry.register(StrictTool())
@@ -229,3 +246,20 @@ def test_runner_enforces_timeout(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.error_code == "TIMEOUT"
+
+
+def test_runner_handles_invalid_tool_result(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(InvalidResultTool())
+    runner = ToolRunner(registry=registry, settings=ReflexorSettings(workspace_root=tmp_path))
+
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=1.0)
+    result = asyncio.run(runner.run_tool("tests.invalid_result", {}, ctx=ctx))
+
+    assert result.ok is False
+    assert result.error_code == "TOOL_ERROR"
+    assert result.error_message == "tool returned invalid result"
+    assert result.debug is not None
+    errors = result.debug.get("errors")
+    assert isinstance(errors, list)
+    assert errors

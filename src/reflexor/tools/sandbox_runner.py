@@ -8,45 +8,28 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from reflexor.config import ReflexorSettings
 from reflexor.tools.builtin_registry import build_builtin_registry
+from reflexor.tools.execution_backend.protocol import (
+    _SANDBOX_RESPONSE_MARKER,
+)
+from reflexor.tools.execution_backend.protocol import (
+    _SandboxRequest as SandboxRequest,
+)
+from reflexor.tools.execution_backend.protocol import (
+    _SandboxResponse as SandboxResponse,
+)
+from reflexor.tools.execution_backend.protocol import (
+    _SandboxToolContext as SandboxToolContext,
+)
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolContext, ToolResult
 
 _PROTOCOL_VERSION = 1
 _MAX_REQUEST_BYTES = 2_000_000
-_RESPONSE_MARKER = b"REFLEXOR_SANDBOX_RESPONSE_V1\n"
-
-
-class SandboxToolContext(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    workspace_root: str
-    dry_run: bool = True
-    timeout_s: float = 60.0
-    correlation_ids: dict[str, str | None] = Field(default_factory=dict)
-
-
-class SandboxRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    protocol_version: int = _PROTOCOL_VERSION
-    tool_name: str
-    args: dict[str, object] = Field(default_factory=dict)
-    ctx: SandboxToolContext
-    settings: dict[str, object] = Field(default_factory=dict)
-    registry_factory: str | None = None
-    max_memory_mb: int | None = None
-
-
-class SandboxResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    protocol_version: int = _PROTOCOL_VERSION
-    tool_result: ToolResult
 
 
 ToolRegistryFactory = Callable[[ReflexorSettings], object]
@@ -70,9 +53,7 @@ def _import_registry_factory(import_path: str) -> ToolRegistryFactory:
 
 
 def _tool_ctx_from_request(ctx: SandboxToolContext) -> ToolContext:
-    workspace_root = Path(ctx.workspace_root).expanduser()
-    if not workspace_root.is_absolute():
-        workspace_root = workspace_root.resolve()
+    workspace_root = Path(ctx.workspace_root)
     return ToolContext(
         workspace_root=workspace_root,
         dry_run=bool(ctx.dry_run),
@@ -84,7 +65,7 @@ def _tool_ctx_from_request(ctx: SandboxToolContext) -> ToolContext:
 def _write_response(result: ToolResult) -> None:
     payload = SandboxResponse(tool_result=result).model_dump(mode="json")
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    sys.stdout.buffer.write(_RESPONSE_MARKER)
+    sys.stdout.buffer.write(_SANDBOX_RESPONSE_MARKER)
     sys.stdout.buffer.write(data)
     sys.stdout.buffer.flush()
 
@@ -215,7 +196,11 @@ async def main() -> None:
         )
         return
 
-    result = await _run_request(request)
+    try:
+        result = await _run_request(request)
+    except Exception as exc:
+        _protocol_error(message="sandbox execution failed", debug={"exception": repr(exc)})
+        return
     _write_response(result)
 
 

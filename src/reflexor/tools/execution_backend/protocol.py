@@ -1,11 +1,21 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+import math
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from reflexor.config import ReflexorSettings
 from reflexor.tools.sdk import ToolResult
 
 _SANDBOX_RESPONSE_MARKER = b"REFLEXOR_SANDBOX_RESPONSE_V1\n"
+
+
+def _normalize_non_empty_str(value: str, *, field_name: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{field_name} must be non-empty")
+    return text
 
 
 def _extract_sandbox_json(stdout_bytes: bytes) -> bytes | None:
@@ -47,6 +57,25 @@ class _SandboxToolContext(BaseModel):
     timeout_s: float
     correlation_ids: dict[str, str | None] = Field(default_factory=dict)
 
+    @field_validator("workspace_root")
+    @classmethod
+    def _validate_workspace_root(cls, value: str) -> str:
+        text = _normalize_non_empty_str(value, field_name="workspace_root")
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError("workspace_root must be an absolute path")
+        return str(path)
+
+    @field_validator("timeout_s")
+    @classmethod
+    def _validate_timeout_s(cls, value: float) -> float:
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("timeout_s must be finite")
+        if number <= 0:
+            raise ValueError("timeout_s must be > 0")
+        return number
+
 
 class _SandboxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -58,6 +87,28 @@ class _SandboxRequest(BaseModel):
     settings: dict[str, object]
     registry_factory: str | None = None
     max_memory_mb: int | None = None
+
+    @field_validator("tool_name")
+    @classmethod
+    def _validate_tool_name(cls, value: str) -> str:
+        return _normalize_non_empty_str(value, field_name="tool_name")
+
+    @field_validator("registry_factory")
+    @classmethod
+    def _validate_registry_factory(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_non_empty_str(value, field_name="registry_factory")
+
+    @field_validator("max_memory_mb")
+    @classmethod
+    def _validate_max_memory_mb(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("max_memory_mb must be > 0")
+        return parsed
 
 
 class _SandboxResponse(BaseModel):
