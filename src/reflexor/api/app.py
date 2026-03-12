@@ -11,6 +11,7 @@ Clean Architecture:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,8 @@ from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings, get_settings
 from reflexor.observability.logging import configure_logging
 from reflexor.version import __version__
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -42,7 +45,19 @@ def create_app(
             AppContainer.build(settings=effective_settings) if container is None else container
         )
         app.state.container = effective_container
-        await effective_container.start()
+        try:
+            await effective_container.start()
+        except Exception:
+            try:
+                await effective_container.aclose()
+            except Exception:
+                logger.exception(
+                    "application startup cleanup failed",
+                    extra={"event_type": "api.lifespan.startup_cleanup.failed"},
+                )
+            if hasattr(app.state, "container"):
+                delattr(app.state, "container")
+            raise
         try:
             yield
         finally:

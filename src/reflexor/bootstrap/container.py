@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -206,6 +207,87 @@ def _memory_loader(
     return load_memory
 
 
+async def _close_callback(
+    callback: Callable[[], object],
+) -> None:
+    result = callback()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _close_resource(
+    *,
+    name: str,
+    callback: Callable[[], object],
+    errors: list[Exception],
+) -> None:
+    try:
+        await _close_callback(callback)
+    except Exception as exc:
+        logger.exception(
+            "app container resource close failed",
+            extra={"event_type": "app_container.close.failed", "resource": name},
+        )
+        errors.append(exc)
+
+
+async def _cleanup_failed_build_resources(
+    *,
+    engine: AsyncEngine | None,
+    queue: Queue | None,
+    circuit_breaker: CircuitBreaker | None,
+    owns_engine: bool,
+    owns_queue: bool,
+) -> None:
+    errors: list[Exception] = []
+
+    if circuit_breaker is not None:
+        aclose = getattr(circuit_breaker, "aclose", None)
+        if callable(aclose):
+            await _close_resource(name="circuit_breaker", callback=aclose, errors=errors)
+
+    if owns_queue and queue is not None:
+        await _close_resource(name="queue", callback=queue.aclose, errors=errors)
+
+    if owns_engine and engine is not None:
+        await _close_resource(name="engine", callback=engine.dispose, errors=errors)
+
+    if errors:
+        raise errors[0]
+
+
+def _run_or_schedule_cleanup(
+    cleanup: Coroutine[object, object, None], *, context: str
+) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            asyncio.run(cleanup)
+        except Exception:
+            logger.exception(
+                "%s cleanup failed",
+                context,
+                extra={"event_type": "app_container.cleanup.failed", "context": context},
+            )
+        return
+
+    task: asyncio.Task[None] = loop.create_task(cleanup)
+
+    def _log_cleanup_failure(done: asyncio.Task[None]) -> None:
+        with suppress(asyncio.CancelledError):
+            try:
+                done.result()
+            except Exception:
+                logger.exception(
+                    "%s cleanup failed",
+                    context,
+                    extra={"event_type": "app_container.cleanup.failed", "context": context},
+                )
+
+    task.add_done_callback(_log_cleanup_failure)
+
+
 @dataclass(frozen=True, slots=True)
 class _AppResources:
     engine: AsyncEngine
@@ -393,18 +475,26 @@ class AppContainer:
     async def aclose(self) -> None:
         """Close resources owned by this container."""
 
-        try:
-            await self.orchestrator_engine.aclose()
-        finally:
-            aclose = getattr(self.circuit_breaker, "aclose", None)
-            if aclose is not None:
-                result = aclose()
-                if inspect.isawaitable(result):
-                    await result
-            if self.resources.owns_queue:
-                await self.queue.aclose()
-            if self.resources.owns_engine:
-                await self.engine.dispose()
+        errors: list[Exception] = []
+
+        await _close_resource(
+            name="orchestrator_engine",
+            callback=self.orchestrator_engine.aclose,
+            errors=errors,
+        )
+
+        aclose = getattr(self.circuit_breaker, "aclose", None)
+        if callable(aclose):
+            await _close_resource(name="circuit_breaker", callback=aclose, errors=errors)
+
+        if self.resources.owns_queue:
+            await _close_resource(name="queue", callback=self.queue.aclose, errors=errors)
+
+        if self.resources.owns_engine:
+            await _close_resource(name="engine", callback=self.engine.dispose, errors=errors)
+
+        if errors:
+            raise errors[0]
 
     def build_executor_service(
         self,
@@ -450,6 +540,13 @@ class AppContainer:
         effective_metrics = ReflexorMetrics.build() if metrics is None else metrics
         configure_tracing(effective_settings)
 
+        effective_engine: AsyncEngine | None = None
+        effective_session_factory: AsyncSessionFactory | None = None
+        effective_queue: Queue | None = None
+        circuit_breaker: CircuitBreaker | None = None
+        owns_engine = False
+        owns_queue = False
+
         effective_engine, effective_session_factory, owns_engine = (
             _resolve_engine_and_session_factory(
                 settings=effective_settings,
@@ -457,82 +554,95 @@ class AppContainer:
                 session_factory=session_factory,
             )
         )
+        try:
+            assert effective_session_factory is not None
+            uow_factory = build_uow_factory(effective_session_factory)
+            repos = build_repo_providers(effective_settings)
+            effective_queue, owns_queue = build_queue(
+                effective_settings,
+                metrics=effective_metrics,
+                queue=queue,
+            )
 
-        uow_factory = build_uow_factory(effective_session_factory)
-        repos = build_repo_providers(effective_settings)
-        effective_queue, owns_queue = build_queue(
-            effective_settings,
-            metrics=effective_metrics,
-            queue=queue,
-        )
-
-        registry = tool_registry or build_builtin_registry(settings=effective_settings)
-        tool_runner = build_tool_runner(effective_settings, registry=registry)
-        policy_gate = build_policy_gate(effective_settings, metrics=effective_metrics)
-        policy_runner, circuit_breaker = build_policy_runner(
-            metrics=effective_metrics,
-            uow_factory=uow_factory,
-            repos=repos,
-            registry=registry,
-            runner=tool_runner,
-            gate=policy_gate,
-        )
-        effective_planner = planner or build_planner(
-            effective_settings,
-            registry=registry,
-            memory_loader=_memory_loader(
-                settings=effective_settings,
+            registry = tool_registry or build_builtin_registry(settings=effective_settings)
+            tool_runner = build_tool_runner(effective_settings, registry=registry)
+            policy_gate = build_policy_gate(effective_settings, metrics=effective_metrics)
+            policy_runner, circuit_breaker = build_policy_runner(
+                metrics=effective_metrics,
                 uow_factory=uow_factory,
                 repos=repos,
-            ),
-        )
-        orchestrator_engine = build_orchestrator_engine(
-            effective_settings,
-            metrics=effective_metrics,
-            uow_factory=uow_factory,
-            repos=repos,
-            queue=effective_queue,
-            registry=registry,
-            reflex_router=reflex_router,
-            reflex_classifier=reflex_classifier,
-            planner=effective_planner,
-            clock=clock,
-            run_sink=run_sink,
-        )
+                registry=registry,
+                runner=tool_runner,
+                gate=policy_gate,
+            )
+            effective_planner = planner or build_planner(
+                effective_settings,
+                registry=registry,
+                memory_loader=_memory_loader(
+                    settings=effective_settings,
+                    uow_factory=uow_factory,
+                    repos=repos,
+                ),
+            )
+            orchestrator_engine = build_orchestrator_engine(
+                effective_settings,
+                metrics=effective_metrics,
+                uow_factory=uow_factory,
+                repos=repos,
+                queue=effective_queue,
+                registry=registry,
+                reflex_router=reflex_router,
+                reflex_classifier=reflex_classifier,
+                planner=effective_planner,
+                clock=clock,
+                run_sink=run_sink,
+            )
 
-        services = build_app_services(
-            settings=effective_settings,
-            orchestrator_engine=orchestrator_engine,
-            uow_factory=uow_factory,
-            repos=repos,
-            queue=effective_queue,
-        )
+            services = build_app_services(
+                settings=effective_settings,
+                orchestrator_engine=orchestrator_engine,
+                uow_factory=uow_factory,
+                repos=repos,
+                queue=effective_queue,
+            )
 
-        resources = _AppResources(
-            engine=effective_engine,
-            session_factory=effective_session_factory,
-            uow_factory=uow_factory,
-            queue=effective_queue,
-            owns_engine=owns_engine,
-            owns_queue=owns_queue,
-        )
-        policy = _AppPolicy(
-            tool_registry=registry,
-            tool_runner=tool_runner,
-            policy_gate=policy_gate,
-            policy_runner=policy_runner,
-            circuit_breaker=circuit_breaker,
-        )
+            resources = _AppResources(
+                engine=effective_engine,
+                session_factory=effective_session_factory,
+                uow_factory=uow_factory,
+                queue=effective_queue,
+                owns_engine=owns_engine,
+                owns_queue=owns_queue,
+            )
+            policy = _AppPolicy(
+                tool_registry=registry,
+                tool_runner=tool_runner,
+                policy_gate=policy_gate,
+                policy_runner=policy_runner,
+                circuit_breaker=circuit_breaker,
+            )
 
-        return cls(
-            settings=effective_settings,
-            metrics=effective_metrics,
-            resources=resources,
-            repos=repos,
-            policy=policy,
-            orchestrator_engine=orchestrator_engine,
-            services=services,
-        )
+            return cls(
+                settings=effective_settings,
+                metrics=effective_metrics,
+                resources=resources,
+                repos=repos,
+                policy=policy,
+                orchestrator_engine=orchestrator_engine,
+                services=services,
+            )
+        except Exception:
+            _run_or_schedule_cleanup(
+                _cleanup_failed_build_resources(
+                    engine=effective_engine,
+                    queue=effective_queue,
+                    circuit_breaker=circuit_breaker,
+                    owns_engine=owns_engine,
+                    owns_queue=owns_queue,
+                ),
+                context="app container build",
+            )
+            raise
 
 
 __all__ = ["AppContainer", "RepoProviders"]

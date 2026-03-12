@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -33,3 +34,42 @@ def test_create_app_lifespan_startup_and_shutdown(tmp_path: Path) -> None:
         container = app.state.container
         assert isinstance(container, AppContainer)
         assert container.settings.workspace_root == tmp_path
+
+
+class _FailingStartupContainer:
+    def __init__(
+        self,
+        *,
+        settings: ReflexorSettings,
+        startup_error: Exception,
+        close_error: Exception | None = None,
+    ) -> None:
+        self.settings = settings
+        self._startup_error = startup_error
+        self._close_error = close_error
+        self.close_calls = 0
+
+    async def start(self) -> None:
+        raise self._startup_error
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        if self._close_error is not None:
+            raise self._close_error
+
+
+def test_create_app_closes_container_when_startup_fails(tmp_path: Path) -> None:
+    startup_error = RuntimeError("startup boom")
+    container = _FailingStartupContainer(
+        settings=ReflexorSettings(workspace_root=tmp_path),
+        startup_error=startup_error,
+        close_error=RuntimeError("close boom"),
+    )
+    app = create_app(container=container)
+
+    with pytest.raises(RuntimeError, match="startup boom"):
+        with TestClient(app):
+            pass
+
+    assert container.close_calls == 1
+    assert getattr(app.state, "container", None) is None
