@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -24,6 +25,15 @@ class Finding:
     osv_id_used: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class LookupFailure:
+    dependency: str
+    dependency_version: str | None
+    vuln_id: str
+    attempted_ids: tuple[str, ...]
+    errors: tuple[str, ...]
+
+
 _SEVERITY_ORDER = {
     "none": 0,
     "low": 1,
@@ -33,6 +43,16 @@ _SEVERITY_ORDER = {
     "unknown": 99,
     "ignored": -1,
 }
+
+
+def _parse_positive_finite_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be a finite value greater than 0")
+    return parsed
 
 
 def _read_allowlist(path: Path | None) -> set[str]:
@@ -47,7 +67,7 @@ def _read_allowlist(path: Path | None) -> set[str]:
         return set()
 
     # Allow JSON list (useful for machine edits), otherwise parse as newline-delimited text.
-    if stripped.startswith("["):
+    if stripped.startswith(("[", "{")):
         parsed = json.loads(stripped)
         if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
             raise ValueError("allowlist JSON must be a list[str]")
@@ -62,7 +82,7 @@ def _read_allowlist(path: Path | None) -> set[str]:
     return ids
 
 
-def _parse_pip_audit_json(path: Path) -> list[dict[str, Any]]:
+def _parse_pip_audit_json(path: Path) -> list[object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     deps = payload.get("dependencies")
     if not isinstance(deps, list):
@@ -182,6 +202,8 @@ def _best_effort_score_from_osv(vuln: Mapping[str, Any]) -> float | None:
                     candidate = float(score_text)
             except Exception:
                 continue
+            if not math.isfinite(candidate) or candidate < 0.0:
+                continue
             best = candidate if best is None else max(best, candidate)
 
     if best is not None:
@@ -209,18 +231,20 @@ def _severity_meets_threshold(severity: str, *, min_severity: str) -> bool:
 
 
 def _collect_findings(
-    deps: list[dict[str, Any]],
+    deps: list[object],
     *,
     allowlist: set[str],
     min_severity: str,
     fail_on_unknown: bool,
     timeout_s: float,
-) -> tuple[list[Finding], list[Finding], list[Finding]]:
+) -> tuple[list[Finding], list[Finding], list[Finding], list[LookupFailure]]:
     ignored: list[Finding] = []
     unknown: list[Finding] = []
     failing: list[Finding] = []
+    lookup_failures: list[LookupFailure] = []
 
     osv_cache: dict[str, dict[str, Any] | None] = {}
+    osv_errors: dict[str, str] = {}
 
     for dep in deps:
         if not isinstance(dep, dict):
@@ -267,6 +291,7 @@ def _collect_findings(
             candidates = [vuln_id, *aliases]
             best_score: float | None = None
             best_osv_id: str | None = None
+            candidate_errors: list[str] = []
 
             for candidate_id in candidates:
                 cached = osv_cache.get(candidate_id, ...)
@@ -277,10 +302,27 @@ def _collect_findings(
                         if exc.code == 404:
                             osv_cache[candidate_id] = None
                         else:
-                            raise
-                    except Exception:
+                            osv_errors[candidate_id] = f"HTTP {exc.code}"
+                            osv_cache[candidate_id] = None
+                    except urllib.error.URLError as exc:
+                        reason = exc.reason
+                        osv_errors[candidate_id] = (
+                            str(reason) if isinstance(reason, str) else repr(reason)
+                        )
+                        osv_cache[candidate_id] = None
+                    except TimeoutError:
+                        osv_errors[candidate_id] = "timed out"
+                        osv_cache[candidate_id] = None
+                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+                        osv_errors[candidate_id] = str(exc)
+                        osv_cache[candidate_id] = None
+                    except Exception as exc:
+                        osv_errors[candidate_id] = repr(exc)
                         osv_cache[candidate_id] = None
                 osv_payload = osv_cache.get(candidate_id)
+                cached_error = osv_errors.get(candidate_id)
+                if cached_error is not None:
+                    candidate_errors.append(f"{candidate_id}: {cached_error}")
                 if not isinstance(osv_payload, dict):
                     continue
 
@@ -290,6 +332,18 @@ def _collect_findings(
                 if best_score is None or score > best_score:
                     best_score = score
                     best_osv_id = candidate_id
+
+            if best_score is None and candidate_errors:
+                lookup_failures.append(
+                    LookupFailure(
+                        dependency=name,
+                        dependency_version=dep_version_str,
+                        vuln_id=vuln_id,
+                        attempted_ids=tuple(candidates),
+                        errors=tuple(candidate_errors),
+                    )
+                )
+                continue
 
             severity = _score_to_severity(best_score)
 
@@ -313,7 +367,8 @@ def _collect_findings(
 
     failing.sort(key=lambda f: (_SEVERITY_ORDER.get(f.severity, 99), f.dependency, f.vuln_id))
     unknown.sort(key=lambda f: (f.dependency, f.vuln_id))
-    return ignored, unknown, failing
+    lookup_failures.sort(key=lambda f: (f.dependency, f.vuln_id))
+    return ignored, unknown, failing, lookup_failures
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -335,24 +390,33 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Fail the gate if severity cannot be determined.",
     )
-    parser.add_argument("--osv-timeout-s", type=float, default=15.0)
+    parser.add_argument(
+        "--osv-timeout-s",
+        type=_parse_positive_finite_float,
+        default=15.0,
+        help="OSV lookup timeout in seconds (finite and > 0).",
+    )
     args = parser.parse_args(argv)
 
     audit_path = Path(args.audit_json)
     allowlist_path = Path(args.allowlist) if args.allowlist else None
 
-    allowlist = _read_allowlist(allowlist_path)
-    deps = _parse_pip_audit_json(audit_path)
+    try:
+        allowlist = _read_allowlist(allowlist_path)
+        deps = _parse_pip_audit_json(audit_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"pip-audit gate input error: {exc}", file=sys.stderr)
+        return 2
 
-    started = time.time()
-    ignored, unknown, failing = _collect_findings(
+    started = time.perf_counter()
+    ignored, unknown, failing, lookup_failures = _collect_findings(
         deps,
         allowlist=allowlist,
         min_severity=str(args.min_severity),
         fail_on_unknown=bool(args.fail_on_unknown),
         timeout_s=float(args.osv_timeout_s),
     )
-    elapsed_s = time.time() - started
+    elapsed_s = time.perf_counter() - started
 
     total_vulns = sum(
         len(dep.get("vulns", []))
@@ -367,6 +431,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ignored": int(len(ignored)),
                 "unknown": int(len(unknown)),
                 "failing": int(len(failing)),
+                "lookup_failures": int(len(lookup_failures)),
                 "min_severity": str(args.min_severity),
                 "fail_on_unknown": bool(args.fail_on_unknown),
                 "elapsed_s": round(float(elapsed_s), 3),
@@ -383,6 +448,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- {finding.dependency}{version}: {finding.vuln_id} severity=unknown{osv_used}")
         if len(unknown) > 50:
             print(f"... and {len(unknown) - 50} more")
+
+    if lookup_failures:
+        print("pip-audit gate failed (OSV lookup errors prevented severity resolution):")
+        for failure in lookup_failures[:50]:
+            version = f"=={failure.dependency_version}" if failure.dependency_version else ""
+            errors = "; ".join(failure.errors)
+            print(f"- {failure.dependency}{version}: {failure.vuln_id} lookup_errors={errors}")
+        if len(lookup_failures) > 50:
+            print(f"... and {len(lookup_failures) - 50} more")
+        return 1
 
     if not failing:
         return 0
