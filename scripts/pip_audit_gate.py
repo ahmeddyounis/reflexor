@@ -45,6 +45,10 @@ _SEVERITY_ORDER = {
 }
 
 
+def _exception_type_label(exc: BaseException) -> str:
+    return type(exc).__name__
+
+
 def _parse_positive_finite_float(value: str) -> float:
     try:
         parsed = float(value)
@@ -317,7 +321,7 @@ def _collect_findings(
                         osv_errors[candidate_id] = str(exc)
                         osv_cache[candidate_id] = None
                     except Exception as exc:
-                        osv_errors[candidate_id] = repr(exc)
+                        osv_errors[candidate_id] = _exception_type_label(exc)
                         osv_cache[candidate_id] = None
                 osv_payload = osv_cache.get(candidate_id)
                 cached_error = osv_errors.get(candidate_id)

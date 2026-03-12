@@ -92,6 +92,41 @@ def test_main_reports_input_errors_without_traceback(
     assert "pip-audit gate input error:" in captured.err
 
 
+def test_main_masks_unexpected_osv_lookup_messages(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = _load_pip_audit_gate_module()
+
+    audit_path = tmp_path / "pip-audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "dependencies": [
+                    {
+                        "name": "demo",
+                        "version": "1.0.0",
+                        "vulns": [{"id": "GHSA-demo-1", "aliases": []}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _raise_lookup_error(vuln_id: str, *, timeout_s: float) -> dict[str, object]:
+        _ = timeout_s
+        raise RuntimeError(f"Bearer sk-osv-secret-should-not-leak for {vuln_id}")
+
+    module._osv_get = _raise_lookup_error  # type: ignore[attr-defined]
+
+    exit_code = module.main(["--audit-json", str(audit_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "RuntimeError" in captured.out
+    assert "sk-osv-secret" not in captured.out
+
+
 def test_makefile_and_dev_extra_include_dependency_audit_tooling() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
