@@ -48,10 +48,6 @@ def build_app_services(
 ) -> AppServices:
     submit_events = EventSubmissionService(
         orchestrator=orchestrator_engine,
-        uow_factory=uow_factory,
-        event_repo=repos.event_repo,
-        run_packet_repo=repos.run_packet_repo,
-        dedupe_window_ms=int(float(settings.event_dedupe_window_s) * 1000),
     )
     approvals = ApprovalsService(uow_factory=uow_factory, approval_repo=repos.approval_repo)
     approval_commands = ApprovalCommandService(

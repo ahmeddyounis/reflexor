@@ -1,8 +1,4 @@
-"""Application services used by outer interfaces (API/CLI).
-
-These services implement narrow use-cases and depend on storage ports / application-layer
-components, not on infrastructure adapters.
-"""
+"""Application services used by outer interfaces (API/CLI)."""
 
 from __future__ import annotations
 
@@ -16,7 +12,6 @@ from reflexor.domain.models_run_packet import RunPacket
 from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.storage.ports import (
     ApprovalRepo,
-    EventRepo,
     RunPacketRepo,
     RunRepo,
     RunSummary,
@@ -38,46 +33,14 @@ class EventSubmissionService:
     """Submit events into the orchestrator."""
 
     orchestrator: OrchestratorEngine
-    uow_factory: Callable[[], UnitOfWork]
-    event_repo: Callable[[DatabaseSession], EventRepo]
-    run_packet_repo: Callable[[DatabaseSession], RunPacketRepo]
-    dedupe_window_ms: int | None = None
 
     async def submit_event(self, event: Event) -> SubmitEventOutcome:
-        if event.dedupe_key is not None:
-            uow = self.uow_factory()
-            async with uow:
-                repo = self.event_repo(uow.session)
-                existing = await repo.get_by_dedupe(
-                    source=event.source,
-                    dedupe_key=event.dedupe_key,
-                    active_at_ms=event.received_at_ms,
-                )
-                if existing is not None:
-                    packets = self.run_packet_repo(uow.session)
-                    run_id = await packets.get_run_id_for_event(existing.event_id)
-                    return SubmitEventOutcome(
-                        event_id=existing.event_id,
-                        run_id=run_id,
-                        duplicate=True,
-                    )
-
-        run_id = await self.orchestrator.handle_event(event)
-        event_id = event.event_id
-
-        if event.dedupe_key is not None:
-            uow = self.uow_factory()
-            async with uow:
-                repo = self.event_repo(uow.session)
-                stored = await repo.get_by_dedupe(
-                    source=event.source,
-                    dedupe_key=event.dedupe_key,
-                    active_at_ms=event.received_at_ms,
-                )
-                if stored is not None:
-                    event_id = stored.event_id
-
-        return SubmitEventOutcome(event_id=event_id, run_id=run_id, duplicate=False)
+        outcome = await self.orchestrator.submit_event(event)
+        return SubmitEventOutcome(
+            event_id=outcome.event_id,
+            run_id=outcome.run_id,
+            duplicate=outcome.duplicate,
+        )
 
 
 @dataclass(frozen=True, slots=True)

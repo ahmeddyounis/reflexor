@@ -31,6 +31,13 @@ from reflexor.orchestrator.triggers import DebouncedTrigger, PeriodicTicker
 from reflexor.tools.registry import ToolRegistry
 
 
+@dataclass(frozen=True, slots=True)
+class EventHandleOutcome:
+    event_id: str
+    run_id: str | None
+    duplicate: bool
+
+
 @dataclass(slots=True)
 class OrchestratorEngine:
     """Composition-friendly orchestrator engine.
@@ -98,10 +105,20 @@ class OrchestratorEngine:
         if self._planning_ticker is not None:
             await self._planning_ticker.aclose()
 
+    async def submit_event(self, event: Event) -> EventHandleOutcome:
+        """Handle a single event and return the resulting ingestion outcome."""
+
+        return await _handle_event(self, event)
+
     async def handle_event(self, event: Event) -> str:
         """Handle a single event and return the created `run_id`."""
 
-        return await _handle_event(self, event)
+        outcome = await self.submit_event(event)
+        if outcome.run_id is None:
+            raise RuntimeError(
+                "event was deduplicated before the original run packet was available"
+            )
+        return outcome.run_id
 
     async def run_planning_once(self, *, trigger: PlanningTrigger) -> str:
         """Run a single planning cycle."""
@@ -133,4 +150,4 @@ class OrchestratorEngine:
         return await _drain_backlog(self, max_items=max_items)
 
 
-__all__ = ["OrchestratorEngine"]
+__all__ = ["EventHandleOutcome", "OrchestratorEngine"]

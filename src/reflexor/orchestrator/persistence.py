@@ -42,6 +42,14 @@ class OrchestratorRepoFactory:
 
 
 @dataclass(frozen=True, slots=True)
+class PersistEventAndRunResult:
+    """Stage-1 persistence result for event ingestion."""
+
+    event: Event
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class OrchestratorPersistence:
     """Persist orchestrator artifacts using staged UnitOfWork transactions.
 
@@ -57,10 +65,12 @@ class OrchestratorPersistence:
     queued_status: TaskStatus = TaskStatus.QUEUED
     event_dedupe_window_ms: int | None = None
 
-    async def persist_event_and_run(self, *, event: Event, run_record: RunRecord) -> Event:
+    async def persist_event_and_run(
+        self, *, event: Event, run_record: RunRecord
+    ) -> PersistEventAndRunResult:
         """Persist the event and run metadata record (commit stage 1).
 
-        Returns the stored event (which may be an existing row when dedupe is enabled).
+        Returns the stored event and whether a new run should proceed.
         """
         uow = self.uow_factory()
         async with uow:
@@ -69,19 +79,28 @@ class OrchestratorPersistence:
             event_repo = self.repos.event_repo(session)
             run_repo = self.repos.run_repo(session)
             stored_event: Event
+            created = True
             if event.dedupe_key is not None:
-                stored_event, _ = await event_repo.create_or_get_by_dedupe(
+                stored_event, created = await event_repo.create_or_get_by_dedupe(
                     source=event.source,
                     dedupe_key=event.dedupe_key,
                     event=event,
                     dedupe_window_ms=self.event_dedupe_window_ms,
+                    active_at_ms=run_record.created_at_ms,
                 )
             else:
                 stored_event = await event_repo.create(event)
 
-            await run_repo.create(run_record)
+            if created:
+                await run_repo.create(run_record)
 
-        return stored_event
+        return PersistEventAndRunResult(event=stored_event, created=created)
+
+    async def get_run_id_for_event(self, event_id: str) -> str | None:
+        uow = self.uow_factory()
+        async with uow:
+            repo = self.repos.run_packet_repo(uow.session)
+            return await repo.get_run_id_for_event(event_id)
 
     async def persist_tasks_and_tool_calls(self, tasks: Sequence[Task]) -> None:
         """Persist tool calls and tasks (commit stage 2)."""
@@ -130,4 +149,4 @@ def _collect_tool_calls(tasks: Sequence[Task]) -> list[ToolCall]:
     return list(tool_calls_by_id.values())
 
 
-__all__ = ["OrchestratorPersistence", "OrchestratorRepoFactory"]
+__all__ = ["OrchestratorPersistence", "OrchestratorRepoFactory", "PersistEventAndRunResult"]

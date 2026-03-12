@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -17,6 +19,7 @@ from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import NoOpPlanner
+from reflexor.orchestrator.persistence import PersistEventAndRunResult
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
 from reflexor.orchestrator.sinks import InMemoryRunPacketSink
 from reflexor.storage.ports import RunRecord
@@ -80,15 +83,27 @@ class _RecordingPersistence:
         self.task_ids: list[str] = []
         self.finalize_calls: list[tuple[str, list[str]]] = []
 
-    async def persist_event_and_run(self, *, event: Event, run_record: RunRecord) -> Event:
+    async def persist_event_and_run(
+        self, *, event: Event, run_record: RunRecord
+    ) -> PersistEventAndRunResult:
         self.event_run_ids.append(run_record.run_id)
-        return event
+        return PersistEventAndRunResult(event=event, created=True)
 
     async def persist_tasks_and_tool_calls(self, tasks: object) -> None:
         self.task_ids.extend(getattr(task, "task_id", "") for task in tasks)
 
     async def finalize_run(self, packet: RunPacket, *, enqueued_task_ids: object = ()) -> None:
         self.finalize_calls.append((packet.run_id, list(enqueued_task_ids)))
+
+    async def get_run_id_for_event(self, event_id: str) -> str | None:
+        _ = event_id
+        return None
+
+
+class _ExplodingRouter:
+    async def route(self, event: Event, planning_input: object) -> object:
+        _ = (event, planning_input)
+        raise RuntimeError("Bearer sk-raw-secret-should-not-leak")
 
 
 async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) -> None:
@@ -205,3 +220,36 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
         "11111111-1111-4111-8111-111111111111",
     )
     assert tool_call["idempotency_key"] == expected_key
+
+
+async def test_unexpected_reflex_errors_do_not_leak_raw_messages(
+    tmp_path: Path, caplog
+) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=10_000)
+
+    clock = _FixedClock()
+    queue = InMemoryQueue(now_ms=clock.now_ms)
+    sink = InMemoryRunPacketSink(settings=settings)
+
+    engine = OrchestratorEngine(
+        reflex_router=_ExplodingRouter(),
+        planner=NoOpPlanner(),
+        tool_registry=ToolRegistry(),
+        queue=queue,
+        run_sink=sink,
+        limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
+        clock=clock,
+        metrics=ReflexorMetrics.build(),
+        enabled_scopes=("net.http",),
+    )
+
+    caplog.set_level(logging.ERROR)
+
+    run_id = await engine.handle_event(_event(tmp_path))
+    stored = await sink.get(run_id)
+
+    assert stored is not None
+    assert stored["policy_decisions"][0]["type"] == "reflex_error"
+    assert stored["policy_decisions"][0]["message"] == "unexpected reflex error"
+    assert "sk-raw-secret-should-not-leak" not in json.dumps(stored)
+    assert "unexpected reflex error" in caplog.text

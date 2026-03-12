@@ -106,6 +106,7 @@ class EventRepo(Protocol):
         dedupe_key: str,
         event: Event,
         dedupe_window_ms: int | None = None,
+        active_at_ms: int | None = None,
     ) -> tuple[Event, bool]: ...
 
     async def get(self, event_id: str) -> Event | None: ...

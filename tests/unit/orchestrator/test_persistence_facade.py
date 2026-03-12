@@ -147,9 +147,10 @@ async def test_orchestrator_persistence_persists_all_artifacts_across_stages() -
                 completed_at_ms=packet.completed_at_ms,
             ),
         )
+        assert stored_event.created is True
         await persistence.persist_tasks_and_tool_calls([task])
         await persistence.finalize_run(
-            packet.model_copy(update={"event": stored_event}, deep=True),
+            packet.model_copy(update={"event": stored_event.event}, deep=True),
             enqueued_task_ids=[task_id],
         )
 
@@ -248,6 +249,7 @@ async def test_orchestrator_persistence_stage2_rolls_back_without_affecting_stag
                 completed_at_ms=packet.completed_at_ms,
             ),
         )
+        assert stored_event.created is True
 
         with pytest.raises(IntegrityError):
             await persistence.persist_tasks_and_tool_calls([task_1, task_2])
@@ -263,7 +265,79 @@ async def test_orchestrator_persistence_stage2_rolls_back_without_affecting_stag
 
             persisted = (
                 await session.execute(
-                    select(EventRow).where(EventRow.event_id == stored_event.event_id)
+                    select(EventRow).where(EventRow.event_id == stored_event.event.event_id)
                 )
             ).scalar_one()
-            assert persisted.event_id == stored_event.event_id
+            assert persisted.event_id == stored_event.event.event_id
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_persistence_dedupe_skips_second_run_using_trusted_time() -> None:
+    settings = ReflexorSettings(max_tool_output_bytes=200, max_run_packet_bytes=10_000)
+
+    async with _in_memory_session_factory() as session_factory:
+        def uow_factory() -> SqlAlchemyUnitOfWork:
+            return SqlAlchemyUnitOfWork(session_factory)
+
+        repos = OrchestratorRepoFactory(
+            event_repo=lambda session: SqlAlchemyEventRepo(cast(AsyncSession, session)),
+            run_repo=lambda session: SqlAlchemyRunRepo(cast(AsyncSession, session)),
+            tool_call_repo=lambda session: SqlAlchemyToolCallRepo(cast(AsyncSession, session)),
+            task_repo=lambda session: SqlAlchemyTaskRepo(cast(AsyncSession, session)),
+            run_packet_repo=lambda session: SqlAlchemyRunPacketRepo(
+                cast(AsyncSession, session), settings=settings
+            ),
+        )
+        persistence = OrchestratorPersistence(
+            uow_factory=uow_factory,
+            repos=repos,
+            event_dedupe_window_ms=1_000,
+        )
+
+        first = Event(
+            event_id=_uuid(),
+            type="webhook.received",
+            source="tests",
+            received_at_ms=10,
+            payload={"seq": 1},
+            dedupe_key="ticket:T-1",
+        )
+        second = Event(
+            event_id=_uuid(),
+            type="webhook.received",
+            source="tests",
+            received_at_ms=50_000,
+            payload={"seq": 2},
+            dedupe_key="ticket:T-1",
+        )
+
+        first_result = await persistence.persist_event_and_run(
+            event=first,
+            run_record=RunRecord(
+                run_id=_uuid(),
+                parent_run_id=None,
+                created_at_ms=100,
+                started_at_ms=None,
+                completed_at_ms=None,
+            ),
+        )
+        second_result = await persistence.persist_event_and_run(
+            event=second,
+            run_record=RunRecord(
+                run_id=_uuid(),
+                parent_run_id=None,
+                created_at_ms=150,
+                started_at_ms=None,
+                completed_at_ms=None,
+            ),
+        )
+
+        assert first_result.created is True
+        assert second_result.created is False
+        assert second_result.event.event_id == first_result.event.event_id
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            assert await _count_rows(session, EventRow) == 1
+            assert await _count_rows(session, RunRow) == 1

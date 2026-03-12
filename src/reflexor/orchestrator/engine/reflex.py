@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -17,19 +18,27 @@ from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
 from reflexor.storage.ports import RunRecord
 
 if TYPE_CHECKING:
-    from reflexor.orchestrator.engine.core import OrchestratorEngine
+    from reflexor.orchestrator.engine.core import EventHandleOutcome, OrchestratorEngine
 
 
-async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
-    """Handle a single event and return the created `run_id`."""
+logger = logging.getLogger(__name__)
+
+
+async def handle_event(engine: OrchestratorEngine, event: Event) -> EventHandleOutcome:
+    """Handle a single event and return the ingestion outcome."""
+
+    from reflexor.orchestrator.engine.core import EventHandleOutcome
 
     started_perf_s = time.perf_counter()
     run_id = str(uuid4())
     created_at_ms = int(engine.clock.now_ms())
     persisted_event = event
 
+    if engine.metrics is not None:
+        engine.metrics.events_received_total.inc()
+
     if engine.persistence is not None:
-        persisted_event = await engine.persistence.persist_event_and_run(
+        persisted = await engine.persistence.persist_event_and_run(
             event=event,
             run_record=RunRecord(
                 run_id=run_id,
@@ -39,6 +48,16 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
                 completed_at_ms=None,
             ),
         )
+        persisted_event = persisted.event
+        if not persisted.created:
+            existing_run_id = await engine.persistence.get_run_id_for_event(
+                persisted_event.event_id
+            )
+            return EventHandleOutcome(
+                event_id=persisted_event.event_id,
+                run_id=existing_run_id,
+                duplicate=True,
+            )
 
     tracker = BudgetTracker(limits=engine.limits, clock=engine.clock)
     validator = PlanValidator(
@@ -62,8 +81,6 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
                 "event.source": persisted_event.source,
             },
         ):
-            if engine.metrics is not None:
-                engine.metrics.events_received_total.inc()
             try:
                 suppressed = False
                 if engine.event_suppressor is not None:
@@ -162,11 +179,20 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
                         "message": str(exc),
                     }
                 )
-            except Exception as exc:  # pragma: no cover
+            except Exception:  # pragma: no cover
+                logger.exception(
+                    "unexpected reflex error",
+                    extra={
+                        "run_id": run_id,
+                        "event_id": persisted_event.event_id,
+                        "event_type": persisted_event.type,
+                        "event_source": persisted_event.source,
+                    },
+                )
                 policy_decisions.append(
                     {
                         "type": "reflex_error",
-                        "message": str(exc),
+                        "message": "unexpected reflex error",
                     }
                 )
 
@@ -181,4 +207,4 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> str:
         await engine.run_sink.emit(run_packet)
         if engine.persistence is not None:
             await engine.persistence.finalize_run(run_packet, enqueued_task_ids=enqueued_task_ids)
-    return run_id
+    return EventHandleOutcome(event_id=persisted_event.event_id, run_id=run_id, duplicate=False)

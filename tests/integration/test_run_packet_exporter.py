@@ -154,9 +154,10 @@ async def test_export_run_packet_writes_sanitized_bounded_json(
                 completed_at_ms=packet.completed_at_ms,
             ),
         )
+        assert stored_event.created is True
         await persistence.persist_tasks_and_tool_calls([task])
         await persistence.finalize_run(
-            packet.model_copy(update={"event": stored_event}, deep=True),
+            packet.model_copy(update={"event": stored_event.event}, deep=True),
             enqueued_task_ids=[task_id],
         )
 
@@ -251,9 +252,10 @@ async def test_import_run_packet_creates_new_run_and_packet(
                 completed_at_ms=packet.completed_at_ms,
             ),
         )
+        assert stored_event.created is True
         await persistence.persist_tasks_and_tool_calls([task])
         await persistence.finalize_run(
-            packet.model_copy(update={"event": stored_event}, deep=True),
+            packet.model_copy(update={"event": stored_event.event}, deep=True),
             enqueued_task_ids=[task_id],
         )
 

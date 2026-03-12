@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -19,6 +20,9 @@ from reflexor.storage.ports import RunRecord
 
 if TYPE_CHECKING:
     from reflexor.orchestrator.engine.core import OrchestratorEngine
+
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_plan_budget_assertions(*, engine: OrchestratorEngine, plan: Plan) -> None:
@@ -128,7 +132,7 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
             persisted_event = synthetic_event
 
             if engine.persistence is not None:
-                persisted_event = await engine.persistence.persist_event_and_run(
+                persisted = await engine.persistence.persist_event_and_run(
                     event=synthetic_event,
                     run_record=RunRecord(
                         run_id=planning_run_id,
@@ -138,6 +142,7 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                         completed_at_ms=None,
                     ),
                 )
+                persisted_event = persisted.event
 
             with correlation_context(event_id=persisted_event.event_id, run_id=planning_run_id):
                 with start_span(
@@ -223,11 +228,19 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                                 "message": str(exc),
                             }
                         )
-                    except Exception as exc:  # pragma: no cover
+                    except Exception:  # pragma: no cover
+                        logger.exception(
+                            "unexpected planning error",
+                            extra={
+                                "run_id": planning_run_id,
+                                "trigger": trigger,
+                                "selected_events": len(selected_events),
+                            },
+                        )
                         policy_decisions.append(
                             {
                                 "type": "planning_error",
-                                "message": str(exc),
+                                "message": "unexpected planning error",
                             }
                         )
 

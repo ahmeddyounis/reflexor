@@ -151,9 +151,10 @@ async def test_run_packet_sanitation_is_persisted_in_db(tmp_path: Path) -> None:
                 completed_at_ms=packet.completed_at_ms,
             ),
         )
+        assert stored_event.created is True
         await persistence.persist_tasks_and_tool_calls([task])
         await persistence.finalize_run(
-            packet.model_copy(update={"event": stored_event}, deep=True),
+            packet.model_copy(update={"event": stored_event.event}, deep=True),
             enqueued_task_ids=[task_id],
         )
 

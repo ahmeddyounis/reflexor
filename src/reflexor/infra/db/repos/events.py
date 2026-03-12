@@ -60,6 +60,7 @@ class SqlAlchemyEventRepo:
         dedupe_key: str,
         event: Event,
         dedupe_window_ms: int | None = None,
+        active_at_ms: int | None = None,
     ) -> tuple[Event, bool]:
         normalized_source = _normalize_optional_str(source)
         if normalized_source is None:
@@ -69,7 +70,9 @@ class SqlAlchemyEventRepo:
         if normalized_key is None:
             raise ValueError("dedupe_key must be non-empty")
 
-        active_at_ms = int(event.received_at_ms)
+        window_anchor_ms = (
+            int(active_at_ms) if active_at_ms is not None else int(event.received_at_ms)
+        )
         effective_window_ms = (
             DEFAULT_DEDUPE_WINDOW_MS if dedupe_window_ms is None else int(dedupe_window_ms)
         )
@@ -79,7 +82,7 @@ class SqlAlchemyEventRepo:
         existing = await self.get_by_dedupe(
             source=normalized_source,
             dedupe_key=normalized_key,
-            active_at_ms=active_at_ms,
+            active_at_ms=window_anchor_ms,
         )
         if existing is not None:
             return existing, False
@@ -88,7 +91,7 @@ class SqlAlchemyEventRepo:
             update={"source": normalized_source, "dedupe_key": normalized_key},
             deep=True,
         )
-        expires_at_ms = active_at_ms + effective_window_ms
+        expires_at_ms = window_anchor_ms + effective_window_ms
 
         integrity_error: IntegrityError | None = None
         try:
@@ -106,12 +109,12 @@ class SqlAlchemyEventRepo:
                             source=normalized_source,
                             dedupe_key=normalized_key,
                             event_id=event_to_store.event_id,
-                            created_at_ms=active_at_ms,
-                            updated_at_ms=active_at_ms,
+                            created_at_ms=window_anchor_ms,
+                            updated_at_ms=window_anchor_ms,
                             expires_at_ms=expires_at_ms,
                         )
                     )
-                elif int(dedupe_row.expires_at_ms) > active_at_ms:
+                elif int(dedupe_row.expires_at_ms) > window_anchor_ms:
                     raise IntegrityError(
                         "active dedupe row exists",
                         params=None,
@@ -119,8 +122,8 @@ class SqlAlchemyEventRepo:
                     )
                 else:
                     dedupe_row.event_id = event_to_store.event_id
-                    dedupe_row.created_at_ms = active_at_ms
-                    dedupe_row.updated_at_ms = active_at_ms
+                    dedupe_row.created_at_ms = window_anchor_ms
+                    dedupe_row.updated_at_ms = window_anchor_ms
                     dedupe_row.expires_at_ms = expires_at_ms
 
                 await self._session.flush()
@@ -131,7 +134,7 @@ class SqlAlchemyEventRepo:
         existing = await self.get_by_dedupe(
             source=normalized_source,
             dedupe_key=normalized_key,
-            active_at_ms=active_at_ms,
+            active_at_ms=window_anchor_ms,
         )
         if existing is not None:
             return existing, False
