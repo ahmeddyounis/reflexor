@@ -42,10 +42,11 @@ def read_bytes_limited(
         raise ValueError("max_bytes must be >= 0")
 
     resolved = resolve_path_in_workspace(path, workspace_root=workspace_root, must_exist=True)
-    size = resolved.stat().st_size
-    if size > max_bytes:
+    with resolved.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
         raise ValueError(f"file exceeds max_bytes={max_bytes}: {resolved}")
-    return resolved.read_bytes()
+    return data
 
 
 def read_text_limited(

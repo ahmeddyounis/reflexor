@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TypeVar
@@ -31,6 +32,8 @@ class ToolContext:
     def __post_init__(self) -> None:
         if not self.workspace_root.is_absolute():
             raise ValueError("workspace_root must be an absolute path")
+        if not math.isfinite(self.timeout_s):
+            raise ValueError("timeout_s must be finite")
         if self.timeout_s <= 0:
             raise ValueError("timeout_s must be > 0")
 

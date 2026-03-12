@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 
@@ -44,6 +45,22 @@ def test_atomic_write_replaces_file(tmp_path: Path) -> None:
 def test_read_enforces_max_file_size(tmp_path: Path) -> None:
     target = tmp_path / "big.bin"
     target.write_bytes(b"x" * 100)
+
+    with pytest.raises(ValueError, match="exceeds max_bytes"):
+        read_bytes_limited(target, workspace_root=tmp_path, max_bytes=50)
+
+
+def test_read_enforces_max_file_size_with_bounded_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "growing.bin"
+    target.write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(
+        Path,
+        "open",
+        lambda self, mode="r", *args, **kwargs: io.BytesIO(b"x" * 100),
+    )
 
     with pytest.raises(ValueError, match="exceeds max_bytes"):
         read_bytes_limited(target, workspace_root=tmp_path, max_bytes=50)

@@ -136,6 +136,23 @@ def test_read_text_truncates_large_files(tmp_path: Path) -> None:
     assert "<truncated>" in result.data["text"]
 
 
+def test_read_text_truncates_multibyte_files_without_decode_failure(tmp_path: Path) -> None:
+    target = tmp_path / "emoji.txt"
+    target.write_text("😀" * 30, encoding="utf-8")
+
+    tool = FsReadTextTool(
+        settings=ReflexorSettings(workspace_root=tmp_path, max_tool_output_bytes=50)
+    )
+    ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+    result = asyncio.run(tool.run(FsReadTextArgs(path="emoji.txt", errors="strict"), ctx))
+
+    assert result.ok is True
+    assert isinstance(result.data, dict)
+    assert result.data["truncated"] is True
+    assert "<truncated>" in result.data["text"]
+
+
 def test_list_dir_truncates_output(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("a", encoding="utf-8")
     (tmp_path / "b.txt").write_text("b", encoding="utf-8")
@@ -149,3 +166,24 @@ def test_list_dir_truncates_output(tmp_path: Path) -> None:
     assert isinstance(result.data, dict)
     assert result.data["truncated"] is True
     assert len(result.data["items"]) == 2
+
+
+def test_list_dir_does_not_follow_symlink_targets_for_type_detection(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-dir"
+    outside.mkdir(exist_ok=True)
+
+    link = tmp_path / "escape-link"
+    try:
+        os.symlink(outside, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported in this environment")
+
+    tool = FsListDirTool(settings=ReflexorSettings(workspace_root=tmp_path))
+    ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+    result = asyncio.run(tool.run(FsListDirArgs(path="."), ctx))
+
+    assert result.ok is True
+    assert isinstance(result.data, dict)
+    items = {item["name"]: item["type"] for item in result.data["items"]}
+    assert items["escape-link"] == "other"

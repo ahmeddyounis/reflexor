@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -32,6 +34,32 @@ def _display_path(resolved: Path, *, workspace_root: Path) -> str:
     except ValueError:
         return str(resolved)
     return relative.as_posix()
+
+
+def _decode_text_bytes(
+    *,
+    raw: bytes,
+    encoding: str,
+    errors: Literal["strict", "replace", "ignore"],
+    truncated: bool,
+) -> str:
+    decoder_type = codecs.getincrementaldecoder(encoding)
+    decoder = decoder_type(errors=errors)
+    text = decoder.decode(raw, final=not truncated)
+    if not truncated:
+        text += decoder.decode(b"", final=True)
+    return text
+
+
+def _dir_entry_kind(entry: os.DirEntry[str]) -> str:
+    try:
+        if entry.is_dir(follow_symlinks=False):
+            return "dir"
+        if entry.is_file(follow_symlinks=False):
+            return "file"
+    except OSError:
+        return "other"
+    return "other"
 
 
 class FsReadTextArgs(BaseModel):
@@ -160,7 +188,12 @@ class FsReadTextTool:
 
         truncated = len(raw) > max_output_bytes
         try:
-            text = raw.decode(args.encoding, errors=args.errors)
+            text = _decode_text_bytes(
+                raw=raw[:max_output_bytes] if truncated else raw,
+                encoding=args.encoding,
+                errors=args.errors,
+                truncated=truncated,
+            )
         except LookupError as exc:
             return ToolResult(
                 ok=False,
@@ -330,7 +363,15 @@ class FsListDirTool:
             )
 
         try:
-            entries = sorted(resolved.iterdir(), key=lambda item: item.name)
+            with os.scandir(resolved) as it:
+                entries = sorted(
+                    (
+                        entry
+                        for entry in it
+                        if args.include_hidden or not entry.name.startswith(".")
+                    ),
+                    key=lambda item: item.name,
+                )
         except OSError as exc:
             return ToolResult(
                 ok=False,
@@ -341,14 +382,7 @@ class FsListDirTool:
 
         items: list[dict[str, object]] = []
         for entry in entries:
-            if not args.include_hidden and entry.name.startswith("."):
-                continue
-            kind = "other"
-            if entry.is_dir():
-                kind = "dir"
-            elif entry.is_file():
-                kind = "file"
-            items.append({"name": entry.name, "type": kind})
+            items.append({"name": entry.name, "type": _dir_entry_kind(entry)})
 
         truncated = len(items) > args.max_entries
         limited = items[: args.max_entries]

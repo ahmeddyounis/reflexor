@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -50,3 +51,9 @@ def test_tool_context_rejects_relative_workspace_root() -> None:
 def test_tool_context_rejects_non_positive_timeout(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="timeout_s must be > 0"):
         ToolContext(workspace_root=tmp_path, timeout_s=0)
+
+
+@pytest.mark.parametrize("timeout_s", [math.nan, math.inf])
+def test_tool_context_rejects_non_finite_timeout(tmp_path: Path, timeout_s: float) -> None:
+    with pytest.raises(ValueError, match="timeout_s must be finite"):
+        ToolContext(workspace_root=tmp_path, timeout_s=timeout_s)
