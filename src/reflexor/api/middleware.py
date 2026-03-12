@@ -44,6 +44,7 @@ def install_middleware(app: FastAPI) -> None:
                         "http.path": request.url.path,
                         "request.id": request_id,
                     },
+                    carrier=request.headers,
                 ):
                     logger.info(
                         "api request start",

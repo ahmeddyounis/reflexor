@@ -88,7 +88,7 @@ def start_span(
     name: str,
     *,
     attributes: Mapping[str, object] | None = None,
-    carrier: Mapping[str, str] | None = None,
+    carrier: object | None = None,
 ) -> Iterator[object | None]:
     if not _OTEL_AVAILABLE or not _enabled:
         yield None
@@ -98,7 +98,13 @@ def start_span(
     assert trace is not None
 
     tracer = trace.get_tracer("reflexor")
-    context = None if carrier is None else propagate.extract(dict(carrier))
+    context = None
+    normalized_carrier = normalize_trace_carrier(carrier)
+    if normalized_carrier is not None:
+        try:
+            context = propagate.extract(normalized_carrier)
+        except Exception:
+            context = None
     with tracer.start_as_current_span(name, context=context) as span:
         if attributes is not None:
             for key, value in attributes.items():
@@ -117,10 +123,33 @@ def inject_trace_carrier() -> dict[str, str]:
     return carrier
 
 
+def normalize_trace_carrier(carrier: object | None) -> dict[str, str] | None:
+    if not isinstance(carrier, Mapping):
+        return None
+
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in carrier.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+            continue
+        key = raw_key.strip()
+        value = raw_value.strip()
+        if not key or not value:
+            continue
+        normalized[key] = value
+
+    return normalized or None
+
+
 def _coerce_attribute_value(value: object) -> Any:
     if isinstance(value, (bool, int, float, str)):
         return value
     return str(value)
 
 
-__all__ = ["TracingStatus", "configure_tracing", "inject_trace_carrier", "start_span"]
+__all__ = [
+    "TracingStatus",
+    "configure_tracing",
+    "inject_trace_carrier",
+    "normalize_trace_carrier",
+    "start_span",
+]

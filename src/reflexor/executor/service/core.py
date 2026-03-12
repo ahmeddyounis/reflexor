@@ -38,7 +38,7 @@ from reflexor.executor.service.types import (
 from reflexor.guards.circuit_breaker.interface import CircuitBreaker
 from reflexor.observability.context import correlation_context
 from reflexor.observability.metrics import ReflexorMetrics
-from reflexor.observability.tracing import start_span
+from reflexor.observability.tracing import normalize_trace_carrier, start_span
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.queue import Lease, Queue
 from reflexor.security.policy.enforcement import (
@@ -405,15 +405,7 @@ def _trace_carrier_from_lease(lease: Lease) -> dict[str, str] | None:
         return None
 
     raw_carrier = trace_payload.get("otel")
-    if not isinstance(raw_carrier, Mapping):
-        return None
-
-    carrier: dict[str, str] = {}
-    for key, value in raw_carrier.items():
-        if not isinstance(key, str) or not isinstance(value, str):
-            continue
-        carrier[key] = value
-    return carrier or None
+    return normalize_trace_carrier(raw_carrier if isinstance(raw_carrier, Mapping) else None)
 
 
 def _trace_field(trace_payload: object, key: str) -> str | None:

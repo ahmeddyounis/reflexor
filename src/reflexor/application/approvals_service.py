@@ -21,7 +21,7 @@ from reflexor.domain.execution_state import complete_canceled, complete_denied
 from reflexor.domain.lifecycle import transition_task
 from reflexor.domain.models import Approval
 from reflexor.observability.context import correlation_context, get_correlation_ids
-from reflexor.observability.tracing import inject_trace_carrier
+from reflexor.observability.tracing import inject_trace_carrier, start_span
 from reflexor.orchestrator.clock import Clock, SystemClock
 from reflexor.orchestrator.queue import Queue, TaskEnvelope
 from reflexor.storage.ports import ApprovalRepo, TaskRepo, ToolCallRepo
@@ -66,69 +66,73 @@ class ApprovalCommandService:
     async def approve(self, approval_id: str, *, decided_by: str | None = None) -> Approval:
         envelope: TaskEnvelope | None = None
 
-        uow = self.uow_factory()
-        async with uow:
-            approvals = self.approval_repo(uow.session)
-            tasks = self.task_repo(uow.session)
+        with start_span(
+            "approvals.approve",
+            attributes={"approval.id": approval_id},
+        ):
+            uow = self.uow_factory()
+            async with uow:
+                approvals = self.approval_repo(uow.session)
+                tasks = self.task_repo(uow.session)
 
-            approval = await approvals.get(approval_id)
-            if approval is None:
-                raise KeyError(f"unknown approval_id: {approval_id!r}")
+                approval = await approvals.get(approval_id)
+                if approval is None:
+                    raise KeyError(f"unknown approval_id: {approval_id!r}")
 
-            if approval.status == ApprovalStatus.PENDING:
-                approval = await approvals.update_status(
-                    approval.approval_id,
-                    ApprovalStatus.APPROVED,
-                    decided_by=decided_by,
-                )
-            elif approval.status != ApprovalStatus.APPROVED:
-                raise ValueError("denied approval cannot be approved")
-
-            task = await tasks.get(approval.task_id)
-            if task is None:
-                raise KeyError(f"unknown task_id: {approval.task_id!r}")
-
-            if task.status == TaskStatus.WAITING_APPROVAL:
-                tool_call = task.tool_call
-                if tool_call is None:
-                    raise ValueError("waiting approval task must have tool_call")
-                if tool_call.status != ToolCallStatus.PENDING:
-                    raise ValueError("waiting approval requeue requires pending tool_call")
-
-                queued_task = transition_task(
-                    task.model_copy(update={"tool_call": tool_call}), TaskStatus.QUEUED
-                )
-                await tasks.update(queued_task)
-
-                now_ms = int(self.clock.now_ms())
-                with correlation_context(
-                    run_id=queued_task.run_id,
-                    task_id=queued_task.task_id,
-                    tool_call_id=tool_call.tool_call_id,
-                ):
-                    trace_payload: dict[str, object] = {
-                        "reason": "approval_approved",
-                        "source": "approvals",
-                    }
-                    otel_carrier = inject_trace_carrier()
-                    if otel_carrier:
-                        trace_payload["otel"] = otel_carrier
-                    envelope = TaskEnvelope(
-                        task_id=queued_task.task_id,
-                        run_id=queued_task.run_id,
-                        attempt=int(queued_task.attempts),
-                        created_at_ms=now_ms,
-                        available_at_ms=now_ms,
-                        correlation_ids=get_correlation_ids(),
-                        trace=trace_payload,
-                        payload={
-                            "tool_call_id": tool_call.tool_call_id,
-                            "tool_name": tool_call.tool_name,
-                            "permission_scope": tool_call.permission_scope,
-                            "idempotency_key": tool_call.idempotency_key,
-                            "approval_id": approval.approval_id,
-                        },
+                if approval.status == ApprovalStatus.PENDING:
+                    approval = await approvals.update_status(
+                        approval.approval_id,
+                        ApprovalStatus.APPROVED,
+                        decided_by=decided_by,
                     )
+                elif approval.status != ApprovalStatus.APPROVED:
+                    raise ValueError("denied approval cannot be approved")
+
+                task = await tasks.get(approval.task_id)
+                if task is None:
+                    raise KeyError(f"unknown task_id: {approval.task_id!r}")
+
+                if task.status == TaskStatus.WAITING_APPROVAL:
+                    tool_call = task.tool_call
+                    if tool_call is None:
+                        raise ValueError("waiting approval task must have tool_call")
+                    if tool_call.status != ToolCallStatus.PENDING:
+                        raise ValueError("waiting approval requeue requires pending tool_call")
+
+                    queued_task = transition_task(
+                        task.model_copy(update={"tool_call": tool_call}), TaskStatus.QUEUED
+                    )
+                    await tasks.update(queued_task)
+
+                    now_ms = int(self.clock.now_ms())
+                    with correlation_context(
+                        run_id=queued_task.run_id,
+                        task_id=queued_task.task_id,
+                        tool_call_id=tool_call.tool_call_id,
+                    ):
+                        trace_payload: dict[str, object] = {
+                            "reason": "approval_approved",
+                            "source": "approvals",
+                        }
+                        otel_carrier = inject_trace_carrier()
+                        if otel_carrier:
+                            trace_payload["otel"] = otel_carrier
+                        envelope = TaskEnvelope(
+                            task_id=queued_task.task_id,
+                            run_id=queued_task.run_id,
+                            attempt=int(queued_task.attempts),
+                            created_at_ms=now_ms,
+                            available_at_ms=now_ms,
+                            correlation_ids=get_correlation_ids(),
+                            trace=trace_payload,
+                            payload={
+                                "tool_call_id": tool_call.tool_call_id,
+                                "tool_name": tool_call.tool_name,
+                                "permission_scope": tool_call.permission_scope,
+                                "idempotency_key": tool_call.idempotency_key,
+                                "approval_id": approval.approval_id,
+                            },
+                        )
 
         assert approval is not None
         if envelope is not None:
@@ -147,42 +151,50 @@ class ApprovalCommandService:
         return approval
 
     async def deny(self, approval_id: str, *, decided_by: str | None = None) -> Approval:
-        uow = self.uow_factory()
-        async with uow:
-            approvals = self.approval_repo(uow.session)
-            tasks = self.task_repo(uow.session)
-            tool_calls = self.tool_call_repo(uow.session)
+        with start_span(
+            "approvals.deny",
+            attributes={"approval.id": approval_id},
+        ):
+            uow = self.uow_factory()
+            async with uow:
+                approvals = self.approval_repo(uow.session)
+                tasks = self.task_repo(uow.session)
+                tool_calls = self.tool_call_repo(uow.session)
 
-            approval = await approvals.get(approval_id)
-            if approval is None:
-                raise KeyError(f"unknown approval_id: {approval_id!r}")
+                approval = await approvals.get(approval_id)
+                if approval is None:
+                    raise KeyError(f"unknown approval_id: {approval_id!r}")
 
-            if approval.status == ApprovalStatus.PENDING:
-                approval = await approvals.update_status(
-                    approval.approval_id,
-                    ApprovalStatus.DENIED,
-                    decided_by=decided_by,
-                )
-            elif approval.status != ApprovalStatus.DENIED:
-                raise ValueError("approved approval cannot be denied")
+                if approval.status == ApprovalStatus.PENDING:
+                    approval = await approvals.update_status(
+                        approval.approval_id,
+                        ApprovalStatus.DENIED,
+                        decided_by=decided_by,
+                    )
+                elif approval.status != ApprovalStatus.DENIED:
+                    raise ValueError("approved approval cannot be denied")
 
-            task = await tasks.get(approval.task_id)
-            if task is None:
-                raise KeyError(f"unknown task_id: {approval.task_id!r}")
+                task = await tasks.get(approval.task_id)
+                if task is None:
+                    raise KeyError(f"unknown task_id: {approval.task_id!r}")
 
-            tool_call = task.tool_call
-            if tool_call is None:
-                raise ValueError("task must have tool_call")
+                tool_call = task.tool_call
+                if tool_call is None:
+                    raise ValueError("task must have tool_call")
 
-            if task.status in {TaskStatus.WAITING_APPROVAL, TaskStatus.QUEUED, TaskStatus.PENDING}:
-                now_ms = int(self.clock.now_ms())
-                state = (
-                    complete_denied(task=task, tool_call=tool_call, now_ms=now_ms)
-                    if tool_call.status == ToolCallStatus.PENDING
-                    else complete_canceled(task=task, tool_call=tool_call, now_ms=now_ms)
-                )
-                await tool_calls.update(state.tool_call)
-                await tasks.update(state.task)
+                if task.status in {
+                    TaskStatus.WAITING_APPROVAL,
+                    TaskStatus.QUEUED,
+                    TaskStatus.PENDING,
+                }:
+                    now_ms = int(self.clock.now_ms())
+                    state = (
+                        complete_denied(task=task, tool_call=tool_call, now_ms=now_ms)
+                        if tool_call.status == ToolCallStatus.PENDING
+                        else complete_canceled(task=task, tool_call=tool_call, now_ms=now_ms)
+                    )
+                    await tool_calls.update(state.tool_call)
+                    await tasks.update(state.task)
 
         return approval
 

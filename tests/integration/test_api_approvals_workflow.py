@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 from reflexor.api.app import create_app
+from reflexor.application import approvals_service as approvals_service_module
 from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
@@ -242,7 +246,9 @@ async def _assert_db_state(container: AppContainer, seeded: dict[str, str]) -> N
         assert denied_tool_call.status == ToolCallStatus.DENIED
 
 
-def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(tmp_path: Path) -> None:
+def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db_path = tmp_path / "reflexor_api_approvals_workflow.db"
     _create_schema(db_path)
 
@@ -255,6 +261,19 @@ def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(tmp_path: Pa
     )
     container = AppContainer.build(settings=settings, queue=queue)
     seeded = asyncio.run(_seed(container))
+    entered_spans: list[tuple[str, object | None]] = []
+
+    @contextmanager
+    def _record_span(name: str, **kwargs: object) -> Iterator[None]:
+        entered_spans.append((name, kwargs.get("attributes")))
+        yield None
+
+    monkeypatch.setattr(
+        approvals_service_module,
+        "inject_trace_carrier",
+        lambda: {"traceparent": "00-abc-123-01"},
+    )
+    monkeypatch.setattr(approvals_service_module, "start_span", _record_span)
 
     app = create_app(container=container)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -293,6 +312,9 @@ def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(tmp_path: Pa
         assert approved.json()["approval"]["status"] == ApprovalStatus.APPROVED.value
         assert len(queue.enqueued) == 1
         assert queue.enqueued[0].task_id == seeded["task_id_approve"]
+        trace_payload = queue.enqueued[0].trace
+        assert trace_payload is not None
+        assert trace_payload.get("otel") == {"traceparent": "00-abc-123-01"}
 
         approved_again = client.post(
             f"/approvals/{seeded['approval_id_approve']}/approve",
@@ -338,6 +360,9 @@ def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(tmp_path: Pa
         assert approve_denied.status_code == 400
         assert approve_denied.json()["message"] == "denied approval cannot be approved"
         assert len(queue.enqueued) == 1
+
+    assert ("approvals.approve", {"approval.id": seeded["approval_id_approve"]}) in entered_spans
+    assert ("approvals.deny", {"approval.id": seeded["approval_id_deny"]}) in entered_spans
 
     asyncio.run(_assert_db_state(container, seeded))
 
