@@ -373,6 +373,24 @@ def test_executor_settings_reject_invalid_values(
     ):
         ReflexorSettings(executor_max_concurrency=3, executor_per_tool_concurrency={"echo": 4})
 
+    with pytest.raises(ValueError, match="queue_visibility_timeout_s must be finite"):
+        ReflexorSettings(queue_visibility_timeout_s=float("inf"))
+
+    with pytest.raises(ValueError, match="db_pool_timeout_s must be finite"):
+        ReflexorSettings(db_pool_timeout_s=float("nan"))
+
+    with pytest.raises(ValueError, match="executor_retry_base_delay_s must be finite"):
+        ReflexorSettings(executor_retry_base_delay_s=float("inf"))
+
+    with pytest.raises(ValueError, match="executor_retry_jitter must be finite"):
+        ReflexorSettings(executor_retry_jitter=float("nan"))
+
+    with pytest.raises(ValueError, match="planner_timeout_s must be finite"):
+        ReflexorSettings(planner_timeout_s=float("inf"))
+
+    with pytest.raises(ValueError, match="planner_temperature must be finite"):
+        ReflexorSettings(planner_temperature=float("nan"))
+
 
 def test_executor_per_tool_concurrency_parses_env_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

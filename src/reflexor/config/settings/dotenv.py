@@ -22,5 +22,10 @@ def load_env_file(path: str | Path = ".env", *, override: bool = False) -> bool:
         return False
 
     load_dotenv = cast(Callable[..., object], loader)
-    dotenv_path = str(Path(path))
-    return bool(load_dotenv(dotenv_path=dotenv_path, override=override))
+    dotenv_path = str(Path(path).expanduser())
+    loaded = bool(load_dotenv(dotenv_path=dotenv_path, override=override))
+    if loaded:
+        from reflexor.config.settings.cache import clear_settings_cache
+
+        clear_settings_cache()
+    return loaded

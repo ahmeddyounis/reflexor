@@ -25,42 +25,40 @@ def _redact_url_password(raw: str) -> str:
     if parts.password is None:
         return raw
 
-    host = parts.hostname
-    if not host:
+    if "@" not in parts.netloc:
         return raw
 
-    rendered_host = host
-    if ":" in rendered_host and not rendered_host.startswith("["):
-        rendered_host = f"[{rendered_host}]"
+    _, hostinfo = parts.netloc.rsplit("@", 1)
+    if not hostinfo:
+        return raw
 
     username = parts.username
-    userinfo = ""
     if username:
-        userinfo = quote(username, safe="")
-
-    if userinfo:
-        userinfo = f"{userinfo}:{_REDACTED}"
+        userinfo = f"{quote(username, safe='')}:{_REDACTED}"
     else:
         userinfo = _REDACTED
 
-    port = "" if parts.port is None else f":{parts.port}"
-    netloc = f"{userinfo}@{rendered_host}{port}"
+    netloc = f"{userinfo}@{hostinfo}"
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def _redacted_settings_payload(settings: ReflexorSettings) -> dict[str, object]:
     data = settings.model_dump(mode="json")
 
-    if settings.admin_api_key:
-        data["admin_api_key"] = _REDACTED
+    for key in ("admin_api_key", "planner_api_key"):
+        if data.get(key):
+            data[key] = _REDACTED
 
-    database_url = data.get("database_url")
-    if isinstance(database_url, str):
-        data["database_url"] = _redact_url_password(database_url)
-
-    api_url = data.get("api_url")
-    if isinstance(api_url, str):
-        data["api_url"] = _redact_url_password(api_url)
+    for key in (
+        "database_url",
+        "api_url",
+        "redis_url",
+        "planner_base_url",
+        "otel_exporter_otlp_endpoint",
+    ):
+        value = data.get(key)
+        if isinstance(value, str):
+            data[key] = _redact_url_password(value)
 
     return data
 

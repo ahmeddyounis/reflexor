@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Literal
 from uuid import uuid4
 
@@ -79,6 +80,8 @@ class _ReflexorSettingsInfra(_ReflexorSettingsPolicy):
         if value is None:
             return None
         timeout_s = float(value)
+        if not math.isfinite(timeout_s):
+            raise ValueError("db_pool_timeout_s must be finite")
         if timeout_s <= 0:
             raise ValueError("db_pool_timeout_s must be > 0")
         return timeout_s
@@ -99,6 +102,8 @@ class _ReflexorSettingsInfra(_ReflexorSettingsPolicy):
     @classmethod
     def _validate_queue_visibility_timeout_s(cls, value: float) -> float:
         timeout_s = float(value)
+        if not math.isfinite(timeout_s):
+            raise ValueError("queue_visibility_timeout_s must be finite")
         if timeout_s <= 0:
             raise ValueError("queue_visibility_timeout_s must be > 0")
         return timeout_s

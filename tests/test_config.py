@@ -122,6 +122,36 @@ def test_load_env_file_is_optional(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert settings.enabled_scopes == ["fs.read"]
 
 
+def test_load_env_file_refreshes_cached_settings_and_expands_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    has_dotenv = importlib.util.find_spec("dotenv") is not None
+    if not has_dotenv:
+        pytest.skip("python-dotenv not installed")
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    env_path = home_dir / "reflexor.env"
+    env_path.write_text(
+        'REFLEXOR_PROFILE=prod\nREFLEXOR_ENABLED_SCOPES=["fs.read"]\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.delenv("REFLEXOR_PROFILE", raising=False)
+    monkeypatch.delenv("REFLEXOR_ENABLED_SCOPES", raising=False)
+    clear_settings_cache()
+
+    assert get_settings().profile == "dev"
+
+    loaded = load_env_file("~/reflexor.env")
+    assert loaded is True
+
+    settings = get_settings()
+    assert settings.profile == "prod"
+    assert settings.enabled_scopes == ["fs.read"]
+
+
 def test_unknown_scopes_are_rejected() -> None:
     with pytest.raises(ValueError, match="unknown scope"):
         ReflexorSettings(enabled_scopes=["unknown.scope"])

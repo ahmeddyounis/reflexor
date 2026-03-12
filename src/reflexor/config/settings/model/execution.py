@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 from pydantic import Field, ValidationInfo, field_validator
@@ -109,6 +110,8 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
     def _validate_positive_seconds(cls, value: float, info: ValidationInfo) -> float:
         field_name = info.field_name or "seconds"
         seconds = float(value)
+        if not math.isfinite(seconds):
+            raise ValueError(f"{field_name} must be finite")
         if seconds <= 0:
             raise ValueError(f"{field_name} must be > 0")
         return seconds
@@ -149,6 +152,8 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
     @classmethod
     def _validate_executor_retry_jitter(cls, value: float) -> float:
         jitter = float(value)
+        if not math.isfinite(jitter):
+            raise ValueError("executor_retry_jitter must be finite")
         if jitter < 0 or jitter > 1:
             raise ValueError("executor_retry_jitter must be in [0, 1]")
         return jitter
@@ -192,6 +197,8 @@ class _ReflexorSettingsExecution(_ReflexorSettingsInfra):
     @classmethod
     def _validate_planner_temperature(cls, value: float) -> float:
         temperature = float(value)
+        if not math.isfinite(temperature):
+            raise ValueError("planner_temperature must be finite")
         if temperature < 0 or temperature > 2:
             raise ValueError("planner_temperature must be in [0, 2]")
         return temperature
