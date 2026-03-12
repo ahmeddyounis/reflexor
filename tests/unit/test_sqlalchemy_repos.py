@@ -731,6 +731,54 @@ async def test_run_packet_repo_persists_sanitized_packet() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_packet_repo_sanitizes_memory_summary_content() -> None:
+    settings = ReflexorSettings(max_tool_output_bytes=200)
+
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        run = RunRecord(
+            run_id=run_id,
+            parent_run_id=None,
+            created_at_ms=1,
+            started_at_ms=None,
+            completed_at_ms=None,
+        )
+        packet = RunPacket(
+            run_id=run_id,
+            event=Event(
+                event_id=_uuid(),
+                type="webhook.received",
+                source="tests",
+                received_at_ms=10,
+                payload={"note": "ok"},
+            ),
+            reflex_decision={"token": "Bearer SUPERSECRETTOKENVALUE"},
+            plan={"authorization": "Bearer SUPERSECRETTOKENVALUE"},
+            created_at_ms=5_000,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(
+                session,
+                settings=settings,
+                memory_repo=memory_repo,
+            )
+
+            assert await run_repo.create(run) == run
+            await run_packet_repo.create(packet)
+
+            memory_items = await memory_repo.list_recent(limit=10, offset=0)
+            assert len(memory_items) == 1
+            dumped = json.dumps(memory_items[0].content, ensure_ascii=False, separators=(",", ":"))
+            assert "SUPERSECRETTOKENVALUE" not in dumped
+            assert "<redacted>" in dumped
+
+
+@pytest.mark.asyncio
 async def test_run_repo_list_summaries_filters_by_status_and_paginates() -> None:
     settings = ReflexorSettings(max_tool_output_bytes=200)
 

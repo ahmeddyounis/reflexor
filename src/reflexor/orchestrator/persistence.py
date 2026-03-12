@@ -145,7 +145,15 @@ def _collect_tool_calls(tasks: Sequence[Task]) -> list[ToolCall]:
         tool_call = task.tool_call
         if tool_call is None:
             continue
-        tool_calls_by_id.setdefault(tool_call.tool_call_id, tool_call)
+        existing = tool_calls_by_id.get(tool_call.tool_call_id)
+        if existing is None:
+            tool_calls_by_id[tool_call.tool_call_id] = tool_call
+            continue
+        if existing.model_dump(mode="json") != tool_call.model_dump(mode="json"):
+            raise ValueError(
+                "conflicting tool_call definitions for "
+                f"tool_call_id={tool_call.tool_call_id!r}"
+            )
     return list(tool_calls_by_id.values())
 
 

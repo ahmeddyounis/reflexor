@@ -121,3 +121,30 @@ async def test_inmemory_run_packet_sink_lists_recent_runs() -> None:
         "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "77777777-7777-4777-8777-777777777777",
     ]
+
+
+async def test_inmemory_run_packet_sink_returns_deep_copies() -> None:
+    sink = InMemoryRunPacketSink(settings=ReflexorSettings(max_run_packet_bytes=10_000))
+
+    run_id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    packet = _make_packet(
+        run_id=run_id,
+        event_id="12121212-1212-4212-8212-121212121212",
+        task_id="34343434-3434-4434-8434-343434343434",
+        tool_call_id="56565656-5656-4656-8656-565656565656",
+    )
+    await sink.emit(packet)
+
+    stored = await sink.get(run_id)
+    assert stored is not None
+    stored["event"]["payload"]["notes"] = "mutated"
+    stored["tasks"][0]["tool_call"]["args"]["body"] = "changed"
+
+    recent = await sink.list_recent(limit=1)
+    recent[0]["policy_decisions"][0]["message"] = "different"
+
+    fetched_again = await sink.get(run_id)
+    assert fetched_again is not None
+    assert fetched_again["event"]["payload"]["notes"] != "mutated"
+    assert fetched_again["tasks"][0]["tool_call"]["args"]["body"] != "changed"
+    assert fetched_again["policy_decisions"][0]["message"] != "different"

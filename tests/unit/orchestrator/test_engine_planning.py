@@ -83,6 +83,13 @@ class _RecordingQueue:
         return
 
 
+class _SecondEnqueueFailsQueue(_RecordingQueue):
+    async def enqueue(self, envelope: TaskEnvelope) -> None:
+        if len(self.envelopes) == 1:
+            raise RuntimeError("queue unavailable")
+        await super().enqueue(envelope)
+
+
 class _InMemoryRunSink(RunPacketSink):
     def __init__(self) -> None:
         self.packets: list[RunPacket] = []
@@ -206,6 +213,34 @@ class _PlannerMemoryFailure:
     async def plan(self, input: PlanningInput) -> Plan:
         _ = input
         raise PlannerMemoryLoadError("planner memory loading failed")
+
+
+class _TwoTaskPlanner:
+    async def plan(self, input: PlanningInput) -> Plan:
+        return Plan(
+            summary="planned_partial",
+            tasks=[
+                ProposedTask(
+                    name="primary",
+                    tool_name="tests.mock",
+                    args={"msg": "hi", "kind": input.trigger},
+                    priority=7,
+                ),
+                ProposedTask(
+                    name="secondary",
+                    tool_name="tests.mock",
+                    args={"msg": "later", "kind": input.trigger},
+                    priority=1,
+                ),
+            ],
+            budget_assertions=BudgetAssertions(
+                max_tasks=2,
+                max_tool_calls=int(input.limits.max_tool_calls or 2),
+                max_runtime_s=float(input.limits.max_runtime_s or 30.0),
+                max_tokens=int(input.limits.max_tokens or 128),
+            ),
+            metadata={},
+        )
 
 
 async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None:
@@ -498,3 +533,46 @@ async def test_planner_memory_failures_emit_structured_policy_decision() -> None
         assert 'orchestrator_rejections_total{reason="memory"} 1.0' in metrics_text
     finally:
         await engine.aclose()
+
+
+async def test_planning_partial_enqueue_records_policy_and_clears_backlog() -> None:
+    registry = ToolRegistry()
+    registry.register(_MockTool())
+
+    queue = _SecondEnqueueFailsQueue()
+    sink = _InMemoryRunSink()
+    clock = _ManualClock()
+
+    engine = OrchestratorEngine(
+        reflex_router=NeedsPlanningRouter(),
+        planner=_TwoTaskPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        limits=BudgetLimits(max_events_per_planning_cycle=10),
+        clock=clock,
+        run_sink=sink,
+        enabled_scopes=("fs.read",),
+    )
+
+    await engine._enqueue_backlog_event(_event("66666666-6666-4666-8666-666666666666"))
+    run_id = await engine.run_planning_once(trigger="event")
+
+    assert len(queue.envelopes) == 1
+    assert queue.envelopes[0].priority == 7
+
+    assert len(sink.packets) == 1
+    planning_packet = sink.packets[0]
+    assert planning_packet.run_id == run_id
+    by_name = {task.name: task for task in planning_packet.tasks}
+    assert by_name["primary"].status.value == "queued"
+    assert by_name["secondary"].status.value == "pending"
+    assert planning_packet.policy_decisions == [
+        {
+            "type": "queue_enqueue_error",
+            "message": "task enqueue failed",
+            "failed_task_id": by_name["secondary"].task_id,
+        }
+    ]
+
+    drained = await engine.drain_backlog(max_items=10)
+    assert drained == []

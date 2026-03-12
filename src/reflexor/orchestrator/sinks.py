@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -57,7 +58,7 @@ class InMemoryRunPacketSink:
                 except ValueError:
                     pass
 
-            self._packets_by_run_id[run_id] = dict(sanitized)
+            self._packets_by_run_id[run_id] = deepcopy(sanitized)
             self._order.append(run_id)
             self._enforce_max_items()
 
@@ -68,7 +69,7 @@ class InMemoryRunPacketSink:
 
         async with self._lock:
             packet = self._packets_by_run_id.get(normalized)
-            return dict(packet) if packet is not None else None
+            return deepcopy(packet) if packet is not None else None
 
     async def list_recent(self, limit: int = 50) -> list[dict[str, object]]:
         if int(limit) <= 0:
@@ -82,7 +83,7 @@ class InMemoryRunPacketSink:
                 packet = self._packets_by_run_id.get(run_id)
                 if packet is None:
                     continue
-                packets.append(dict(packet))
+                packets.append(deepcopy(packet))
             return packets
 
     def _enforce_max_items(self) -> None:

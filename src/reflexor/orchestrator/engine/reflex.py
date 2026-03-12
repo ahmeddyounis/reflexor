@@ -5,7 +5,6 @@ import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from reflexor.domain.enums import TaskStatus
 from reflexor.domain.errors import BudgetExceeded
 from reflexor.domain.models import Task
 from reflexor.domain.models_event import Event
@@ -13,6 +12,7 @@ from reflexor.domain.models_run_packet import RunPacket
 from reflexor.observability.context import correlation_context
 from reflexor.observability.tracing import start_span
 from reflexor.orchestrator.budgets import BudgetTracker, budget_exceeded_to_audit_dict
+from reflexor.orchestrator.engine.queueing import TaskEnqueueError, mark_enqueued_tasks
 from reflexor.orchestrator.plans import PlanningInput
 from reflexor.orchestrator.reflex_rules import ReflexTemplateError
 from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
@@ -139,16 +139,7 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> EventHandleO
                             trigger="event",
                             first_enqueue_started_s=started_perf_s,
                         )
-                        if enqueued_task_ids:
-                            enqueued_set = set(enqueued_task_ids)
-                            tasks = [
-                                (
-                                    task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
-                                    if task.task_id in enqueued_set
-                                    else task
-                                )
-                                for task in tasks
-                            ]
+                        tasks = mark_enqueued_tasks(tasks, enqueued_task_ids)
                     elif decision.action == "needs_planning":
                         await engine._enqueue_backlog_event(persisted_event)
                         if engine._planning_debouncer is not None:
@@ -198,6 +189,30 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> EventHandleO
                     {
                         "type": "plan_validation_error",
                         "message": str(exc),
+                    }
+                )
+            except TaskEnqueueError as exc:
+                enqueued_task_ids = list(exc.enqueued_task_ids)
+                tasks = mark_enqueued_tasks(tasks, enqueued_task_ids)
+                if engine.metrics is not None:
+                    engine.metrics.orchestrator_rejections_total.labels(reason="queue").inc()
+                logger.warning(
+                    "task enqueue failed during reflex routing",
+                    extra={
+                        "run_id": run_id,
+                        "event_id": persisted_event.event_id,
+                        "event_type": persisted_event.type,
+                        "event_source": persisted_event.source,
+                        "failed_task_id": exc.failed_task_id,
+                        "failed_tool_call_id": exc.failed_tool_call_id,
+                        "enqueued_task_ids": enqueued_task_ids,
+                    },
+                )
+                policy_decisions.append(
+                    {
+                        "type": "queue_enqueue_error",
+                        "message": "task enqueue failed",
+                        "failed_task_id": exc.failed_task_id,
                     }
                 )
             except Exception:  # pragma: no cover

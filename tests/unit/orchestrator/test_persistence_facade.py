@@ -272,6 +272,58 @@ async def test_orchestrator_persistence_stage2_rolls_back_without_affecting_stag
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_persistence_rejects_conflicting_tool_call_payloads() -> None:
+    settings = ReflexorSettings(max_tool_output_bytes=200, max_run_packet_bytes=10_000)
+
+    async with _in_memory_session_factory() as session_factory:
+        persistence = _persistence(session_factory, settings=settings)
+
+        run_id = _uuid()
+        shared_tool_call_id = _uuid()
+        tool_call_1 = ToolCall(
+            tool_call_id=shared_tool_call_id,
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=10,
+        )
+        tool_call_2 = ToolCall(
+            tool_call_id=shared_tool_call_id,
+            tool_name="mock.echo",
+            args={"message": "different"},
+            permission_scope="debug.echo",
+            idempotency_key="k2",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=11,
+        )
+        task_1 = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="echo-1",
+            tool_call=tool_call_1,
+            created_at_ms=10,
+        )
+        task_2 = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="echo-2",
+            tool_call=tool_call_2,
+            created_at_ms=11,
+        )
+
+        with pytest.raises(ValueError, match="conflicting tool_call definitions"):
+            await persistence.persist_tasks_and_tool_calls([task_1, task_2])
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            assert await _count_rows(session, ToolCallRow) == 0
+            assert await _count_rows(session, TaskRow) == 0
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_persistence_dedupe_skips_second_run_using_trusted_time() -> None:
     settings = ReflexorSettings(max_tool_output_bytes=200, max_run_packet_bytes=10_000)
 

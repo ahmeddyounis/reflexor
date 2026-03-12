@@ -4,6 +4,7 @@ import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from reflexor.domain.enums import TaskStatus
 from reflexor.domain.models import Task
 from reflexor.observability.context import correlation_context, get_correlation_ids
 from reflexor.observability.tracing import inject_trace_carrier
@@ -13,6 +14,23 @@ from reflexor.orchestrator.validation import PlanValidationError
 
 if TYPE_CHECKING:
     from reflexor.orchestrator.engine.core import OrchestratorEngine
+
+
+class TaskEnqueueError(RuntimeError):
+    """Raised when queueing fails after some tasks may already have been enqueued."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        enqueued_task_ids: Sequence[str],
+        failed_task_id: str,
+        failed_tool_call_id: str | None,
+    ) -> None:
+        super().__init__(message)
+        self.enqueued_task_ids = list(enqueued_task_ids)
+        self.failed_task_id = failed_task_id
+        self.failed_tool_call_id = failed_tool_call_id
 
 
 async def enqueue_tasks(
@@ -47,6 +65,7 @@ async def enqueue_tasks(
                 attempt=task.attempts,
                 created_at_ms=now_ms,
                 available_at_ms=now_ms,
+                priority=_task_priority(task),
                 correlation_ids=get_correlation_ids(),
                 trace=trace_payload,
                 payload={
@@ -56,7 +75,15 @@ async def enqueue_tasks(
                     "idempotency_key": tool_call.idempotency_key,
                 },
             )
-            await engine.queue.enqueue(envelope)
+            try:
+                await engine.queue.enqueue(envelope)
+            except Exception as exc:
+                raise TaskEnqueueError(
+                    f"failed to enqueue task {task.task_id!r}",
+                    enqueued_task_ids=enqueued_task_ids,
+                    failed_task_id=task.task_id,
+                    failed_tool_call_id=tool_call.tool_call_id,
+                ) from exc
             enqueued_task_ids.append(task.task_id)
             if (
                 idx == 0
@@ -69,3 +96,31 @@ async def enqueue_tasks(
                 )
                 first_enqueue_started_s = None
     return enqueued_task_ids
+
+
+def mark_enqueued_tasks(tasks: Sequence[Task], enqueued_task_ids: Sequence[str]) -> list[Task]:
+    if not enqueued_task_ids:
+        return list(tasks)
+
+    enqueued_set = set(enqueued_task_ids)
+    return [
+        (
+            task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
+            if task.task_id in enqueued_set
+            else task
+        )
+        for task in tasks
+    ]
+
+
+def _task_priority(task: Task) -> int | None:
+    planner_metadata = task.metadata.get("planner")
+    if not isinstance(planner_metadata, dict):
+        return None
+
+    priority = planner_metadata.get("priority")
+    if isinstance(priority, bool) or not isinstance(priority, int):
+        return None
+    if priority < 0:
+        return None
+    return priority

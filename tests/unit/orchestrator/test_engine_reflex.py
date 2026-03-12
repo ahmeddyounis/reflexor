@@ -20,6 +20,7 @@ from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.engine import OrchestratorEngine
 from reflexor.orchestrator.interfaces import NoOpPlanner
 from reflexor.orchestrator.persistence import PersistEventAndRunResult
+from reflexor.orchestrator.plans import PlanningInput, ProposedTask, ReflexDecision
 from reflexor.orchestrator.reflex_rules import RuleBasedReflexRouter
 from reflexor.orchestrator.sinks import InMemoryRunPacketSink
 from reflexor.storage.ports import RunRecord
@@ -104,6 +105,76 @@ class _ExplodingRouter:
     async def route(self, event: Event, planning_input: object) -> object:
         _ = (event, planning_input)
         raise RuntimeError("Bearer sk-raw-secret-should-not-leak")
+
+
+class _PriorityRouter:
+    async def route(self, event: Event, planning_input: PlanningInput) -> ReflexDecision:
+        _ = planning_input
+        return ReflexDecision(
+            action="fast_tasks",
+            reason="priority_route",
+            proposed_tasks=[
+                ProposedTask(
+                    name="primary",
+                    tool_name="tests.mock",
+                    args={
+                        "url": event.payload["url"],
+                        "event_id": event.event_id,
+                        "event_type": event.type,
+                        "count": 1,
+                    },
+                    priority=9,
+                ),
+                ProposedTask(
+                    name="secondary",
+                    tool_name="tests.mock",
+                    args={
+                        "url": event.payload["url"],
+                        "event_id": event.event_id,
+                        "event_type": event.type,
+                        "count": 2,
+                    },
+                    priority=1,
+                ),
+            ],
+        )
+
+
+class _SecondEnqueueFailsQueue:
+    def __init__(self) -> None:
+        self.envelopes = []
+        self.calls = 0
+
+    async def enqueue(self, envelope) -> None:
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("queue unavailable")
+        self.envelopes.append(envelope)
+
+    async def dequeue(
+        self,
+        timeout_s: float | None = None,
+        *,
+        wait_s: float | None = 0.0,
+    ):  # pragma: no cover
+        _ = (timeout_s, wait_s)
+        raise NotImplementedError
+
+    async def ack(self, lease) -> None:  # pragma: no cover
+        _ = lease
+        raise NotImplementedError
+
+    async def nack(
+        self,
+        lease,
+        delay_s: float | None = None,
+        reason: str | None = None,
+    ) -> None:  # pragma: no cover
+        _ = (lease, delay_s, reason)
+        raise NotImplementedError
+
+    async def aclose(self) -> None:  # pragma: no cover
+        return
 
 
 async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) -> None:
@@ -253,3 +324,52 @@ async def test_unexpected_reflex_errors_do_not_leak_raw_messages(
     assert stored["policy_decisions"][0]["message"] == "unexpected reflex error"
     assert "sk-raw-secret-should-not-leak" not in json.dumps(stored)
     assert "unexpected reflex error" in caplog.text
+
+
+async def test_reflex_partial_enqueue_records_policy_and_preserves_partial_state(
+    tmp_path: Path,
+) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=10_000)
+
+    registry = ToolRegistry()
+    registry.register(_MockTool())
+
+    queue = _SecondEnqueueFailsQueue()
+    sink = InMemoryRunPacketSink(settings=settings)
+    persistence = _RecordingPersistence()
+
+    engine = OrchestratorEngine(
+        reflex_router=_PriorityRouter(),
+        planner=NoOpPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        run_sink=sink,
+        persistence=persistence,
+        limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
+        clock=_FixedClock(),
+        metrics=ReflexorMetrics.build(),
+        enabled_scopes=("net.http",),
+    )
+
+    run_id = await engine.handle_event(_event(tmp_path))
+    assert len(queue.envelopes) == 1
+    assert queue.envelopes[0].priority == 9
+
+    stored = await sink.get(run_id)
+    assert stored is not None
+
+    by_name = {task["name"]: task for task in stored["tasks"]}
+    assert by_name["primary"]["status"] == "queued"
+    assert by_name["secondary"]["status"] == "pending"
+    assert stored["policy_decisions"] == [
+        {
+            "type": "queue_enqueue_error",
+            "message": "task enqueue failed",
+            "failed_task_id": by_name["secondary"]["task_id"],
+        }
+    ]
+    assert set(persistence.task_ids) == {
+        by_name["primary"]["task_id"],
+        by_name["secondary"]["task_id"],
+    }
+    assert persistence.finalize_calls == [(run_id, [by_name["primary"]["task_id"]])]

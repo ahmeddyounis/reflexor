@@ -36,6 +36,7 @@ class SqlAlchemyRunPacketRepo:
         sanitized_packet["run_id"] = packet.run_id
         sanitized_packet["created_at_ms"] = packet.created_at_ms
         sanitized_packet["packet_version"] = RUN_PACKET_VERSION
+        stored_packet = RunPacket.model_validate(sanitized_packet)
 
         existing = await self._session.get(RunPacketRow, packet.run_id)
         if existing is None:
@@ -52,9 +53,9 @@ class SqlAlchemyRunPacketRepo:
             existing.packet = sanitized_packet
         await self._session.flush()
         if self._memory_repo is not None:
-            memory_item = memory_item_from_run_packet(packet)
+            memory_item = memory_item_from_run_packet(stored_packet)
             await self._memory_repo.upsert(memory_item)
-        return RunPacket.model_validate(sanitized_packet)
+        return stored_packet
 
     async def get(self, run_id: str) -> RunPacket | None:
         normalized = run_id.strip()
@@ -65,11 +66,7 @@ class SqlAlchemyRunPacketRepo:
         if row is None:
             return None
 
-        sanitized_packet = sanitize_for_audit(row.packet, settings=self._settings)
-        sanitized_packet["run_id"] = row.run_id
-        sanitized_packet["created_at_ms"] = row.created_at_ms
-        sanitized_packet["packet_version"] = int(row.packet_version)
-        return RunPacket.model_validate(sanitized_packet)
+        return self._row_to_packet(row)
 
     async def list_recent(self, *, limit: int, offset: int) -> list[RunPacket]:
         limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)

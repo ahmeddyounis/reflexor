@@ -5,7 +5,6 @@ import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from reflexor.domain.enums import TaskStatus
 from reflexor.domain.errors import BudgetExceeded
 from reflexor.domain.models import Task
 from reflexor.domain.models_event import Event
@@ -13,6 +12,7 @@ from reflexor.domain.models_run_packet import RunPacket
 from reflexor.observability.context import correlation_context
 from reflexor.observability.tracing import start_span
 from reflexor.orchestrator.budgets import BudgetTracker, budget_exceeded_to_audit_dict
+from reflexor.orchestrator.engine.queueing import TaskEnqueueError, mark_enqueued_tasks
 from reflexor.orchestrator.engine.types import PlanningTrigger
 from reflexor.orchestrator.plans import LimitsSnapshot, Plan, PlanningInput
 from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
@@ -83,6 +83,17 @@ def _validate_plan_budget_assertions(*, engine: OrchestratorEngine, plan: Plan) 
                 "configured_max_run_wall_time_s": float(engine.limits.max_wall_time_s),
             },
         )
+
+
+async def _remove_selected_backlog_events(engine: OrchestratorEngine, *, count: int) -> None:
+    if count <= 0:
+        return
+
+    async with engine._backlog_lock:
+        for _ in range(count):
+            if not engine._backlog:
+                break
+            engine._backlog.popleft()
 
 
 async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrigger) -> str:
@@ -200,23 +211,12 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                             source="planner",
                             trigger=effective_trigger,
                         )
-                        if enqueued_task_ids:
-                            enqueued_set = set(enqueued_task_ids)
-                            tasks = [
-                                (
-                                    task.model_copy(update={"status": TaskStatus.QUEUED}, deep=True)
-                                    if task.task_id in enqueued_set
-                                    else task
-                                )
-                                for task in tasks
-                            ]
+                        tasks = mark_enqueued_tasks(tasks, enqueued_task_ids)
 
                         if selected_events:
-                            async with engine._backlog_lock:
-                                for _ in range(len(selected_events)):
-                                    if not engine._backlog:
-                                        break
-                                    engine._backlog.popleft()
+                            await _remove_selected_backlog_events(
+                                engine, count=len(selected_events)
+                            )
                     except BudgetExceeded as exc:
                         if engine.metrics is not None:
                             engine.metrics.orchestrator_rejections_total.labels(
@@ -234,6 +234,35 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                                 "message": str(exc),
                             }
                         )
+                    except TaskEnqueueError as exc:
+                        enqueued_task_ids = list(exc.enqueued_task_ids)
+                        tasks = mark_enqueued_tasks(tasks, enqueued_task_ids)
+                        if engine.metrics is not None:
+                            engine.metrics.orchestrator_rejections_total.labels(
+                                reason="queue"
+                            ).inc()
+                        logger.warning(
+                            "task enqueue failed during planning",
+                            extra={
+                                "run_id": planning_run_id,
+                                "trigger": trigger,
+                                "selected_events": len(selected_events),
+                                "failed_task_id": exc.failed_task_id,
+                                "failed_tool_call_id": exc.failed_tool_call_id,
+                                "enqueued_task_ids": enqueued_task_ids,
+                            },
+                        )
+                        policy_decisions.append(
+                            {
+                                "type": "queue_enqueue_error",
+                                "message": "task enqueue failed",
+                                "failed_task_id": exc.failed_task_id,
+                            }
+                        )
+                        if selected_events and enqueued_task_ids:
+                            await _remove_selected_backlog_events(
+                                engine, count=len(selected_events)
+                            )
                     except PlannerMemoryLoadError as exc:
                         if engine.metrics is not None:
                             engine.metrics.orchestrator_rejections_total.labels(

@@ -35,12 +35,13 @@ class TaskEnvelope(BaseModel):
         if not isinstance(data, dict):
             return data
 
+        normalized = dict(data)
         now_ms = int(time.time() * 1000)
-        if data.get("created_at_ms") is None:
-            data["created_at_ms"] = now_ms
-        if data.get("available_at_ms") is None:
-            data["available_at_ms"] = data["created_at_ms"]
-        return data
+        if normalized.get("created_at_ms") is None:
+            normalized["created_at_ms"] = now_ms
+        if normalized.get("available_at_ms") is None:
+            normalized["available_at_ms"] = normalized["created_at_ms"]
+        return normalized
 
     @field_validator("envelope_id", "task_id", "run_id", mode="before")
     @classmethod
@@ -71,6 +72,15 @@ class TaskEnvelope(BaseModel):
         if value < 0:
             raise ValueError("attempt must be >= 0")
         return value
+
+    @field_validator("priority")
+    @classmethod
+    def _validate_priority(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if value < 0:
+            raise ValueError("priority must be >= 0")
+        return int(value)
 
     @field_validator("created_at_ms", "available_at_ms")
     @classmethod
