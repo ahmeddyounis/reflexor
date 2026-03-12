@@ -70,6 +70,10 @@ def _write_response(result: ToolResult) -> None:
     sys.stdout.buffer.flush()
 
 
+def _exception_type_debug(exc: BaseException) -> dict[str, object]:
+    return {"exception_type": type(exc).__name__}
+
+
 def _protocol_error(*, message: str, debug: dict[str, object] | None = None) -> None:
     _write_response(
         ToolResult(
@@ -161,7 +165,7 @@ async def _run_request(request: SandboxRequest) -> ToolResult:
             ok=False,
             error_code="SANDBOX_PROTOCOL_ERROR",
             error_message="failed to build tool registry",
-            debug={"exception": repr(exc)},
+            debug=_exception_type_debug(exc),
         )
 
     runner = ToolRunner(registry=registry, settings=settings)
@@ -183,8 +187,14 @@ def _read_stdin_json() -> Any:
 async def main() -> None:
     try:
         raw = _read_stdin_json()
+    except ValueError as exc:
+        _protocol_error(message=str(exc))
+        return
     except Exception as exc:
-        _protocol_error(message=str(exc), debug={"exception": repr(exc)})
+        _protocol_error(
+            message="failed to read sandbox request",
+            debug=_exception_type_debug(exc),
+        )
         return
 
     try:
@@ -199,7 +209,10 @@ async def main() -> None:
     try:
         result = await _run_request(request)
     except Exception as exc:
-        _protocol_error(message="sandbox execution failed", debug={"exception": repr(exc)})
+        _protocol_error(
+            message="sandbox execution failed",
+            debug=_exception_type_debug(exc),
+        )
         return
     _write_response(result)
 

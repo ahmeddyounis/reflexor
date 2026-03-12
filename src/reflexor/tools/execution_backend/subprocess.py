@@ -24,6 +24,17 @@ from reflexor.tools.execution_backend.streams import _read_stream_limited, _Stre
 from reflexor.tools.sdk import Tool, ToolContext, ToolResult
 
 
+def _exception_type_debug(exc: BaseException) -> dict[str, object]:
+    return {"exception_type": type(exc).__name__}
+
+
+def _stderr_debug(stderr_bytes: bytes, *, prefix: str = "") -> dict[str, object]:
+    return {
+        f"{prefix}stderr_present": bool(stderr_bytes.strip()),
+        f"{prefix}stderr_bytes": len(stderr_bytes),
+    }
+
+
 @dataclass(slots=True)
 class SubprocessSandboxBackend:
     """Execute tools in a separate Python subprocess (best-effort isolation).
@@ -160,7 +171,7 @@ class SubprocessSandboxBackend:
                 ok=False,
                 error_code="SANDBOX_SPAWN_FAILED",
                 error_message="failed to spawn sandbox process",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
 
         assert proc.stdin is not None
@@ -250,10 +261,8 @@ class SubprocessSandboxBackend:
                 ok=False,
                 error_code="SANDBOX_PROTOCOL_ERROR",
                 error_message="sandbox execution failed",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
-
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
 
         returncode = proc.returncode
         if returncode is None:  # pragma: no cover
@@ -264,7 +273,7 @@ class SubprocessSandboxBackend:
                 ok=False,
                 error_code="SANDBOX_NONZERO_EXIT",
                 error_message="sandbox process exited non-zero",
-                debug={"returncode": int(returncode), "stderr": stderr_text},
+                debug={"returncode": int(returncode), **_stderr_debug(stderr_bytes)},
             )
 
         json_bytes = _extract_sandbox_json(stdout_bytes)
@@ -275,7 +284,7 @@ class SubprocessSandboxBackend:
                 error_message="sandbox stdout did not include a response marker",
                 debug={
                     "returncode": int(returncode),
-                    "stderr": stderr_text,
+                    **_stderr_debug(stderr_bytes),
                 },
             )
 
@@ -287,9 +296,9 @@ class SubprocessSandboxBackend:
                 error_code="SANDBOX_PROTOCOL_ERROR",
                 error_message="sandbox response was not valid JSON",
                 debug={
-                    "exception": repr(exc),
+                    **_exception_type_debug(exc),
                     "returncode": int(returncode),
-                    "stderr": stderr_text,
+                    **_stderr_debug(stderr_bytes),
                 },
             )
 
@@ -301,9 +310,9 @@ class SubprocessSandboxBackend:
                 error_code="SANDBOX_PROTOCOL_ERROR",
                 error_message="sandbox response did not match protocol",
                 debug={
-                    "exception": repr(exc),
+                    **_exception_type_debug(exc),
                     "returncode": int(returncode),
-                    "stderr": stderr_text,
+                    **_stderr_debug(stderr_bytes),
                 },
             )
 
@@ -311,7 +320,12 @@ class SubprocessSandboxBackend:
         if returncode != 0:
             # Best-effort: preserve tool-level error but include sandbox details.
             details = dict(result.debug or {})
-            details.update({"sandbox_returncode": int(returncode), "sandbox_stderr": stderr_text})
+            details.update(
+                {
+                    "sandbox_returncode": int(returncode),
+                    **_stderr_debug(stderr_bytes, prefix="sandbox_"),
+                }
+            )
             payload = result.model_dump()
             payload["debug"] = details
             result = ToolResult.model_validate(payload)

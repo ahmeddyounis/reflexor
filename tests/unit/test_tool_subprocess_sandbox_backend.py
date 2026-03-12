@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,7 @@ from reflexor.tools.execution_backend import SubprocessSandboxBackend
 from reflexor.tools.execution_backend.protocol import _SandboxToolContext
 from reflexor.tools.mock_tool import args_hash_for, call_key_for
 from reflexor.tools.runner import ToolRunner
-from reflexor.tools.sdk import ToolContext
+from reflexor.tools.sdk import ToolContext, ToolResult
 
 
 def _repo_root() -> Path:
@@ -160,6 +161,107 @@ def test_sandbox_runner_reports_unexpected_internal_errors(
     asyncio.run(sandbox_runner.main())
 
     assert calls["message"] == "sandbox execution failed"
-    debug = calls["debug"]
-    assert isinstance(debug, dict)
-    assert "RuntimeError" in str(debug["exception"])
+    assert calls["debug"] == {"exception_type": "RuntimeError"}
+
+
+def test_sandbox_runner_masks_unexpected_read_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def _record_protocol_error(
+        *, message: str, debug: dict[str, object] | None = None
+    ) -> None:
+        calls["message"] = message
+        calls["debug"] = debug
+
+    monkeypatch.setattr(
+        sandbox_runner,
+        "_read_stdin_json",
+        lambda: (_ for _ in ()).throw(RuntimeError("Bearer sk-child-secret-should-not-leak")),
+    )
+    monkeypatch.setattr(sandbox_runner, "_protocol_error", _record_protocol_error)
+
+    asyncio.run(sandbox_runner.main())
+
+    assert calls["message"] == "failed to read sandbox request"
+    assert calls["debug"] == {"exception_type": "RuntimeError"}
+
+
+def test_subprocess_sandbox_backend_masks_stderr_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeStdin:
+        def write(self, data: bytes) -> None:
+            _ = data
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class _FakeProc:
+        def __init__(self) -> None:
+            self.stdin = _FakeStdin()
+            self.stdout = object()
+            self.stderr = object()
+            self.returncode = 7
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            return None
+
+    proc = _FakeProc()
+    secret_stderr = b"Bearer sk-subprocess-secret-should-not-leak"
+
+    async def _create_subprocess_exec(*args: object, **kwargs: object) -> _FakeProc:
+        _ = (args, kwargs)
+        return proc
+
+    async def _read_stream_limited(
+        stream: object,
+        *,
+        limit_bytes: int,
+        stream_name: str,
+    ) -> bytes:
+        _ = (limit_bytes, stream_name)
+        if stream is proc.stdout:
+            return b""
+        if stream is proc.stderr:
+            return secret_stderr
+        raise AssertionError("unexpected stream")
+
+    monkeypatch.setattr(
+        subprocess_backend_module.asyncio,
+        "create_subprocess_exec",
+        _create_subprocess_exec,
+    )
+    monkeypatch.setattr(subprocess_backend_module, "_read_stream_limited", _read_stream_limited)
+
+    settings = ReflexorSettings(workspace_root=tmp_path, max_tool_output_bytes=50_000)
+    registry = build_registry(settings)
+    tool = registry.get("tests.mock")
+    args = tool.ArgsModel.model_validate({"x": 1})
+
+    backend = SubprocessSandboxBackend(
+        registry_factory="tests.fixtures.sandbox_registry:build_registry",
+        env_allowlist=["PYTHONPATH"],
+        extra_env={"PYTHONPATH": str(_repo_root())},
+    )
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=2.0)
+    result = asyncio.run(backend.execute(tool=tool, args=args, ctx=ctx, settings=settings))
+
+    assert result == ToolResult(
+        ok=False,
+        error_code="SANDBOX_NONZERO_EXIT",
+        error_message="sandbox process exited non-zero",
+        debug={
+            "returncode": 7,
+            "stderr_present": True,
+            "stderr_bytes": len(secret_stderr),
+        },
+    )
+    assert "sk-subprocess-secret" not in json.dumps(result.model_dump(mode="json"))

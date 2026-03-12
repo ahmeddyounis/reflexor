@@ -140,6 +140,22 @@ class InvalidResultTool:
         return {"ok": False}  # type: ignore[return-value]
 
 
+class ExplodingTool:
+    manifest = ToolManifest(
+        name="tests.exploding_tool",
+        version="0.1.0",
+        description="Tool that raises unexpectedly.",
+        permission_scope="fs.read",
+        idempotent=True,
+        max_output_bytes=10_000,
+    )
+    ArgsModel = SleepArgs
+
+    async def run(self, args: SleepArgs, ctx: ToolContext) -> ToolResult:
+        _ = (args, ctx)
+        raise RuntimeError("backend exploded with token plain-api-key-value")
+
+
 class ErrorMessageTool:
     manifest = ToolManifest(
         name="tests.error_message",
@@ -304,6 +320,22 @@ def test_runner_returns_sanitized_backend_failures(tmp_path: Path) -> None:
     assert result.ok is False
     assert result.error_code == "TOOL_ERROR"
     assert result.error_message == "tool backend failed"
+    assert result.debug == {"exception_type": "RuntimeError"}
+
+
+def test_runner_masks_in_process_tool_exceptions(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(ExplodingTool())
+
+    settings = ReflexorSettings(workspace_root=tmp_path, max_tool_output_bytes=80)
+    runner = ToolRunner(registry=registry, settings=settings)
+
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=1.0)
+    result = asyncio.run(runner.run_tool("tests.exploding_tool", {}, ctx=ctx))
+
+    assert result.ok is False
+    assert result.error_code == "TOOL_ERROR"
+    assert result.error_message == "tool raised RuntimeError"
     assert result.debug == {"exception_type": "RuntimeError"}
 
 

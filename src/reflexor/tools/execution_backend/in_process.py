@@ -36,7 +36,7 @@ class InProcessBackend:
                 ok=False,
                 error_code="TOOL_ERROR",
                 error_message=f"tool raised {type(exc).__name__}",
-                debug={"exception": repr(exc)},
+                debug={"exception_type": type(exc).__name__},
             )
 
         try:
