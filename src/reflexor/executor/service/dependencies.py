@@ -54,15 +54,17 @@ def blocked_dependents_after_failure(*, task: Task, all_tasks: Sequence[Task]) -
     blocked: list[Task] = []
     queue: deque[str] = deque([task.task_id])
     seen: set[str] = set()
+    blocked_ids: set[str] = set()
     while queue:
         dependency_id = queue.popleft()
         if dependency_id in seen:
             continue
         seen.add(dependency_id)
         for dependent in dependents_by_task_id.get(dependency_id, []):
-            if dependent.task_id in seen:
+            if dependent.task_id in seen or dependent.task_id in blocked_ids:
                 continue
             blocked.append(dependent)
+            blocked_ids.add(dependent.task_id)
             queue.append(dependent.task_id)
     return blocked
 

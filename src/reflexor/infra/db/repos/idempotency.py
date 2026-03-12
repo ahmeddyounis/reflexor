@@ -89,7 +89,12 @@ class SqlAlchemyIdempotencyLedger:
 
         row = await self._session.get(IdempotencyLedgerRow, normalized)
         if row is not None:
-            if not allow_overwrite and row.status == LedgerStatus.SUCCEEDED.value:
+            if not self._should_write_existing(
+                row=row,
+                outcome=outcome,
+                allow_overwrite=allow_overwrite,
+                now_ms=now_ms,
+            ):
                 return
             row.tool_name = outcome.tool_name
             row.status = status.value
@@ -122,7 +127,12 @@ class SqlAlchemyIdempotencyLedger:
 
         row = await self._session.get(IdempotencyLedgerRow, normalized)
         if row is not None:
-            if not allow_overwrite and row.status == LedgerStatus.SUCCEEDED.value:
+            if not self._should_write_existing(
+                row=row,
+                outcome=outcome,
+                allow_overwrite=allow_overwrite,
+                now_ms=now_ms,
+            ):
                 return
             row.tool_name = outcome.tool_name
             row.status = status.value
@@ -135,3 +145,24 @@ class SqlAlchemyIdempotencyLedger:
         if integrity_error is not None:  # pragma: no cover
             raise integrity_error
         raise RuntimeError("failed to record outcome in idempotency ledger")
+
+    def _should_write_existing(
+        self,
+        *,
+        row: IdempotencyLedgerRow,
+        outcome: OutcomeToCache,
+        allow_overwrite: bool,
+        now_ms: int,
+    ) -> bool:
+        if row.tool_name != outcome.tool_name:
+            if row.status == LedgerStatus.SUCCEEDED.value and not self._is_expired(row, now_ms):
+                return False
+            return True
+        if not allow_overwrite and row.status == LedgerStatus.SUCCEEDED.value:
+            return False
+        return True
+
+    @staticmethod
+    def _is_expired(row: IdempotencyLedgerRow, now_ms: int) -> bool:
+        expires_at_ms = row.expires_at_ms
+        return expires_at_ms is not None and int(expires_at_ms) <= int(now_ms)

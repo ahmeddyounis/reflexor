@@ -113,3 +113,36 @@ async def test_idempotency_ledger_failure_does_not_return_success() -> None:
 
             await ledger.record_failure(key, outcome, transient=True)
             assert await ledger.get_success(key) is None
+
+
+@pytest.mark.asyncio
+async def test_idempotency_ledger_preserves_live_success_for_original_tool_name() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        async with session_factory() as session:
+            ledger = SqlAlchemyIdempotencyLedger(session)
+            key = "idem-k4"
+
+            await ledger.record_success(
+                key,
+                OutcomeToCache(
+                    tool_name="mock.echo",
+                    result=ToolResult(ok=True, data={"message": "first"}),
+                ),
+            )
+            await ledger.record_success(
+                key,
+                OutcomeToCache(
+                    tool_name="mock.other",
+                    result=ToolResult(ok=True, data={"message": "second"}),
+                ),
+            )
+
+            cached = await ledger.get_success(key)
+            assert cached is not None
+            assert cached.tool_name == "mock.echo"
+            assert cached.result.data == {"message": "first"}
+
+            row = await session.get(IdempotencyLedgerRow, key)
+            assert row is not None
+            assert row.tool_name == "mock.echo"
+            assert row.result_json["data"] == {"message": "first"}

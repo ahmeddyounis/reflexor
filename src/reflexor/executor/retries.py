@@ -12,6 +12,7 @@ Clean Architecture:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from random import Random
@@ -73,20 +74,20 @@ class RetryPolicy:
         object.__setattr__(self, "max_attempts", max_attempts)
 
         base_delay_s = float(self.base_delay_s)
-        if base_delay_s <= 0:
-            raise ValueError("base_delay_s must be > 0")
+        if not math.isfinite(base_delay_s) or base_delay_s <= 0:
+            raise ValueError("base_delay_s must be finite and > 0")
         object.__setattr__(self, "base_delay_s", base_delay_s)
 
         max_delay_s = float(self.max_delay_s)
-        if max_delay_s <= 0:
-            raise ValueError("max_delay_s must be > 0")
+        if not math.isfinite(max_delay_s) or max_delay_s <= 0:
+            raise ValueError("max_delay_s must be finite and > 0")
         if max_delay_s < base_delay_s:
             raise ValueError("max_delay_s must be >= base_delay_s")
         object.__setattr__(self, "max_delay_s", max_delay_s)
 
         jitter = float(self.jitter)
-        if jitter < 0 or jitter > 1:
-            raise ValueError("jitter must be in [0, 1]")
+        if not math.isfinite(jitter) or jitter < 0 or jitter > 1:
+            raise ValueError("jitter must be finite and in [0, 1]")
         object.__setattr__(self, "jitter", jitter)
 
         object.__setattr__(
@@ -115,8 +116,22 @@ def exponential_backoff_s(
     attempt_i = int(attempt)
     if attempt_i <= 0:
         raise ValueError("attempt must be >= 1")
-    delay = float(base_delay_s) * (2 ** (attempt_i - 1))
-    return min(float(max_delay_s), float(delay))
+    base_delay = float(base_delay_s)
+    max_delay = float(max_delay_s)
+    if not math.isfinite(base_delay) or base_delay <= 0:
+        raise ValueError("base_delay_s must be finite and > 0")
+    if not math.isfinite(max_delay) or max_delay <= 0:
+        raise ValueError("max_delay_s must be finite and > 0")
+    if max_delay < base_delay:
+        raise ValueError("max_delay_s must be >= base_delay_s")
+
+    if base_delay >= max_delay:
+        return max_delay
+
+    max_exponent = max(0, math.ceil(math.log2(max_delay / base_delay)))
+    exponent = min(attempt_i - 1, max_exponent)
+    delay = base_delay * (2**exponent)
+    return min(max_delay, delay)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,7 +157,10 @@ class BackoffStrategy:
 
         # Symmetric jitter: multiply by a factor in [1-jitter, 1+jitter], then cap.
         jitter = self.policy.jitter
-        factor = 1 + ((2 * float(self.rng.random())) - 1) * jitter
+        random_value = float(self.rng.random())
+        if not math.isfinite(random_value) or random_value < 0 or random_value > 1:
+            raise ValueError("rng.random() must return a finite value in [0, 1]")
+        factor = 1 + ((2 * random_value) - 1) * jitter
         delay = base * factor
         return min(self.policy.max_delay_s, delay)
 

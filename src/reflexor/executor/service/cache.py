@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from reflexor.domain.execution_state import complete_succeeded, start_execution
 from reflexor.domain.models import Task, ToolCall
 from reflexor.executor.service.audit import append_audit
 from reflexor.executor.service.types import ExecutionDisposition, ExecutionReport
-from reflexor.security.policy.decision import PolicyDecision
+from reflexor.guards import GuardAction
+from reflexor.security.policy.context import tool_spec_from_tool
+from reflexor.security.policy.decision import PolicyAction, PolicyDecision
 from reflexor.tools.sdk import Tool
 
 if TYPE_CHECKING:
@@ -38,6 +40,8 @@ async def maybe_use_cached_success(
         if cached is None:
             return None
         if cached.tool_name != tool_call.tool_name:
+            return None
+        if not await _can_reuse_cached_success(service, tool=tool, tool_call=tool_call):
             return None
 
         tool_call_repo = service._repos.tool_call_repo(session)
@@ -90,3 +94,35 @@ async def maybe_use_cached_success(
             decision=decision,
             result=cached.result,
         )
+
+
+async def _can_reuse_cached_success(
+    service: ExecutorService,
+    *,
+    tool: Tool[BaseModel],
+    tool_call: ToolCall,
+) -> bool:
+    try:
+        parsed_args = tool.ArgsModel.model_validate(tool_call.args)
+    except ValidationError:
+        return False
+
+    tool_spec = tool_spec_from_tool(tool)
+    gate_decision = service._policy_runner.gate.evaluate(
+        tool_call=tool_call,
+        tool_spec=tool_spec,
+        parsed_args=parsed_args,
+        emit_metrics=False,
+    )
+    if gate_decision.action != PolicyAction.ALLOW:
+        return False
+
+    guard_decision = await service._policy_runner.evaluate_guards(
+        tool_call=tool_call,
+        tool_spec=tool_spec,
+        parsed_args=parsed_args,
+        approval_status=None,
+        emit_metrics=False,
+        now_ms=None,
+    )
+    return guard_decision.action == GuardAction.ALLOW

@@ -53,7 +53,7 @@ class ConcurrencyLimits:
 
 
 class ConcurrencyLimiter:
-    """Async concurrency limiter (global + per-tool semaphores)."""
+    """Async concurrency limiter with atomic global + per-tool admission."""
 
     def __init__(
         self,
@@ -63,8 +63,9 @@ class ConcurrencyLimiter:
     ) -> None:
         limits = ConcurrencyLimits(max_global=max_global, per_tool=dict(per_tool or {}))
         self._limits = limits
-        self._global = asyncio.Semaphore(limits.max_global)
-        self._per_tool = {name: asyncio.Semaphore(limit) for name, limit in limits.per_tool.items()}
+        self._condition = asyncio.Condition()
+        self._in_flight_total = 0
+        self._in_flight_by_tool: dict[str, int] = {}
 
     @property
     def limits(self) -> ConcurrencyLimits:
@@ -77,23 +78,35 @@ class ConcurrencyLimiter:
         normalized = tool_name.strip()
         if not normalized:
             raise ValueError("tool_name must be non-empty")
-
-        tool_sem = self._per_tool.get(normalized)
-        tool_acquired = False
-
-        await self._global.acquire()
+        await self._acquire(normalized)
         try:
-            if tool_sem is not None:
-                await tool_sem.acquire()
-                tool_acquired = True
-
-            try:
-                yield
-            finally:
-                if tool_acquired and tool_sem is not None:
-                    tool_sem.release()
+            yield
         finally:
-            self._global.release()
+            await self._release(normalized)
+
+    async def _acquire(self, tool_name: str) -> None:
+        async with self._condition:
+            await self._condition.wait_for(lambda: self._has_capacity(tool_name))
+            self._in_flight_total += 1
+            self._in_flight_by_tool[tool_name] = self._in_flight_by_tool.get(tool_name, 0) + 1
+
+    async def _release(self, tool_name: str) -> None:
+        async with self._condition:
+            self._in_flight_total -= 1
+            remaining = self._in_flight_by_tool.get(tool_name, 0) - 1
+            if remaining > 0:
+                self._in_flight_by_tool[tool_name] = remaining
+            else:
+                self._in_flight_by_tool.pop(tool_name, None)
+            self._condition.notify_all()
+
+    def _has_capacity(self, tool_name: str) -> bool:
+        if self._in_flight_total >= self._limits.max_global:
+            return False
+        tool_limit = self._limits.per_tool.get(tool_name)
+        if tool_limit is None:
+            return True
+        return self._in_flight_by_tool.get(tool_name, 0) < tool_limit
 
 
 __all__ = ["ConcurrencyLimiter", "ConcurrencyLimits"]

@@ -501,6 +501,70 @@ async def test_execute_task_uses_cached_success_and_does_not_invoke_tool(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_execute_task_cached_success_does_not_bypass_current_policy(tmp_path: Path) -> None:
+    result = ToolResult(ok=True, data={"ok": True})
+    tool = _RecordingTool(result=result, idempotent=True)
+
+    run_id = str(uuid4())
+    tool_call = ToolCall(
+        tool_call_id=str(uuid4()),
+        tool_name=tool.manifest.name,
+        args={"text": "hello"},
+        permission_scope=tool.manifest.permission_scope,
+        idempotency_key="k-cache-denied",
+        status=ToolCallStatus.PENDING,
+        created_at_ms=0,
+    )
+    task = Task(
+        task_id=str(uuid4()),
+        run_id=run_id,
+        name="cached-denied",
+        status=TaskStatus.QUEUED,
+        tool_call=tool_call,
+        created_at_ms=0,
+    )
+
+    ledger = _FakeLedger()
+    ledger.seed_success(
+        "k-cache-denied",
+        CachedOutcome(
+            idempotency_key="k-cache-denied",
+            tool_name=tool.manifest.name,
+            status=LedgerStatus.SUCCEEDED,
+            result=result,
+            created_at_ms=0,
+            updated_at_ms=0,
+        ),
+    )
+
+    task_repo = _InMemoryTaskRepo()
+    tool_call_repo = _InMemoryToolCallRepo()
+    service = await _build_service(
+        tmp_path=tmp_path,
+        settings=ReflexorSettings(workspace_root=tmp_path, enabled_scopes=[]),
+        tool=tool,
+        task=task,
+        task_repo=task_repo,
+        tool_call_repo=tool_call_repo,
+        approval_repo=_InMemoryApprovalRepo(),
+        packet_repo=_InMemoryRunPacketRepo(),
+        ledger=ledger,
+    )
+
+    report = await service.execute_task(task.task_id)
+
+    assert report.disposition == ExecutionDisposition.DENIED
+    assert report.used_cached_result is False
+    assert tool.calls == []
+    updated_task = await task_repo.get(task.task_id)
+    updated_tool_call = await tool_call_repo.get(tool_call.tool_call_id)
+    assert updated_task is not None
+    assert updated_task.status == TaskStatus.CANCELED
+    assert updated_tool_call is not None
+    assert updated_tool_call.status == ToolCallStatus.DENIED
+
+
+@pytest.mark.asyncio
 async def test_execute_task_denied_updates_status_and_does_not_invoke_tool(tmp_path: Path) -> None:
     tool = _RecordingTool(result=ToolResult(ok=True, data={"ok": True}), idempotent=True)
 

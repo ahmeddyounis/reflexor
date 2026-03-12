@@ -9,6 +9,7 @@ from reflexor.executor.retries import (
     ErrorClassifier,
     RetryDisposition,
     RetryPolicy,
+    exponential_backoff_s,
 )
 from reflexor.tools.sdk import ToolResult
 
@@ -69,6 +70,32 @@ def test_backoff_strategy_jitter_is_deterministic_with_injected_rng_and_clamped(
     assert strategy.next_delay(1) == 1.0
     assert strategy.next_delay(2) == 4.0
     assert strategy.next_delay(3) == 10.0
+
+
+def test_retry_policy_rejects_non_finite_timings() -> None:
+    with pytest.raises(ValueError, match="base_delay_s must be finite and > 0"):
+        RetryPolicy(base_delay_s=float("nan"))
+
+    with pytest.raises(ValueError, match="max_delay_s must be finite and > 0"):
+        RetryPolicy(max_delay_s=float("inf"))
+
+    with pytest.raises(ValueError, match="jitter must be finite and in \\[0, 1\\]"):
+        RetryPolicy(jitter=float("nan"))
+
+
+def test_exponential_backoff_caps_large_attempts_without_overflow() -> None:
+    delay = exponential_backoff_s(10_000, base_delay_s=1.0, max_delay_s=5.0)
+    assert delay == 5.0
+
+
+def test_backoff_strategy_rejects_invalid_rng_values() -> None:
+    policy = RetryPolicy(base_delay_s=1.0, max_delay_s=10.0, jitter=0.25)
+    strategy = BackoffStrategy(policy=policy, rng=_SequenceRng([float("nan")]))
+
+    with pytest.raises(
+        ValueError, match="rng.random\\(\\) must return a finite value in \\[0, 1\\]"
+    ):
+        strategy.next_delay(1)
 
 
 def test_error_classifier_approval_required_is_distinct() -> None:

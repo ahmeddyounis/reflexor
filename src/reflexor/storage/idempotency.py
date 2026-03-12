@@ -14,7 +14,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
 
 from reflexor.tools.sdk import ToolResult
 
@@ -83,6 +83,23 @@ class CachedOutcome(BaseModel):
         if int(value) < 0:
             raise ValueError(f"{field_name} must be >= 0")
         return int(value)
+
+    @field_validator("expires_at_ms")
+    @classmethod
+    def _validate_expires_at_ms(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if int(value) < 0:
+            raise ValueError("expires_at_ms must be >= 0")
+        return int(value)
+
+    @model_validator(mode="after")
+    def _validate_timestamp_order(self) -> CachedOutcome:
+        if self.updated_at_ms < self.created_at_ms:
+            raise ValueError("updated_at_ms must be >= created_at_ms")
+        if self.expires_at_ms is not None and self.expires_at_ms < self.created_at_ms:
+            raise ValueError("expires_at_ms must be >= created_at_ms")
+        return self
 
 
 class IdempotencyLedger(Protocol):
