@@ -6,11 +6,14 @@ import types
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import NullPool, StaticPool
 from sqlalchemy.pool.impl import AsyncAdaptedQueuePool
 
 from reflexor.config import ReflexorSettings
-from reflexor.infra.db.engine import create_async_engine
+from reflexor.infra.db.engine import create_async_engine, create_async_session_factory
+from reflexor.infra.db.models import Base
 
 
 @pytest.mark.asyncio
@@ -36,6 +39,36 @@ async def test_create_async_engine_sqlite_memory_uses_staticpool() -> None:
     engine = create_async_engine(settings)
     try:
         assert isinstance(engine.sync_engine.pool, StaticPool)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_async_engine_sqlite_enables_foreign_keys() -> None:
+    settings = ReflexorSettings(database_url="sqlite+aiosqlite:///:memory:")
+
+    engine = create_async_engine(settings)
+    session_factory = create_async_session_factory(engine)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as session:
+            with pytest.raises(IntegrityError):
+                await session.execute(
+                    text(
+                        "INSERT INTO tasks ("
+                        "task_id, run_id, name, status, tool_call_id, attempts, "
+                        "max_attempts, timeout_s, depends_on, created_at_ms, "
+                        "started_at_ms, completed_at_ms, labels, metadata"
+                        ") VALUES ("
+                        "'00000000-0000-4000-8000-000000000001', "
+                        "'00000000-0000-4000-8000-000000000002', "
+                        "'orphan', 'pending', NULL, 0, 1, 60, '[]', 0, NULL, NULL, '[]', '{}'"
+                        ")"
+                    )
+                )
+                await session.commit()
     finally:
         await engine.dispose()
 

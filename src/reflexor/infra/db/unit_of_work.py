@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
@@ -27,8 +28,14 @@ class SqlAlchemyUnitOfWork:
             raise RuntimeError("UnitOfWork is already active")
 
         session = self._session_factory()
+        try:
+            transaction = await session.begin()
+        except Exception:
+            await session.close()
+            raise
+
         self._session = session
-        self._transaction = await session.begin()
+        self._transaction = transaction
         return self
 
     async def __aexit__(
@@ -50,9 +57,16 @@ class SqlAlchemyUnitOfWork:
 
         try:
             if exc_type is None:
-                await transaction.commit()
+                try:
+                    await transaction.commit()
+                except Exception:
+                    if getattr(transaction, "is_active", False):
+                        with suppress(Exception):
+                            await transaction.rollback()
+                    raise
             else:
-                await transaction.rollback()
+                if getattr(transaction, "is_active", True):
+                    await transaction.rollback()
         finally:
             await session.close()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any, cast
 
 from reflexor.domain.models import Approval, Task, ToolCall
 from reflexor.domain.models_event import Event
@@ -142,7 +143,26 @@ def task_from_row_dict(
     *,
     tool_call_row: Mapping[str, object] | None = None,
 ) -> Task:
-    tool_call = None if tool_call_row is None else tool_call_from_row_dict(tool_call_row)
+    expected_tool_call_id = row.get("tool_call_id")
+    normalized_tool_call_id: str | None
+    if expected_tool_call_id is None:
+        normalized_tool_call_id = None
+    else:
+        normalized_tool_call_id = str(expected_tool_call_id).strip()
+        if not normalized_tool_call_id:
+            raise ValueError("tool_call_id must be non-empty when provided")
+
+    if normalized_tool_call_id is None:
+        if tool_call_row is not None:
+            raise ValueError("tool_call_row must be omitted when task row has no tool_call_id")
+        tool_call = None
+    else:
+        if tool_call_row is None:
+            raise ValueError("tool_call_row is required when task row references tool_call_id")
+        tool_call = tool_call_from_row_dict(tool_call_row)
+        if tool_call.tool_call_id != normalized_tool_call_id:
+            raise ValueError("tool_call_row.tool_call_id must match task.tool_call_id")
+
     return Task.model_validate(
         {
             "task_id": row["task_id"],
@@ -258,9 +278,27 @@ def run_packet_to_row_dict(packet: RunPacket) -> dict[str, object]:
 
 def run_packet_from_row_dict(row: Mapping[str, object]) -> RunPacket:
     packet = row["packet"]
-    if not isinstance(packet, dict):
-        raise TypeError("row['packet'] must be a dict")
-    return RunPacket.model_validate(packet)
+    if not isinstance(packet, Mapping):
+        raise TypeError("row['packet'] must be a mapping")
+
+    run_id = str(row["run_id"]).strip()
+    if not run_id:
+        raise ValueError("row['run_id'] must be non-empty")
+
+    created_at_ms = int(cast(Any, row["created_at_ms"]))
+    packet_dict = dict(packet)
+
+    packet_run_id = packet_dict.get("run_id")
+    if packet_run_id is not None and str(packet_run_id).strip() != run_id:
+        raise ValueError("packet run_id must match row run_id")
+
+    packet_created_at_ms = packet_dict.get("created_at_ms")
+    if packet_created_at_ms is not None and int(packet_created_at_ms) != created_at_ms:
+        raise ValueError("packet created_at_ms must match row created_at_ms")
+
+    packet_dict["run_id"] = run_id
+    packet_dict["created_at_ms"] = created_at_ms
+    return RunPacket.model_validate(packet_dict)
 
 
 def run_packet_to_orm(packet: RunPacket) -> RunPacketRow:

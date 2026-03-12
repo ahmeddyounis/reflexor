@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.engine.url import URL, make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -36,6 +38,19 @@ def _is_sqlite_memory_url(url: URL) -> bool:
         return True
 
     return False
+
+
+def _install_sqlite_pragmas(engine: AsyncEngine) -> None:
+    @event.listens_for(engine.sync_engine, "connect")
+    def _configure_sqlite(
+        dbapi_connection: Any,
+        _connection_record: object,
+    ) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
 
 
 def create_async_engine(settings: ReflexorSettings | str, *, echo: bool = False) -> AsyncEngine:
@@ -80,12 +95,14 @@ def create_async_engine(settings: ReflexorSettings | str, *, echo: bool = False)
 
     if url.get_backend_name() == "sqlite":
         poolclass = StaticPool if _is_sqlite_memory_url(url) else NullPool
-        return _create_async_engine(
+        engine = _create_async_engine(
             normalized,
             echo=db_echo,
             connect_args={"check_same_thread": False},
             poolclass=poolclass,
         )
+        _install_sqlite_pragmas(engine)
+        return engine
 
     connect_args: dict[str, object] = {}
 
