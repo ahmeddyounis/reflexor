@@ -6,8 +6,7 @@ services:
     environment:
       POSTGRES_DB: reflexor
       POSTGRES_USER: reflexor
-      # Local-only convenience: avoid embedding secrets in compose. Not suitable for real production.
-      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_PASSWORD: ${REFLEXOR_LOCAL_POSTGRES_PASSWORD:-reflexor-local-postgres-password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +14,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    restart: unless-stopped
 
   redis:
     image: redis:7
@@ -23,17 +23,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   migrate:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     environment:
-      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor@postgres:5432/reflexor
+      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor:${REFLEXOR_LOCAL_POSTGRES_PASSWORD:-reflexor-local-postgres-password}@postgres:5432/reflexor
     depends_on:
       postgres:
         condition: service_healthy
     command: ["python", "scripts/db_upgrade.py"]
+    init: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     restart: "no"
 
   api:
@@ -41,16 +45,19 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     environment:
-      REFLEXOR_PROFILE: dev
+      REFLEXOR_PROFILE: prod
       REFLEXOR_DRY_RUN: "true"
+      REFLEXOR_ADMIN_API_KEY: ${REFLEXOR_ADMIN_API_KEY:-reflexor-local-admin-key}
+      REFLEXOR_EVENTS_REQUIRE_ADMIN: "true"
 
-      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor@postgres:5432/reflexor
+      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor:${REFLEXOR_LOCAL_POSTGRES_PASSWORD:-reflexor-local-postgres-password}@postgres:5432/reflexor
 
       REFLEXOR_QUEUE_BACKEND: redis_streams
       REFLEXOR_REDIS_URL: redis://redis:6379/0
       REFLEXOR_REDIS_STREAM_KEY: reflexor:tasks
       REFLEXOR_REDIS_CONSUMER_GROUP: reflexor
       REFLEXOR_REDIS_DELAYED_ZSET_KEY: reflexor:tasks:delayed
+      REFLEXOR_REDIS_STREAM_MAXLEN: "10000"
 
       REFLEXOR_ENABLED_SCOPES: fs.read
       REFLEXOR_APPROVAL_REQUIRED_SCOPES: ""
@@ -71,6 +78,9 @@ services:
       - workspace_data:/workspace
     ports:
       - "8000:8000"
+    init: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     command:
       ["reflexor", "run", "api", "--host", "0.0.0.0", "--port", "8000", "--no-reload"]
     healthcheck:
@@ -91,10 +101,12 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     environment:
-      REFLEXOR_PROFILE: dev
+      REFLEXOR_PROFILE: prod
       REFLEXOR_DRY_RUN: "true"
+      REFLEXOR_ADMIN_API_KEY: ${REFLEXOR_ADMIN_API_KEY:-reflexor-local-admin-key}
+      REFLEXOR_EVENTS_REQUIRE_ADMIN: "true"
 
-      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor@postgres:5432/reflexor
+      REFLEXOR_DATABASE_URL: postgresql+asyncpg://reflexor:${REFLEXOR_LOCAL_POSTGRES_PASSWORD:-reflexor-local-postgres-password}@postgres:5432/reflexor
 
       REFLEXOR_QUEUE_BACKEND: redis_streams
       REFLEXOR_REDIS_URL: redis://redis:6379/0
@@ -102,6 +114,7 @@ services:
       REFLEXOR_REDIS_CONSUMER_GROUP: reflexor
       REFLEXOR_REDIS_DELAYED_ZSET_KEY: reflexor:tasks:delayed
       REFLEXOR_REDIS_CONSUMER_NAME: reflexor-worker
+      REFLEXOR_REDIS_STREAM_MAXLEN: "10000"
 
       REFLEXOR_ENABLED_SCOPES: fs.read
       REFLEXOR_APPROVAL_REQUIRED_SCOPES: ""
@@ -117,6 +130,9 @@ services:
         condition: service_completed_successfully
     volumes:
       - workspace_data:/workspace
+    init: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     command: ["reflexor", "run", "worker", "--concurrency", "1"]
     restart: unless-stopped
 

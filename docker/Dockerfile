@@ -17,11 +17,9 @@ RUN python -m venv "$VIRTUAL_ENV"
 COPY pyproject.toml README.md LICENSE alembic.ini /build/
 COPY src /build/src
 COPY alembic /build/alembic
-COPY scripts /build/scripts
-COPY docker /build/docker
 
 RUN python -m pip install -U pip \
-    && python -m pip install --no-cache-dir "/build[postgres,redis]"
+    && python -m pip install --no-cache-dir "/build[server]"
 
 FROM python:3.11-slim AS runtime
 
@@ -39,8 +37,8 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY alembic.ini /app/alembic.ini
 COPY alembic /app/alembic
-COPY scripts /app/scripts
-COPY docker /app/docker
+COPY scripts/db_upgrade.py /app/scripts/db_upgrade.py
+COPY docker/reflex_rules.json /app/docker/reflex_rules.json
 
 RUN mkdir -p /workspace /tmp \
     && chown -R reflexor:reflexor /app /workspace /tmp /home/reflexor

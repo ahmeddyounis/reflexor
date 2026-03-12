@@ -33,6 +33,7 @@ dotenv = ["python-dotenv>=1.0,<2"]
 postgres = ["asyncpg>=0.29,<1"]
 redis = ["redis>=5,<6"]
 hiredis = ["hiredis>=2,<3"]
+server = ["asyncpg>=0.29,<1", "redis>=5,<6", "hiredis>=2,<3"]
 otel = [
   "opentelemetry-api>=1.36,<2",
   "opentelemetry-sdk>=1.36,<2",
