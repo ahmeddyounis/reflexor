@@ -32,6 +32,14 @@ class RunPacketImportError(ValueError):
     """Raised when an exported run packet file cannot be imported."""
 
 
+def _read_bytes_limited(path: Path, *, max_bytes: int) -> bytes:
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise RunPacketImportError(f"export file is too large (>{max_bytes} bytes)")
+    return data
+
+
 def _read_export_file(path: Path, *, max_bytes: int) -> bytes:
     if max_bytes <= 0:
         raise ValueError("max_bytes must be > 0")
@@ -41,16 +49,7 @@ def _read_export_file(path: Path, *, max_bytes: int) -> bytes:
     if not path.is_file():
         raise RunPacketImportError(f"not a file: {path}")
 
-    size = path.stat().st_size
-    if size > max_bytes:
-        raise RunPacketImportError(f"export file is too large ({size} bytes); max is {max_bytes}")
-
-    data = path.read_bytes()
-    if len(data) > max_bytes:
-        raise RunPacketImportError(
-            f"export file is too large ({len(data)} bytes); max is {max_bytes}"
-        )
-    return data
+    return _read_bytes_limited(path, max_bytes=max_bytes)
 
 
 def _metadata_with_import_provenance(
