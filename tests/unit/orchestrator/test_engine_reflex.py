@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -294,43 +296,50 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
 
 
 async def test_unexpected_reflex_errors_do_not_leak_raw_messages(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
-    class _RecordingLogger:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, object]]] = []
-
-        def exception(self, message: str, **kwargs: object) -> None:
-            self.calls.append((message, dict(kwargs)))
-
     settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=10_000)
-    logger = _RecordingLogger()
-    monkeypatch.setattr(reflex_module, "logger", logger)
+    stream = io.StringIO()
+    logger = reflex_module.logger
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
 
     clock = _FixedClock()
     queue = InMemoryQueue(now_ms=clock.now_ms)
     sink = InMemoryRunPacketSink(settings=settings)
 
-    engine = OrchestratorEngine(
-        reflex_router=_ExplodingRouter(),
-        planner=NoOpPlanner(),
-        tool_registry=ToolRegistry(),
-        queue=queue,
-        run_sink=sink,
-        limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
-        clock=clock,
-        metrics=ReflexorMetrics.build(),
-        enabled_scopes=("net.http",),
-    )
+    try:
+        engine = OrchestratorEngine(
+            reflex_router=_ExplodingRouter(),
+            planner=NoOpPlanner(),
+            tool_registry=ToolRegistry(),
+            queue=queue,
+            run_sink=sink,
+            limits=BudgetLimits(max_tasks_per_run=10, max_tool_calls_per_run=10),
+            clock=clock,
+            metrics=ReflexorMetrics.build(),
+            enabled_scopes=("net.http",),
+        )
 
-    run_id = await engine.handle_event(_event(tmp_path))
-    stored = await sink.get(run_id)
+        run_id = await engine.handle_event(_event(tmp_path))
+        stored = await sink.get(run_id)
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
 
     assert stored is not None
     assert stored["policy_decisions"][0]["type"] == "reflex_error"
     assert stored["policy_decisions"][0]["message"] == "unexpected reflex error"
     assert "sk-raw-secret-should-not-leak" not in json.dumps(stored)
-    assert logger.calls[0][0] == "unexpected reflex error"
+    assert "unexpected reflex error" in stream.getvalue()
+    assert "sk-raw-secret-should-not-leak" not in stream.getvalue()
 
 
 async def test_reflex_partial_enqueue_records_policy_and_preserves_partial_state(

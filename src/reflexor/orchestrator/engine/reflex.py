@@ -215,14 +215,15 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> EventHandleO
                         "failed_task_id": exc.failed_task_id,
                     }
                 )
-            except Exception:  # pragma: no cover
-                logger.exception(
+            except Exception as exc:  # pragma: no cover
+                logger.error(
                     "unexpected reflex error",
                     extra={
                         "run_id": run_id,
                         "event_id": persisted_event.event_id,
                         "event_type": persisted_event.type,
                         "event_source": persisted_event.source,
+                        "exception_type": type(exc).__name__,
                     },
                 )
                 policy_decisions.append(

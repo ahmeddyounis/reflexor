@@ -320,13 +320,14 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                                 "message": str(exc),
                             }
                         )
-                    except Exception:  # pragma: no cover
-                        logger.exception(
+                    except Exception as exc:  # pragma: no cover
+                        logger.error(
                             "unexpected planning error",
                             extra={
                                 "run_id": planning_run_id,
                                 "trigger": trigger,
                                 "selected_events": len(selected_events),
+                                "exception_type": type(exc).__name__,
                             },
                         )
                         policy_decisions.append(
