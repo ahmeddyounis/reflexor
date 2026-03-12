@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -8,21 +9,31 @@ from typing import Any
 from reflexor.observability.truncation import truncate_collection
 
 _KEY_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)([^/\s@]+)@")
 
 DEFAULT_REPLACEMENT = "<redacted>"
+NONFINITE_FLOAT_REPLACEMENT = "<non-finite-float>"
 
 DEFAULT_REDACT_KEYS: frozenset[str] = frozenset(
     {
+        "access_token",
         "api_key",
         "apikey",
         "authorization",
         "cookie",
+        "id_token",
         "password",
         "passphrase",
+        "private_key",
+        "proxy_authorization",
         "refresh_token",
         "secret",
+        "secret_key",
+        "session_id",
+        "session_token",
         "set_cookie",
         "token",
+        "x_api_key",
     }
 )
 
@@ -50,6 +61,27 @@ def _safe_stringify(obj: object) -> str:
             return repr(obj)
         except Exception:
             return f"<unstringifiable {type(obj).__name__}>"
+
+
+def _should_redact_key(normalized_key: str, *, redact_keys: frozenset[str]) -> bool:
+    if normalized_key in redact_keys:
+        return True
+
+    return normalized_key.endswith(
+        (
+            "_api_key",
+            "_apikey",
+            "_authorization",
+            "_cookie",
+            "_password",
+            "_passphrase",
+            "_private_key",
+            "_secret",
+            "_session_id",
+            "_session_token",
+            "_token",
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,8 +125,13 @@ class Redactor:
         )
 
     def _redact(self, obj: object, *, depth: int, stack: set[int]) -> object:
-        if obj is None or isinstance(obj, (bool, int, float)):
+        if obj is None or isinstance(obj, (bool, int)):
             return obj
+
+        if isinstance(obj, float):
+            if math.isfinite(obj):
+                return obj
+            return NONFINITE_FLOAT_REPLACEMENT
 
         if isinstance(obj, str):
             return self._redact_text(obj)
@@ -114,7 +151,7 @@ class Redactor:
         return self._redact_text(_safe_stringify(obj))
 
     def _redact_text(self, text: str) -> str:
-        redacted = text
+        redacted = _URL_USERINFO_RE.sub(rf"\1{self.replacement}@", text)
         for pattern in self.patterns:
             redacted = pattern.sub(self.replacement, redacted)
         return redacted
@@ -140,7 +177,10 @@ class Redactor:
                     result["<TRUNCATED>"] = f"{len(mapping) - self.max_items} more items"
                     break
 
-                if isinstance(key, str) and _normalize_key(key) in self.redact_keys:
+                if isinstance(key, str) and _should_redact_key(
+                    _normalize_key(key),
+                    redact_keys=self.redact_keys,
+                ):
                     result[key] = self.replacement
                     continue
 
@@ -171,7 +211,7 @@ class Redactor:
     def _redact_sequence_item(self, item: object, *, depth: int, stack: set[int]) -> object:
         if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
             key, value = item
-            if _normalize_key(key) in self.redact_keys:
+            if _should_redact_key(_normalize_key(key), redact_keys=self.redact_keys):
                 return (key, self.replacement)
             return (key, self._redact(value, depth=depth, stack=stack))
 

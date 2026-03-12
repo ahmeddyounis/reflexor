@@ -33,7 +33,11 @@ class ToolRunner:
         try:
             tool = self.registry.get(tool_name)
         except KeyError as exc:
-            return ToolResult(ok=False, error_code="UNKNOWN_TOOL", error_message=str(exc))
+            settings = self.settings or get_settings()
+            return self._sanitize_result(
+                ToolResult(ok=False, error_code="UNKNOWN_TOOL", error_message=str(exc)),
+                tool_manifest_max_output_bytes=int(settings.max_tool_output_bytes),
+            )
 
         args_payload: Mapping[str, object] = raw_args or {}
 
@@ -53,11 +57,30 @@ class ToolRunner:
         try:
             normalized_args = normalize_tool_args(args_model, workspace_root=ctx.workspace_root)
         except ValueError as exc:
-            return ToolResult(ok=False, error_code="INVALID_ARGS", error_message=str(exc))
+            return self._sanitize_result(
+                ToolResult(ok=False, error_code="INVALID_ARGS", error_message=str(exc)),
+                tool_manifest_max_output_bytes=tool.manifest.max_output_bytes,
+            )
 
         settings = self.settings or get_settings()
         backend = self.backend or InProcessBackend()
-        result = await backend.execute(tool=tool, args=normalized_args, ctx=ctx, settings=settings)
+        try:
+            result = await backend.execute(
+                tool=tool,
+                args=normalized_args,
+                ctx=ctx,
+                settings=settings,
+            )
+        except Exception as exc:
+            return self._sanitize_result(
+                ToolResult(
+                    ok=False,
+                    error_code="TOOL_ERROR",
+                    error_message="tool backend failed",
+                    debug={"exception_type": type(exc).__name__},
+                ),
+                tool_manifest_max_output_bytes=tool.manifest.max_output_bytes,
+            )
 
         return self._sanitize_result(
             result,
@@ -74,6 +97,11 @@ class ToolRunner:
         updates: dict[str, object] = {}
         if result.data is not None:
             updates["data"] = sanitize_tool_output(result.data, settings=effective_settings)
+        if result.error_message is not None:
+            updates["error_message"] = sanitize_tool_output(
+                result.error_message,
+                settings=effective_settings,
+            )
         if result.debug is not None:
             updates["debug"] = sanitize_tool_output(result.debug, settings=effective_settings)
         if result.produced_artifacts is not None:

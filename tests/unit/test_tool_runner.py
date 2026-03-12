@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
 from reflexor.config import ReflexorSettings
+from reflexor.tools.execution_backend import ToolExecutionBackend
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
@@ -138,6 +140,40 @@ class InvalidResultTool:
         return {"ok": False}  # type: ignore[return-value]
 
 
+class ErrorMessageTool:
+    manifest = ToolManifest(
+        name="tests.error_message",
+        version="0.1.0",
+        description="Tool that returns an unsafe error_message.",
+        permission_scope="fs.read",
+        idempotent=True,
+        max_output_bytes=80,
+    )
+    ArgsModel = SleepArgs
+
+    async def run(self, args: SleepArgs, ctx: ToolContext) -> ToolResult:
+        _ = (args, ctx)
+        return ToolResult(
+            ok=False,
+            error_code="TOOL_ERROR",
+            error_message="request failed for https://user:super-secret@example.com/path",
+            debug={"token": "plain-api-key-value"},
+        )
+
+
+class ExplodingBackend(ToolExecutionBackend):
+    async def execute(
+        self,
+        *,
+        tool: Any,
+        args: BaseModel,
+        ctx: ToolContext,
+        settings: ReflexorSettings,
+    ) -> ToolResult:
+        _ = (tool, args, ctx, settings)
+        raise RuntimeError("backend exploded with token plain-api-key-value")
+
+
 def test_runner_invalid_args_fail_fast(tmp_path: Path) -> None:
     registry = ToolRegistry()
     registry.register(StrictTool())
@@ -234,6 +270,41 @@ def test_runner_sanitizes_and_truncates_tool_output(tmp_path: Path) -> None:
     assert isinstance(result.data, dict)
     assert result.data["token"] == "<redacted>"
     assert "<truncated>" in result.data["text"]
+
+
+def test_runner_sanitizes_error_messages_and_debug_payloads(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(ErrorMessageTool())
+
+    settings = ReflexorSettings(workspace_root=tmp_path, max_tool_output_bytes=80)
+    runner = ToolRunner(registry=registry, settings=settings)
+
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=1.0)
+    result = asyncio.run(runner.run_tool("tests.error_message", {}, ctx=ctx))
+
+    assert result.ok is False
+    assert result.error_message == "request failed for https://<redacted>@example.com/path"
+    assert result.debug == {"token": "<redacted>"}
+
+
+def test_runner_returns_sanitized_backend_failures(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(StrictTool())
+
+    settings = ReflexorSettings(workspace_root=tmp_path, max_tool_output_bytes=80)
+    runner = ToolRunner(
+        registry=registry,
+        settings=settings,
+        backend=ExplodingBackend(),
+    )
+
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=1.0)
+    result = asyncio.run(runner.run_tool("tests.strict", {"count": 1}, ctx=ctx))
+
+    assert result.ok is False
+    assert result.error_code == "TOOL_ERROR"
+    assert result.error_message == "tool backend failed"
+    assert result.debug == {"exception_type": "RuntimeError"}
 
 
 def test_runner_enforces_timeout(tmp_path: Path) -> None:

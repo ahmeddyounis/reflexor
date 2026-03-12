@@ -66,7 +66,7 @@ class SecretsProvider(Protocol):
 def validate_resolved_secret(secret: str) -> str:
     if not isinstance(secret, str):
         raise TypeError("resolved secret must be a string")
-    if secret == "":
+    if not secret.strip():
         raise ValueError("resolved secret must be non-empty")
     return secret
 

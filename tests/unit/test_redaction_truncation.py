@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
 import uuid
+from collections.abc import Mapping, Sequence
+from typing import cast
 
 from reflexor.config import ReflexorSettings
 from reflexor.observability.audit_sanitize import sanitize_for_audit, sanitize_tool_output
@@ -21,11 +24,26 @@ def test_redactor_key_and_regex_redaction_handles_nested_and_bytes() -> None:
     }
 
     redacted = redactor.redact(obj)
+    assert isinstance(redacted, Mapping)
     assert redacted["Password"] == "<redacted>"
-    assert redacted["nested"][0]["authorization"] == "<redacted>"
-    assert redacted["nested"][1]["apiKey"] == "<redacted>"
-    assert redacted["headers"][0][1] == "<redacted>"
-    assert redacted["headers"][1][1] == "application/json"
+    nested = redacted["nested"]
+    assert isinstance(nested, Sequence)
+    indexed_nested = cast(Sequence[object], nested)
+    nested_first = indexed_nested[0]
+    nested_second = indexed_nested[1]
+    assert isinstance(nested_first, Mapping)
+    assert isinstance(nested_second, Mapping)
+    assert nested_first["authorization"] == "<redacted>"
+    assert nested_second["apiKey"] == "<redacted>"
+    headers = redacted["headers"]
+    assert isinstance(headers, Sequence)
+    indexed_headers = cast(Sequence[object], headers)
+    header_first = indexed_headers[0]
+    header_second = indexed_headers[1]
+    assert isinstance(header_first, tuple)
+    assert isinstance(header_second, tuple)
+    assert header_first[1] == "<redacted>"
+    assert header_second[1] == "application/json"
 
     redacted_text = redactor.redact("Bearer abcdefghijklmnop")
     assert redacted_text == "Bearer <redacted>"
@@ -44,11 +62,14 @@ def test_redactor_respects_max_depth_and_max_items() -> None:
     limited = Redactor(max_items=2)
     many = {"a": 1, "b": 2, "c": 3}
     redacted = limited.redact(many)
+    assert isinstance(redacted, Mapping)
     assert "<TRUNCATED>" in redacted
 
     seq = ["a", "b", "c"]
     redacted_seq = limited.redact(seq)
-    assert redacted_seq[-1] == "<TRUNCATED>"
+    assert isinstance(redacted_seq, Sequence)
+    indexed_seq = cast(Sequence[object], redacted_seq)
+    assert indexed_seq[-1] == "<TRUNCATED>"
 
 
 def test_redactor_truncates_after_redaction() -> None:
@@ -114,10 +135,24 @@ def test_sanitizer_preserves_ids_and_applies_redaction_and_truncation() -> None:
     sanitized = sanitize_for_audit(packet, settings=settings)
 
     assert sanitized["run_id"] == run_id
-    assert sanitized["event"]["event_id"] == event_id
-    assert sanitized["tasks"][0]["task_id"] == task_id
-    assert sanitized["tasks"][0]["tool_call"]["tool_call_id"] == tool_call_id
-    assert sanitized["tool_results"][0]["tool_call_id"] == tool_call_id
+    event = sanitized["event"]
+    assert isinstance(event, Mapping)
+    assert event["event_id"] == event_id
+    tasks = sanitized["tasks"]
+    assert isinstance(tasks, Sequence)
+    indexed_tasks = cast(Sequence[object], tasks)
+    first_task = indexed_tasks[0]
+    assert isinstance(first_task, Mapping)
+    assert first_task["task_id"] == task_id
+    tool_call = first_task["tool_call"]
+    assert isinstance(tool_call, Mapping)
+    assert tool_call["tool_call_id"] == tool_call_id
+    tool_results = sanitized["tool_results"]
+    assert isinstance(tool_results, Sequence)
+    indexed_tool_results = cast(Sequence[object], tool_results)
+    first_tool_result = indexed_tool_results[0]
+    assert isinstance(first_tool_result, Mapping)
+    assert first_tool_result["tool_call_id"] == tool_call_id
 
     dump = str(sanitized)
     assert "sk-" not in dump
@@ -146,3 +181,17 @@ def test_sanitize_tool_output_realistic_blob_is_safe_and_bounded() -> None:
     assert "<truncated>" in dump
     assert "sessionid=abc" not in dump
     assert estimate_size_bytes(sanitized) <= settings.max_tool_output_bytes
+
+
+def test_sanitize_tool_output_replaces_non_finite_numbers() -> None:
+    settings = ReflexorSettings(max_tool_output_bytes=220, max_run_packet_bytes=5_000)
+
+    sanitized = sanitize_tool_output(
+        {"score": math.nan, "latency": math.inf},
+        settings=settings,
+    )
+
+    assert sanitized == {
+        "score": "<non-finite-float>",
+        "latency": "<non-finite-float>",
+    }

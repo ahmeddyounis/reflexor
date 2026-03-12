@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 
 TRUNCATION_MARKER = "<truncated>"
 TRUNCATION_MARKER_BYTES = TRUNCATION_MARKER.encode("utf-8")
+NONFINITE_FLOAT_REPLACEMENT = "<non-finite-float>"
 
 
 def truncate_str(value: str, *, max_bytes: int, marker: str = TRUNCATION_MARKER) -> str:
@@ -98,8 +100,13 @@ def _estimate_size_bytes(
     if obj is None:
         return 0
 
-    if isinstance(obj, (bool, int, float)):
+    if isinstance(obj, (bool, int)):
         return len(repr(obj).encode("utf-8"))
+
+    if isinstance(obj, float):
+        if math.isfinite(obj):
+            return len(repr(obj).encode("utf-8"))
+        return len(NONFINITE_FLOAT_REPLACEMENT.encode("utf-8"))
 
     if isinstance(obj, str):
         return len(obj.encode("utf-8"))
@@ -169,11 +176,25 @@ def _truncate_with_budget(
             return (_restore_sequence_type(obj, []), 0, True)
         return ("", 0, True)
 
-    if obj is None or isinstance(obj, (bool, int, float)):
+    if obj is None or isinstance(obj, (bool, int)):
         size = estimate_size_bytes(obj, max_depth=0, max_items=0)
         if size <= budget:
             return (obj, budget - size, False)
         return (truncate_str(marker, max_bytes=budget, marker=marker), 0, True)
+
+    if isinstance(obj, float):
+        if math.isfinite(obj):
+            size = estimate_size_bytes(obj, max_depth=0, max_items=0)
+            if size <= budget:
+                return (obj, budget - size, False)
+            return (truncate_str(marker, max_bytes=budget, marker=marker), 0, True)
+        replacement = truncate_str(
+            NONFINITE_FLOAT_REPLACEMENT,
+            max_bytes=budget,
+            marker=marker,
+        )
+        remaining = budget - len(replacement.encode("utf-8"))
+        return (replacement, max(0, remaining), True)
 
     if isinstance(obj, str):
         size = len(obj.encode("utf-8"))

@@ -79,6 +79,8 @@ async def test_export_run_packet_writes_sanitized_bounded_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret = "sk-super-secret-token-1234567890"
+    api_key = "plain-api-key-value"
+    dsn = "postgresql://operator:super-secret@example.com/reflexor"
 
     settings = ReflexorSettings(
         workspace_root=tmp_path,
@@ -104,13 +106,15 @@ async def test_export_run_packet_writes_sanitized_bounded_json(
             received_at_ms=1,
             payload={
                 "authorization": f"Bearer {secret}",
+                "X-API-Key": api_key,
+                "dsn": dsn,
                 "note": f"Bearer {secret}",
             },
         )
         tool_call = ToolCall(
             tool_call_id=tool_call_id,
             tool_name="tests.mock",
-            args={"note": f"Bearer {secret}"},
+            args={"note": f"Bearer {secret}", "endpoint_url": dsn},
             permission_scope="net.http",
             idempotency_key="k1",
             status=ToolCallStatus.PENDING,
@@ -137,6 +141,8 @@ async def test_export_run_packet_writes_sanitized_bounded_json(
                 {
                     "tool_call_id": tool_call_id,
                     "authorization": f"Bearer {secret}",
+                    "X-API-Key": api_key,
+                    "endpoint_url": dsn,
                     "output": "x" * 5_000,
                     "note": f"Bearer {secret}",
                 }
@@ -180,6 +186,9 @@ async def test_export_run_packet_writes_sanitized_bounded_json(
         assert exported["packet"]["run_id"] == run_id
 
         assert secret not in raw
+        assert api_key not in raw
+        assert dsn not in raw
+        assert "postgresql://<redacted>@example.com/reflexor" in raw
         assert "<redacted>" in raw
         assert "<truncated>" in raw
         assert len(raw.encode("utf-8")) <= settings.max_run_packet_bytes
