@@ -29,6 +29,12 @@ class _ExplodingExecutor:
         raise RuntimeError("boom")
 
 
+class _SecretExplodingExecutor:
+    async def process_lease(self, lease: Lease) -> None:
+        _ = lease
+        raise RuntimeError("Bearer sk-worker-secret-should-not-leak")
+
+
 class _RecordingQueue:
     def __init__(self) -> None:
         self.nack_calls: list[tuple[Lease, float | None, str | None]] = []
@@ -60,6 +66,17 @@ class _RecordingQueue:
 
     async def aclose(self) -> None:  # pragma: no cover
         return
+
+
+class _DequeueExplodingQueue(_RecordingQueue):
+    async def dequeue(
+        self,
+        timeout_s: float | None = None,
+        *,
+        wait_s: float | None = 0.0,
+    ) -> Lease | None:
+        _ = (timeout_s, wait_s)
+        raise RuntimeError("Bearer sk-worker-dequeue-secret-should-not-leak")
 
 
 def _lease() -> Lease:
@@ -171,3 +188,71 @@ async def test_worker_logs_clear_stale_request_id_context() -> None:
     payload = json.loads(stream.getvalue().splitlines()[0])
     assert payload["message"] == "worker failed to process lease"
     assert payload["request_id"] is None
+
+
+async def test_worker_process_error_logs_do_not_leak_raw_messages() -> None:
+    queue = _RecordingQueue()
+    stream = io.StringIO()
+    logger = logging.getLogger("reflexor.tests.worker_runner.raw")
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.handlers = [handler]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
+
+    try:
+        runner = WorkerRunner(
+            queue=queue,
+            executor=cast(Any, _SecretExplodingExecutor()),
+            visibility_timeout_s=30.0,
+            install_signal_handlers=False,
+            close_queue_on_exit=False,
+            logger=logger,
+        )
+        await runner._handle_lease(_lease())
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    logged = stream.getvalue()
+    assert "worker failed to process lease" in logged
+    assert "sk-worker-secret-should-not-leak" not in logged
+
+
+async def test_worker_dequeue_error_logs_do_not_leak_raw_messages() -> None:
+    queue = _DequeueExplodingQueue()
+    stream = io.StringIO()
+    logger = logging.getLogger("reflexor.tests.worker_runner.dequeue")
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.handlers = [handler]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
+
+    try:
+        runner = WorkerRunner(
+            queue=queue,
+            executor=cast(Any, _NoopExecutor()),
+            visibility_timeout_s=30.0,
+            dequeue_wait_s=0.0,
+            install_signal_handlers=False,
+            close_queue_on_exit=False,
+            logger=logger,
+        )
+        with pytest.raises(RuntimeError, match="sk-worker-dequeue-secret-should-not-leak"):
+            await runner.run()
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    logged = stream.getvalue()
+    assert "worker dequeue failed" in logged
+    assert "sk-worker-dequeue-secret-should-not-leak" not in logged

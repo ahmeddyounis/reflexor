@@ -106,8 +106,11 @@ class WorkerRunner:
             except QueueClosed:
                 self.stop_event.set()
                 return None
-            except Exception:
-                self.logger.exception("worker dequeue failed")
+            except Exception as exc:
+                self.logger.error(
+                    "worker dequeue failed",
+                    extra={"exception_type": type(exc).__name__},
+                )
                 raise
 
         dequeue_task.cancel()
@@ -129,14 +132,15 @@ class WorkerRunner:
             ):
                 try:
                     await self.executor.process_lease(lease)
-                except Exception:
-                    self.logger.exception(
+                except Exception as exc:
+                    self.logger.error(
                         "worker failed to process lease",
                         extra={
                             "envelope_id": lease.envelope.envelope_id,
                             "task_id": lease.envelope.task_id,
                             "run_id": lease.envelope.run_id,
                             "attempt": lease.attempt,
+                            "exception_type": type(exc).__name__,
                         },
                     )
                     try:
