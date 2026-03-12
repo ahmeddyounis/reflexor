@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import configparser
 import importlib.util
 import os
 import sys
@@ -14,20 +15,9 @@ from alembic.config import Config
 from sqlalchemy.engine.url import URL, make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
-_DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./reflexor.db"
+from reflexor.infra.db.models import Base
 
-_RESET_TABLES: tuple[str, ...] = (
-    "event_dedupes",
-    "memory_items",
-    "approvals",
-    "tasks",
-    "tool_calls",
-    "run_packets",
-    "idempotency_ledger",
-    "runs",
-    "events",
-    "alembic_version",
-)
+_DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./reflexor.db"
 
 
 def _find_repo_root(start: Path) -> Path:
@@ -90,6 +80,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow running even if REFLEXOR_PROFILE=prod (still requires --yes).",
     )
+    reset_dev.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Allow reset-dev against non-local database URLs (still requires --yes).",
+    )
 
     return parser
 
@@ -117,7 +112,76 @@ def _resolve_database_url(*, repo_root: Path, override: str | None) -> str:
     return _DEFAULT_DATABASE_URL
 
 
-def _normalize_async_database_url(database_url: str) -> tuple[str, str | None, URL]:
+def _config_file_database_url(config: Config) -> str | None:
+    config_file_name = config.config_file_name
+    if config_file_name is None:
+        return None
+
+    parser = configparser.ConfigParser()
+    loaded = parser.read(config_file_name)
+    if not loaded:
+        return None
+
+    section = config.config_ini_section
+    if not parser.has_option(section, "sqlalchemy.url"):
+        return None
+
+    value = parser.get(section, "sqlalchemy.url").strip()
+    return value or None
+
+
+def _normalize_sqlite_database_path(url: URL, *, base_dir: Path) -> tuple[URL, str | None]:
+    if url.get_backend_name() != "sqlite":
+        return url, None
+
+    database = url.database
+    if database in {None, "", ":memory:"}:
+        return url, None
+    if str(database).startswith("file:"):
+        return url, None
+
+    normalized_path = Path(str(database)).expanduser()
+    if not normalized_path.is_absolute():
+        normalized_path = (base_dir / normalized_path).resolve()
+
+    resolved_database = str(normalized_path)
+    if resolved_database == database:
+        return url, None
+
+    return (
+        url.set(database=resolved_database),
+        f"Resolved SQLite database path against {base_dir}.",
+    )
+
+
+def resolve_alembic_database_url(config: Config, *, base_dir: Path | None = None) -> str:
+    configured_url = (config.get_main_option("sqlalchemy.url") or "").strip()
+    file_url = _config_file_database_url(config)
+    env_url = (os.getenv("REFLEXOR_DATABASE_URL") or "").strip()
+
+    if configured_url and (file_url is None or configured_url != file_url):
+        raw_url = configured_url
+    elif env_url:
+        raw_url = env_url
+    elif configured_url:
+        raw_url = configured_url
+    else:
+        raise ValueError(
+            "database_url must be non-empty (set REFLEXOR_DATABASE_URL or sqlalchemy.url)"
+        )
+
+    normalized_url, _, _ = _normalize_async_database_url(
+        raw_url,
+        base_dir=base_dir,
+    )
+    return normalized_url
+
+
+def _normalize_async_database_url(
+    database_url: str,
+    *,
+    base_dir: Path | None = None,
+) -> tuple[str, str | None, URL]:
     raw = str(database_url or "").strip()
     if not raw:
         raise ValueError(
@@ -138,21 +202,26 @@ def _normalize_async_database_url(database_url: str) -> tuple[str, str | None, U
     backend = url.get_backend_name()
     driver = url.get_driver_name()
     normalized = url
-    note: str | None = None
+    notes: list[str] = []
 
     if backend == "sqlite" and driver != "aiosqlite":
         normalized = url.set(drivername="sqlite+aiosqlite")
-        note = "Normalized sqlite URL to async driver (aiosqlite)."
+        notes.append("Normalized sqlite URL to async driver (aiosqlite).")
     elif backend == "postgresql" and driver != "asyncpg":
         normalized = url.set(drivername="postgresql+asyncpg")
-        note = "Normalized Postgres URL to async driver (asyncpg)."
+        notes.append("Normalized Postgres URL to async driver (asyncpg).")
     elif backend not in {"sqlite", "postgresql"}:
         raise ValueError(
             f"Unsupported database backend: {backend!r} (expected sqlite or postgresql)."
         )
 
+    if base_dir is not None:
+        normalized, path_note = _normalize_sqlite_database_path(normalized, base_dir=base_dir)
+        if path_note is not None:
+            notes.append(path_note)
+
     normalized_str = normalized.render_as_string(hide_password=False)
-    return normalized_str, note, normalized
+    return normalized_str, "; ".join(notes) or None, normalized
 
 
 def _require_driver(url: URL) -> None:
@@ -183,10 +252,41 @@ async def _reset_schema(*, database_url: str) -> None:
         async with engine.begin() as conn:
             dialect = conn.dialect.name
             cascade = " CASCADE" if dialect == "postgresql" else ""
-            for table in _RESET_TABLES:
+            table_names = [table.name for table in reversed(Base.metadata.sorted_tables)]
+            table_names.append("alembic_version")
+            for table in table_names:
                 await conn.execute(sa.text(f'DROP TABLE IF EXISTS "{table}"{cascade}'))
     finally:
         await engine.dispose()
+
+
+def _database_url_is_local(url: URL) -> bool:
+    backend = url.get_backend_name()
+    if backend == "sqlite":
+        return True
+    if backend != "postgresql":
+        return False
+
+    hosts: list[str] = []
+    if url.host is not None:
+        hosts.append(str(url.host))
+
+    query_host = url.query.get("host")
+    if isinstance(query_host, tuple):
+        hosts.extend(str(value) for value in query_host)
+    elif query_host is not None:
+        hosts.append(str(query_host))
+
+    if not hosts:
+        return False
+
+    for host in hosts:
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            continue
+        if host.startswith("/"):
+            continue
+        return False
+    return True
 
 
 def _print_actionable_error(exc: Exception, *, database_url: str) -> None:
@@ -228,7 +328,10 @@ def main(argv: list[str] | None = None) -> int:
 
     database_url_raw = _resolve_database_url(repo_root=repo_root, override=args.database_url)
     try:
-        database_url, note, parsed_url = _normalize_async_database_url(database_url_raw)
+        database_url, note, parsed_url = _normalize_async_database_url(
+            database_url_raw,
+            base_dir=repo_root,
+        )
         _require_driver(parsed_url)
     except Exception as exc:
         _print_actionable_error(exc, database_url=database_url_raw)
@@ -258,6 +361,13 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "ERROR: refusing to run reset-dev while REFLEXOR_PROFILE=prod "
                 "(pass --allow-prod to override).",
+                file=sys.stderr,
+            )
+            return 2
+        if not _database_url_is_local(parsed_url) and not bool(args.allow_remote):
+            print(
+                "ERROR: refusing to run reset-dev against a non-local database_url "
+                "(pass --allow-remote to override).",
                 file=sys.stderr,
             )
             return 2

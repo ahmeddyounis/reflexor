@@ -2,22 +2,27 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
+from sqlalchemy.engine.reflection import Inspector
 
 
-def _column_names(inspector, *, table: str) -> set[str]:
+def _column_names(inspector: Inspector, *, table: str) -> set[str]:
     return {column["name"] for column in inspector.get_columns(table)}
 
 
-def _index_names(inspector, *, table: str) -> set[str]:
-    names = {index["name"] for index in inspector.get_indexes(table)}
-    names.update(
-        constraint["name"]
-        for constraint in inspector.get_unique_constraints(table)
-        if constraint.get("name")
-    )
+def _index_names(inspector: Inspector, *, table: str) -> set[str]:
+    names: set[str] = set()
+    for index in inspector.get_indexes(table):
+        name = index["name"]
+        if isinstance(name, str):
+            names.add(name)
+    for constraint in inspector.get_unique_constraints(table):
+        name = constraint.get("name")
+        if isinstance(name, str):
+            names.add(name)
     return names
 
 
@@ -206,3 +211,64 @@ def test_alembic_upgrade_head_creates_schema(tmp_path: Path) -> None:
     finally:
         engine.dispose()
         db_path.unlink(missing_ok=True)
+
+
+def test_alembic_upgrade_head_prefers_configured_url_over_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    configured_db_path = tmp_path / "configured.db"
+    env_db_path = tmp_path / "env.db"
+
+    cfg = Config(str(repo_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(repo_root / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{configured_db_path}")
+
+    monkeypatch.setenv("REFLEXOR_DATABASE_URL", f"sqlite+aiosqlite:///{env_db_path}")
+
+    command.upgrade(cfg, "head")
+
+    configured_engine = create_engine(f"sqlite:///{configured_db_path}")
+    env_engine = create_engine(f"sqlite:///{env_db_path}")
+    try:
+        configured_tables = set(inspect(configured_engine).get_table_names())
+        env_tables = set(inspect(env_engine).get_table_names())
+        assert "events" in configured_tables
+        assert "events" not in env_tables
+    finally:
+        configured_engine.dispose()
+        env_engine.dispose()
+        configured_db_path.unlink(missing_ok=True)
+        env_db_path.unlink(missing_ok=True)
+
+
+def test_alembic_upgrade_head_resolves_relative_sqlite_url_against_config_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    custom_ini = config_dir / "alembic.ini"
+    custom_ini.write_text((repo_root / "alembic.ini").read_text(encoding="utf-8"), encoding="utf-8")
+
+    cfg = Config(str(custom_ini))
+    cfg.set_main_option("script_location", str(repo_root / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", "sqlite+aiosqlite:///./reflexor.db")
+
+    monkeypatch.chdir(cwd_dir)
+    command.upgrade(cfg, "head")
+
+    expected_db_path = config_dir / "reflexor.db"
+    unexpected_db_path = cwd_dir / "reflexor.db"
+
+    engine = create_engine(f"sqlite:///{expected_db_path}")
+    try:
+        assert "events" in set(inspect(engine).get_table_names())
+        assert not unexpected_db_path.exists()
+    finally:
+        engine.dispose()
+        expected_db_path.unlink(missing_ok=True)

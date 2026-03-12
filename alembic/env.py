@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
@@ -15,6 +14,7 @@ _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
+from reflexor.infra.db.migrate import resolve_alembic_database_url  # noqa: E402
 from reflexor.infra.db.models import Base  # noqa: E402
 
 # Alembic Config object, which provides access to values within alembic.ini.
@@ -23,10 +23,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.getenv("REFLEXOR_DATABASE_URL") or config.get_main_option("sqlalchemy.url")
-database_url = (database_url or "").strip()
-if not database_url:
-    raise ValueError("database_url must be non-empty (set REFLEXOR_DATABASE_URL or sqlalchemy.url)")
+base_dir = (
+    Path(config.config_file_name).resolve().parent
+    if config.config_file_name is not None
+    else _REPO_ROOT
+)
+database_url = resolve_alembic_database_url(config, base_dir=base_dir)
 config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
