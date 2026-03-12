@@ -21,7 +21,8 @@ docker build -f docker/Dockerfile -t reflexor:test .
 
 - migration job succeeds against the target database,
 - backup completes successfully,
-- restore drill completes successfully against a non-production database.
+- restore drill completes successfully against a non-production database,
+- production preflight does not report a local Postgres endpoint.
 
 4. Operational readiness:
 
@@ -46,4 +47,6 @@ docker build -f docker/Dockerfile -t reflexor:test .
 - High-risk scopes are explicitly reviewed and approval-gated where required.
 - Redis stream growth is bounded.
 - Maintenance and backup schedules are active.
+- Restore drills are documented and use `scripts/postgres_restore.py` against a non-production
+  target by default.
 - Operators can restore from backup and replay runs safely.

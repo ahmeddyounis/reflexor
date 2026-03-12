@@ -74,3 +74,21 @@ def test_preflight_warns_for_live_high_risk_scopes_without_approvals(tmp_path: P
     warning_codes = {finding.code for finding in report.findings if finding.level == "warning"}
     assert "high_risk_scopes_without_approval" in warning_codes
     assert "sandbox_disabled" in warning_codes
+
+
+def test_preflight_warns_when_database_looks_local(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        profile="prod",
+        workspace_root=tmp_path,
+        admin_api_key="secret",
+        events_require_admin=True,
+        database_url="postgresql+asyncpg://user:pass@localhost:5432/reflexor",
+        queue_backend="redis_streams",
+        redis_url="redis://redis.example.test:6379/0",
+        redis_stream_maxlen=1000,
+    )
+
+    report = build_production_preflight_report(settings)
+
+    warning_codes = {finding.code for finding in report.findings if finding.level == "warning"}
+    assert "database_looks_local" in warning_codes

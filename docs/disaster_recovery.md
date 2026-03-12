@@ -21,15 +21,19 @@ Recommendations:
 
 ## Restore drill
 
-Restore into a non-production database first:
+Restore into a non-production database first. The restore script refuses `REFLEXOR_PROFILE=prod`
+and non-local database targets unless you pass explicit override flags.
 
 ```sh
 python scripts/postgres_restore.py \
-  --database-url "$REFLEXOR_DATABASE_URL" \
+  --database-url "postgresql+asyncpg://user:pass@localhost:5432/reflexor_restore" \
   --input ./backups/reflexor-2026-03-11-0100.dump \
   --format custom \
   --yes
 ```
+
+Only use `--allow-remote` or `--allow-prod` for a deliberate incident response restore after
+change approval.
 
 After restore:
 

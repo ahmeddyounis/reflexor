@@ -5,6 +5,7 @@ from reflexor.operations.postgres import (
     build_pg_dump_command,
     build_pg_restore_command,
     connection_info_from_database_url,
+    database_url_is_local,
 )
 from reflexor.operations.preflight import (
     PreflightFinding,
@@ -16,6 +17,7 @@ __all__ = [
     "PostgresConnectionInfo",
     "PreflightFinding",
     "PreflightReport",
+    "database_url_is_local",
     "build_pg_dump_command",
     "build_pg_restore_command",
     "build_production_preflight_report",

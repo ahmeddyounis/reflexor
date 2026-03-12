@@ -74,7 +74,7 @@ def build_production_preflight_report(settings: ReflexorSettings) -> PreflightRe
         )
 
     try:
-        connection_info_from_database_url(settings.database_url)
+        database = connection_info_from_database_url(settings.database_url)
     except ValueError:
         add(
             "error",
@@ -82,6 +82,14 @@ def build_production_preflight_report(settings: ReflexorSettings) -> PreflightRe
             "database_url is not a PostgreSQL DSN",
             "Use postgresql+asyncpg://... for production deployments.",
         )
+    else:
+        if database.is_local:
+            add(
+                "warning",
+                "database_looks_local",
+                "database_url points at a local PostgreSQL endpoint",
+                "Use a remote or managed PostgreSQL service for production-grade durability.",
+            )
 
     if settings.queue_backend != "redis_streams":
         add(
