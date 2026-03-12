@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from pydantic import BaseModel
 
 from reflexor.domain.enums import ApprovalStatus
@@ -10,6 +12,7 @@ from reflexor.guards.context import GuardContext
 from reflexor.guards.decision import GuardDecision
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.security.policy.context import ToolSpec
+from reflexor.security.policy.rules import ApprovalRequiredRule
 
 REASON_CIRCUIT_OPEN = "circuit_open"
 REASON_CIRCUIT_HALF_OPEN = "circuit_half_open"
@@ -27,7 +30,11 @@ class CircuitBreakerGuard:
     ) -> None:
         self._breaker = breaker
         self._metrics = metrics
-        self._half_open_throttle_delay_s = max(0.0, float(half_open_throttle_delay_s))
+        self._approval_rule = ApprovalRequiredRule()
+        delay_s = float(half_open_throttle_delay_s)
+        if not math.isfinite(delay_s) or delay_s < 0:
+            raise ValueError("half_open_throttle_delay_s must be finite and >= 0")
+        self._half_open_throttle_delay_s = delay_s
 
     async def check(
         self,
@@ -36,19 +43,33 @@ class CircuitBreakerGuard:
         parsed_args: BaseModel,
         ctx: GuardContext,
     ) -> GuardDecision:
-        _ = tool_spec
-
         # Avoid acquiring HALF_OPEN permits when we know execution cannot proceed
-        # (policy will gate on scopes/approvals separately).
-        if tool_call.permission_scope in ctx.policy.approval_required_scopes and (
+        # because policy still requires approval for this tool call.
+        if (
             ctx.approval_status != ApprovalStatus.APPROVED
+            and (
+                ctx.policy.approval_required_scopes
+                or ctx.policy.approval_required_domains
+                or ctx.policy.approval_required_payload_keywords
+                or (
+                    ctx.policy.profile == "prod"
+                    and tool_spec.manifest.side_effects
+                    and not ctx.policy.dry_run
+                )
+            )
         ):
-            return GuardDecision.allow()
+            approval_required = self._approval_rule.evaluate(
+                tool_call=tool_call,
+                tool_spec=tool_spec,
+                parsed_args=parsed_args,
+                ctx=ctx.policy,
+            )
+            if approval_required is not None:
+                return GuardDecision.allow()
 
-        url_value = getattr(parsed_args, "url", None)
         key = key_for_tool_call(
             tool_name=tool_call.tool_name,
-            url=url_value if isinstance(url_value, str) else None,
+            args=parsed_args,
         )
 
         now_s = float(ctx.now_ms) / 1000.0

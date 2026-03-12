@@ -27,11 +27,7 @@ async def record_circuit_breaker_result(
     if not did_attempt_tool_run(outcome):
         return
 
-    url_value = tool_call.args.get("url") if isinstance(tool_call.args, dict) else None
-    key = key_for_tool_call(
-        tool_name=tool_call.tool_name,
-        url=url_value if isinstance(url_value, str) else None,
-    )
+    key = key_for_tool_call(tool_name=tool_call.tool_name, args=tool_call.args)
     now_s = float(service._clock.now_ms()) / 1000.0
     try:
         await service._circuit_breaker.record_result(
