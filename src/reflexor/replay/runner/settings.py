@@ -12,7 +12,9 @@ from reflexor.security.scopes import Scope
 
 
 def _safe_default_enabled_scopes(scopes: set[str]) -> list[str]:
-    safe = [Scope.FS_READ.value] if Scope.FS_READ.value in scopes else [Scope.FS_READ.value]
+    safe: list[str] = []
+    if Scope.FS_READ.value in scopes:
+        safe.append(Scope.FS_READ.value)
     return safe
 
 
