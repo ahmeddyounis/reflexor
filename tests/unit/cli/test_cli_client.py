@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from typing import cast
+
 import httpx
 import pytest
 
 from reflexor.application.services import SubmitEventOutcome
-from reflexor.cli.client import ApiClient, LocalClient
+from reflexor.cli.client import ApiClient, CliClient, LocalClient
 from reflexor.cli.container import build_cli_client
 from reflexor.config import ReflexorSettings
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
@@ -16,13 +18,13 @@ from reflexor.tools.registry import ToolRegistry
 def test_build_cli_client_selects_api_client_when_api_url_is_set() -> None:
     settings = ReflexorSettings(api_url="https://example.test/api")
 
-    api_client = object()
-    local_client = object()
+    api_client = cast(CliClient, object())
+    local_client = cast(CliClient, object())
 
     selected = build_cli_client(
         settings,
-        api_factory=lambda _settings: api_client,  # type: ignore[return-value]
-        local_factory=lambda _settings: local_client,  # type: ignore[return-value]
+        api_factory=lambda _settings: api_client,
+        local_factory=lambda _settings: local_client,
     )
 
     assert selected is api_client
@@ -31,13 +33,13 @@ def test_build_cli_client_selects_api_client_when_api_url_is_set() -> None:
 def test_build_cli_client_selects_local_client_when_api_url_is_unset() -> None:
     settings = ReflexorSettings(api_url=None)
 
-    api_client = object()
-    local_client = object()
+    api_client = cast(CliClient, object())
+    local_client = cast(CliClient, object())
 
     selected = build_cli_client(
         settings,
-        api_factory=lambda _settings: api_client,  # type: ignore[return-value]
-        local_factory=lambda _settings: local_client,  # type: ignore[return-value]
+        api_factory=lambda _settings: api_client,
+        local_factory=lambda _settings: local_client,
     )
 
     assert selected is local_client
@@ -62,7 +64,7 @@ async def test_api_client_builds_urls_and_headers() -> None:
     assert req.url.path == "/base/v1/runs"
     assert req.url.params["limit"] == "1"
     assert req.url.params["offset"] == "2"
-    assert req.headers["X-API-Key"] == "k"
+    assert req.headers["Authorization"] == "Bearer k"
 
 
 @pytest.mark.asyncio
@@ -82,12 +84,32 @@ async def test_api_client_encodes_path_segments_and_omits_null_json_body() -> No
     req = seen[0]
     assert req.url.raw_path == b"/base/v1/approvals/approval%2F123/approve"
     assert req.content == b""
-    assert req.headers["X-API-Key"] == "k"
+    assert req.headers["Authorization"] == "Bearer k"
 
 
 def test_api_client_rejects_invalid_base_url() -> None:
     with pytest.raises(ValueError, match="base_url must be an absolute http\\(s\\) URL"):
         ApiClient(base_url="example.test")
+
+
+def test_api_client_rejects_admin_key_over_non_local_http() -> None:
+    with pytest.raises(
+        ValueError,
+        match="admin_api_key requires https or a loopback http base_url",
+    ):
+        ApiClient(base_url="http://example.test", admin_api_key="secret")
+
+
+def test_api_client_allows_admin_key_over_local_http() -> None:
+    client = ApiClient(base_url="http://127.0.0.1:8000", admin_api_key="secret")
+
+    assert client.base_url == "http://127.0.0.1:8000"
+    assert client.admin_api_key == "secret"
+
+
+def test_api_client_rejects_base_url_with_embedded_credentials() -> None:
+    with pytest.raises(ValueError, match="base_url must not include embedded credentials"):
+        ApiClient(base_url="https://user:pass@example.test/api")
 
 
 @pytest.mark.asyncio

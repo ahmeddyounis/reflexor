@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, cast
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, status
 
 from reflexor.application.approvals_service import ApprovalCommandService
 from reflexor.application.services import (
@@ -28,7 +28,10 @@ from reflexor.bootstrap.container import AppContainer
 def get_container(request: Request) -> AppContainer:
     container = getattr(request.app.state, "container", None)
     if container is None:
-        raise RuntimeError("API container is not initialized (lifespan not running)")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="api service is not ready",
+        )
     return cast(AppContainer, container)
 
 

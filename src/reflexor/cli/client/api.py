@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 from typing import cast
 from urllib.parse import quote
@@ -29,7 +30,22 @@ class ApiClient:
             raise ValueError("base_url must be an absolute http(s) URL")
         if parsed_base_url.query or parsed_base_url.fragment:
             raise ValueError("base_url must not include query params or fragments")
+        if parsed_base_url.username or parsed_base_url.password:
+            raise ValueError("base_url must not include embedded credentials")
+        normalized_admin_api_key = None
+        if self.admin_api_key is not None:
+            trimmed_admin_api_key = self.admin_api_key.strip()
+            if trimmed_admin_api_key:
+                normalized_admin_api_key = trimmed_admin_api_key
+        if (
+            normalized_admin_api_key is not None
+            and parsed_base_url.scheme == "http"
+            and not _is_local_http_host(parsed_base_url.host)
+        ):
+            raise ValueError("admin_api_key requires https or a loopback http base_url")
+
         self.base_url = str(parsed_base_url).rstrip("/")
+        self.admin_api_key = normalized_admin_api_key
         if self.http is None:
             self.http = httpx.AsyncClient(timeout=10.0)
             self._owns_http = True
@@ -42,7 +58,7 @@ class ApiClient:
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {"Accept": "application/json"}
         if self.admin_api_key:
-            headers["X-API-Key"] = self.admin_api_key
+            headers["Authorization"] = f"Bearer {self.admin_api_key}"
         return headers
 
     def _path_segment(self, value: str, *, field_name: str) -> str:
@@ -247,3 +263,19 @@ class ApiClient:
 
 
 __all__ = ["ApiClient"]
+
+
+def _is_local_http_host(host: str | None) -> bool:
+    if host is None:
+        return False
+
+    normalized = host.strip().lower()
+    if not normalized:
+        return False
+    if normalized == "localhost":
+        return True
+
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False

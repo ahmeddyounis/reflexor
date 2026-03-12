@@ -7,6 +7,7 @@ This module installs global exception handlers that map common exceptions into `
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -60,6 +61,7 @@ def _error_response(
     error_code: str,
     message: str,
     details: dict[str, object] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     request_id = _get_request_id(request)
     payload = ErrorResponse(
@@ -69,6 +71,9 @@ def _error_response(
         details=details,
     )
     response = JSONResponse(status_code=int(status_code), content=payload.model_dump(mode="json"))
+    if headers is not None:
+        for key, value in headers.items():
+            response.headers[str(key)] = str(value)
     response.headers["X-Request-ID"] = request_id
     return response
 
@@ -123,6 +128,7 @@ def install_error_handlers(app: FastAPI) -> None:
     async def _handle_http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         status_code = int(getattr(exc, "status_code", 500))
         detail = getattr(exc, "detail", None)
+        headers = getattr(exc, "headers", None)
 
         if status_code == 401:
             error_code = "unauthorized"
@@ -157,6 +163,7 @@ def install_error_handlers(app: FastAPI) -> None:
             error_code=error_code,
             message=_str_detail(detail) or "request failed",
             details=details_payload,
+            headers=headers,
         )
 
     @app.exception_handler(DomainError)

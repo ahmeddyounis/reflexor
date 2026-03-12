@@ -142,7 +142,7 @@ def test_submit_event_submits_via_api_client() -> None:
         seen.append(request)
         assert request.method == "POST"
         assert request.url.path == "/base/v1/events"
-        assert request.headers["X-API-Key"] == "k"
+        assert request.headers["Authorization"] == "Bearer k"
 
         body = json.loads(request.content.decode("utf-8"))
         assert body["type"] == "t"
