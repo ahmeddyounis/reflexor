@@ -115,6 +115,7 @@ async def handle_event(engine: OrchestratorEngine, event: Event) -> EventHandleO
                         trigger="event", events=[persisted_event], now_ms=engine.clock.now_ms()
                     )
                     decision = await engine.reflex_router.route(persisted_event, planning_input)
+                    tracker.check_wall_time()
                     reflex_decision_dict = decision.model_dump(mode="json")
 
                     if decision.action == "fast_tasks":

@@ -17,6 +17,7 @@ Clean Architecture:
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Protocol
@@ -25,6 +26,7 @@ from reflexor.domain.models_event import Event
 from reflexor.orchestrator.clock import Clock
 
 Callback = Callable[[], Awaitable[None]]
+logger = logging.getLogger(__name__)
 
 
 class Trigger(Protocol):
@@ -172,7 +174,10 @@ class DebouncedTrigger:
                         )
                         due_ms = last_trigger_ms + int(self._debounce_s * 1000)
 
-                await self._callback()
+                try:
+                    await self._callback()
+                except Exception:  # pragma: no cover - exercised via log-only resilience tests
+                    logger.exception("debounced trigger callback failed")
         except asyncio.CancelledError:
             return
 
@@ -238,7 +243,10 @@ class PeriodicTicker:
 
                 if self._closed_event.is_set():
                     return
-                await self._callback()
+                try:
+                    await self._callback()
+                except Exception:  # pragma: no cover - exercised via log-only resilience tests
+                    logger.exception("periodic ticker callback failed")
                 self._next_tick_monotonic_ms = self._clock.monotonic_ms() + int(
                     self._planner_interval_s * 1000
                 )

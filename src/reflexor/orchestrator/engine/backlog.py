@@ -20,6 +20,9 @@ async def enqueue_backlog_event(engine: OrchestratorEngine, event: Event) -> Non
                     "limit": limit,
                     "current": len(engine._backlog),
                     "would_be": len(engine._backlog) + 1,
+                    "event_id": event.event_id,
+                    "event_type": event.type,
+                    "event_source": event.source,
                 },
             )
         engine._backlog.append(event)

@@ -53,7 +53,7 @@ class OrchestratorEngine:
     persistence: OrchestratorPersistence | None = None
     event_suppressor: EventSuppressor | None = None
     limits: BudgetLimits = field(default_factory=BudgetLimits)
-    clock: Clock = SystemClock()
+    clock: Clock = field(default_factory=SystemClock)
     metrics: ReflexorMetrics | None = None
     planner_debounce_s: float = 0.25
     planner_interval_s: float = 30.0

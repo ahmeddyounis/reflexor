@@ -175,6 +175,7 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                             now_ms=now_ms,
                         )
                         plan = await engine.planner.plan(planning_input)
+                        tracker.check_wall_time()
                         _validate_plan_budget_assertions(engine=engine, plan=plan)
                         plan_dict = plan.model_dump(mode="json")
 

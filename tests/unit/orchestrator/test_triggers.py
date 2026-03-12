@@ -126,3 +126,59 @@ async def test_periodic_ticker_shutdown_stops_and_unblocks() -> None:
     await asyncio.wait_for(ticker.aclose(), timeout=1.0)
     await clock.advance(seconds=100.0)
     assert ticks == 0
+
+
+async def test_debounced_trigger_survives_callback_failures() -> None:
+    clock = _ManualClock()
+    calls = 0
+    succeeded = asyncio.Event()
+
+    async def callback() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("boom")
+        succeeded.set()
+
+    debouncer = DebouncedTrigger(callback=callback, clock=clock, debounce_s=5.0)
+    debouncer.start()
+
+    try:
+        debouncer.trigger()
+        await clock.advance(seconds=5.0)
+        await asyncio.sleep(0)
+        assert calls == 1
+
+        debouncer.trigger()
+        await clock.advance(seconds=5.0)
+        await asyncio.wait_for(succeeded.wait(), timeout=1.0)
+        assert calls == 2
+    finally:
+        await debouncer.aclose()
+
+
+async def test_periodic_ticker_survives_callback_failures() -> None:
+    clock = _ManualClock()
+    ticks = 0
+    succeeded = asyncio.Event()
+
+    async def callback() -> None:
+        nonlocal ticks
+        ticks += 1
+        if ticks == 1:
+            raise RuntimeError("boom")
+        succeeded.set()
+
+    ticker = PeriodicTicker(callback=callback, clock=clock, planner_interval_s=5.0)
+    ticker.start()
+
+    try:
+        await clock.advance(seconds=5.0)
+        await asyncio.sleep(0)
+        assert ticks == 1
+
+        await clock.advance(seconds=5.0)
+        await asyncio.wait_for(succeeded.wait(), timeout=1.0)
+        assert ticks == 2
+    finally:
+        await ticker.aclose()

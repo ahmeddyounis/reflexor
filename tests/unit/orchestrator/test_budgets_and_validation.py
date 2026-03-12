@@ -129,6 +129,39 @@ class _TaskListPlanner:
         )
 
 
+class _SlowNeedsPlanningRouter:
+    def __init__(self, clock: _FixedClock, *, elapsed_ms: int) -> None:
+        self._clock = clock
+        self._elapsed_ms = elapsed_ms
+
+    async def route(self, event: Event, ctx: PlanningInput) -> ReflexDecision:
+        _ = (event, ctx)
+        self._clock.monotonic += self._elapsed_ms
+        return ReflexDecision(action="needs_planning", reason="slow_route", proposed_tasks=[])
+
+
+class _SlowEmptyPlanner:
+    def __init__(self, clock: _FixedClock, *, elapsed_ms: int) -> None:
+        self._clock = clock
+        self._elapsed_ms = elapsed_ms
+        self.calls: list[PlanningInput] = []
+
+    async def plan(self, input: PlanningInput) -> Plan:
+        self.calls.append(input)
+        self._clock.monotonic += self._elapsed_ms
+        return Plan(
+            summary="slow_empty",
+            tasks=[],
+            budget_assertions=BudgetAssertions(
+                max_tasks=int(input.limits.max_tasks or 1),
+                max_tool_calls=int(input.limits.max_tool_calls or 1),
+                max_runtime_s=float(input.limits.max_runtime_s or 30.0),
+                max_tokens=int(input.limits.max_tokens or 128),
+            ),
+            metadata={},
+        )
+
+
 async def test_planning_budget_exceeded_prevents_enqueue_and_is_recorded(tmp_path: Path) -> None:
     settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=50_000)
 
@@ -275,6 +308,42 @@ async def test_reflex_invalid_args_records_validation_error_and_does_not_enqueue
     assert 'orchestrator_rejections_total{reason="validation"} 1.0' in metrics_text
 
 
+async def test_reflex_wall_time_budget_blocks_backlog_enqueue(tmp_path: Path) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=50_000)
+
+    registry = ToolRegistry()
+    registry.register(_CountTool())
+
+    clock = _FixedClock()
+    queue = InMemoryQueue(now_ms=clock.now_ms)
+    sink = InMemoryRunPacketSink(settings=settings)
+    metrics = ReflexorMetrics.build()
+
+    engine = OrchestratorEngine(
+        reflex_router=_SlowNeedsPlanningRouter(clock, elapsed_ms=1_500),
+        planner=NoOpPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        run_sink=sink,
+        limits=BudgetLimits(max_wall_time_s=1.0, max_backlog_events=10),
+        clock=clock,
+        metrics=metrics,
+        enabled_scopes=("fs.read",),
+    )
+
+    run_id = await engine.handle_event(_event("66666666-6666-4666-8666-666666666666"))
+
+    stored = await sink.get(run_id)
+    assert stored is not None
+    assert stored["tasks"] == []
+    assert stored["policy_decisions"][0]["type"] == "budget_exceeded"
+    assert stored["policy_decisions"][0]["context"]["budget"] == "max_wall_time_s"
+    assert await engine.drain_backlog(max_items=10) == []
+
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert 'orchestrator_rejections_total{reason="budget"} 1.0' in metrics_text
+
+
 async def test_reflex_template_error_is_recorded_and_does_not_enqueue(tmp_path: Path) -> None:
     settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=50_000)
 
@@ -399,3 +468,93 @@ async def test_planning_validation_failure_is_recorded_and_backlog_is_retained(
 
     metrics_text = generate_latest(metrics.registry).decode()
     assert 'orchestrator_rejections_total{reason="validation"} 1.0' in metrics_text
+
+
+async def test_planning_wall_time_budget_rejects_empty_plan_and_keeps_backlog(
+    tmp_path: Path,
+) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=50_000)
+
+    registry = ToolRegistry()
+    registry.register(_CountTool())
+
+    clock = _FixedClock()
+    queue = InMemoryQueue(now_ms=clock.now_ms)
+    sink = InMemoryRunPacketSink(settings=settings)
+    metrics = ReflexorMetrics.build()
+    planner = _SlowEmptyPlanner(clock, elapsed_ms=1_500)
+
+    engine = OrchestratorEngine(
+        reflex_router=NeedsPlanningRouter(),
+        planner=planner,
+        tool_registry=registry,
+        queue=queue,
+        run_sink=sink,
+        limits=BudgetLimits(
+            max_wall_time_s=1.0,
+            max_events_per_planning_cycle=10,
+            max_backlog_events=10,
+        ),
+        clock=clock,
+        metrics=metrics,
+        enabled_scopes=("fs.read",),
+    )
+
+    await engine.handle_event(_event("77777777-7777-4777-8777-777777777777"))
+    planning_run_id = await engine.run_planning_once(trigger="event")
+
+    stored = await sink.get(planning_run_id)
+    assert stored is not None
+    assert stored["tasks"] == []
+    assert stored["policy_decisions"][0]["type"] == "budget_exceeded"
+    assert stored["policy_decisions"][0]["context"]["budget"] == "max_wall_time_s"
+
+    drained = await engine.drain_backlog(max_items=10)
+    assert [item.event_id for item in drained] == ["77777777-7777-4777-8777-777777777777"]
+
+    metrics_text = generate_latest(metrics.registry).decode()
+    assert 'orchestrator_rejections_total{reason="budget"} 1.0' in metrics_text
+
+
+async def test_backlog_budget_records_event_context(tmp_path: Path) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=50_000)
+
+    registry = ToolRegistry()
+    registry.register(_CountTool())
+
+    clock = _FixedClock()
+    queue = InMemoryQueue(now_ms=clock.now_ms)
+    sink = InMemoryRunPacketSink(settings=settings)
+    metrics = ReflexorMetrics.build()
+
+    engine = OrchestratorEngine(
+        reflex_router=NeedsPlanningRouter(),
+        planner=NoOpPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        run_sink=sink,
+        limits=BudgetLimits(max_backlog_events=1),
+        clock=clock,
+        metrics=metrics,
+        enabled_scopes=("fs.read",),
+    )
+
+    await engine.handle_event(_event("88888888-8888-4888-8888-888888888888"))
+    run_id = await engine.handle_event(_event("99999999-9999-4999-8999-999999999999"))
+
+    stored = await sink.get(run_id)
+    assert stored is not None
+    assert stored["tasks"] == []
+    assert stored["policy_decisions"][0]["type"] == "budget_exceeded"
+    assert stored["policy_decisions"][0]["context"] == {
+        "budget": "max_backlog_events",
+        "limit": 1,
+        "current": 1,
+        "would_be": 2,
+        "event_id": "99999999-9999-4999-8999-999999999999",
+        "event_type": "webhook",
+        "event_source": "tests",
+    }
+
+    drained = await engine.drain_backlog(max_items=10)
+    assert [item.event_id for item in drained] == ["88888888-8888-4888-8888-888888888888"]

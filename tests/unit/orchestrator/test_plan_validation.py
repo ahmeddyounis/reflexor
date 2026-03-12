@@ -29,6 +29,23 @@ class StrictTool:
         return ToolResult(ok=True, data={})
 
 
+class SlowDefaultTool:
+    manifest = ToolManifest(
+        name="tests.slow_default",
+        version="0.1.0",
+        description="Tool with non-default timeout.",
+        permission_scope="fs.read",
+        idempotent=True,
+        default_timeout_s=180,
+        max_output_bytes=10_000,
+    )
+    ArgsModel = StrictArgs
+
+    async def run(self, args: StrictArgs, ctx: ToolContext) -> ToolResult:  # pragma: no cover
+        _ = (args, ctx)
+        return ToolResult(ok=True, data={})
+
+
 class ExtraArgs(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -108,6 +125,20 @@ def test_disabled_permission_scope_is_rejected() -> None:
         )
 
 
+def test_omitted_timeout_uses_tool_default_timeout() -> None:
+    registry = ToolRegistry()
+    registry.register(SlowDefaultTool())
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
+
+    task = validator.build_task(
+        ProposedTask(name="t1", tool_name="tests.slow_default", args={"count": 1}),
+        run_id="00000000-0000-4000-8000-000000000000",
+        seed_source="planning",
+    )
+
+    assert task.timeout_s == 180
+
+
 def test_idempotency_key_is_deterministic_over_dict_key_order() -> None:
     registry = ToolRegistry()
     registry.register(ExtraTool())
@@ -176,7 +207,9 @@ def test_build_tasks_resolves_dependencies_to_task_ids() -> None:
     by_name = {task.name: task for task in tasks}
     assert by_name["fetch"].depends_on == []
     assert by_name["write"].depends_on == [by_name["fetch"].task_id]
-    assert by_name["write"].metadata["planner"]["dependency_names"] == ["fetch"]
+    planner_metadata = by_name["write"].metadata["planner"]
+    assert isinstance(planner_metadata, dict)
+    assert planner_metadata["dependency_names"] == ["fetch"]
 
 
 def test_build_tasks_rejects_cycles() -> None:
@@ -199,6 +232,22 @@ def test_build_tasks_rejects_cycles() -> None:
                     args={"x": 2},
                     depends_on=["a"],
                 ),
+            ],
+            run_id="00000000-0000-4000-8000-000000000000",
+            seed_source="planning",
+        )
+
+
+def test_build_tasks_rejects_duplicate_idempotency_keys() -> None:
+    registry = ToolRegistry()
+    registry.register(ExtraTool())
+    validator = PlanValidator(registry=registry, enabled_scopes=("fs.read",))
+
+    with pytest.raises(PlanValidationError, match="duplicate idempotency_key"):
+        validator.build_tasks(
+            [
+                ProposedTask(name="a", tool_name="tests.extra_plan", args={"x": 1}),
+                ProposedTask(name="b", tool_name="tests.extra_plan", args={"x": 1}),
             ],
             run_id="00000000-0000-4000-8000-000000000000",
             seed_source="planning",

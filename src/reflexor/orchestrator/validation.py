@@ -11,7 +11,7 @@ Clean Architecture:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, ValidationError
@@ -143,6 +143,16 @@ class PlanValidator:
     registry: ToolRegistry
     enabled_scopes: tuple[str, ...] = ()
     approval_required_scopes: tuple[str, ...] = ()
+    _enabled_scopes_set: frozenset[str] = field(init=False, repr=False)
+    _approval_required_scopes_set: frozenset[str] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_enabled_scopes_set", frozenset(self.enabled_scopes))
+        object.__setattr__(
+            self,
+            "_approval_required_scopes_set",
+            frozenset(self.approval_required_scopes),
+        )
 
     def build_task(
         self,
@@ -158,7 +168,7 @@ class PlanValidator:
             raise PlanValidationError(str(exc)) from exc
 
         permission_scope = _validate_permission_scope(tool.manifest.permission_scope)
-        if permission_scope not in set(self.enabled_scopes):
+        if permission_scope not in self._enabled_scopes_set:
             raise PlanValidationError(
                 "tool manifest permission_scope is not enabled for planning execution"
             )
@@ -177,7 +187,7 @@ class PlanValidator:
                 "expected_side_effects does not match tool manifest side_effects"
             )
         if proposed_task.approval_required is not None:
-            requires_approval = permission_scope in set(self.approval_required_scopes)
+            requires_approval = permission_scope in self._approval_required_scopes_set
             if proposed_task.approval_required != requires_approval:
                 raise PlanValidationError(
                     "approval_required does not match configured approval requirements"
@@ -200,7 +210,9 @@ class PlanValidator:
             idempotency_key=idempotency_key,
         )
 
-        timeout_s = proposed_task.timeout_s or tool.manifest.default_timeout_s
+        timeout_s = tool.manifest.default_timeout_s
+        if "timeout_s" in proposed_task.model_fields_set:
+            timeout_s = proposed_task.timeout_s
         planner_metadata: dict[str, object] = {}
         if proposed_task.declared_permission_scope is not None:
             planner_metadata["declared_permission_scope"] = proposed_task.declared_permission_scope
@@ -244,6 +256,7 @@ class PlanValidator:
                 seed_source=seed_source,
                 event_id=event_id,
             )
+        _validate_unique_idempotency_keys(built_by_name)
 
         tasks: list[Task] = []
         for proposed_task in proposed_tasks:
@@ -265,6 +278,21 @@ class PlanValidator:
                 task.model_copy(update={"depends_on": resolved_depends_on, "metadata": metadata})
             )
         return tasks
+
+
+def _validate_unique_idempotency_keys(built_by_name: dict[str, Task]) -> None:
+    seen: dict[str, str] = {}
+    for task_name, task in built_by_name.items():
+        tool_call = task.tool_call
+        if tool_call is None:  # pragma: no cover
+            continue
+        previous_task_name = seen.get(tool_call.idempotency_key)
+        if previous_task_name is not None:
+            raise PlanValidationError(
+                "duplicate idempotency_key in plan "
+                f"for tasks {previous_task_name!r} and {task_name!r}"
+            )
+        seen[tool_call.idempotency_key] = task_name
 
 
 __all__ = [
