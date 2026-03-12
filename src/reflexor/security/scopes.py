@@ -19,11 +19,26 @@ ALL_SCOPES: frozenset[str] = frozenset(scope.value for scope in Scope)
 
 
 def validate_scopes(scopes: list[str]) -> list[str]:
-    """Raise if any unknown scope is present."""
+    """Normalize, dedupe, and raise if any unknown scope is present."""
 
-    unknown = [scope for scope in scopes if scope not in ALL_SCOPES]
+    normalized: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+
+    for raw_scope in scopes:
+        scope = raw_scope.strip()
+        if not scope:
+            raise ValueError("scope entries must be non-empty")
+        if scope not in ALL_SCOPES:
+            unknown.append(scope)
+            continue
+        if scope in seen:
+            continue
+        seen.add(scope)
+        normalized.append(scope)
+
     if not unknown:
-        return scopes
+        return normalized
 
     known = ", ".join(sorted(ALL_SCOPES))
     raise ValueError(f"unknown scope(s): {unknown!r} (known: {known})")

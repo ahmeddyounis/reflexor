@@ -105,6 +105,27 @@ def test_scope_disabled_denies_with_metadata(tmp_path: Path) -> None:
     assert decision.metadata["tool_name"] == tool_name
 
 
+def test_policy_gate_uses_default_rules_when_rules_omitted(tmp_path: Path) -> None:
+    settings = ReflexorSettings(workspace_root=tmp_path, enabled_scopes=[])
+    gate = PolicyGate(settings=settings)
+
+    tool_name = "tests.fs"
+    tool_spec = _tool_spec(
+        tool_name=tool_name, scope="fs.read", side_effects=False, args_model=PathArgs
+    )
+
+    decision = gate.evaluate(
+        tool_call=_tool_call(tool_name=tool_name, scope="fs.read"),
+        tool_spec=tool_spec,
+        parsed_args=PathArgs(path=Path("file.txt")),
+    )
+
+    _assert_json_safe_decision(decision)
+    assert decision.action == PolicyAction.DENY
+    assert decision.reason_code == REASON_SCOPE_DISABLED
+    assert decision.rule_id == ScopeEnabledRule.rule_id
+
+
 @pytest.mark.parametrize(
     ("args_model", "parsed_args", "expected_reason"),
     [

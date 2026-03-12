@@ -58,6 +58,13 @@ class PolicyRule(Protocol):
 
 NETWORK_SCOPES: frozenset[str] = frozenset({Scope.NET_HTTP.value, Scope.WEBHOOK_EMIT.value})
 FILESYSTEM_SCOPES: frozenset[str] = frozenset({Scope.FS_READ.value, Scope.FS_WRITE.value})
+_NETWORK_ARGS_INVALID_MESSAGES: frozenset[str] = frozenset(
+    {
+        "url must use https",
+        "url must include a host",
+        "url must not include credentials",
+    }
+)
 
 
 class ScopeMatchesManifestRule:
@@ -112,7 +119,7 @@ class ScopeEnabledRule:
     ) -> PolicyDecision | None:
         _ = parsed_args
         scope = tool_call.permission_scope
-        if scope in ctx.enabled_scopes:
+        if ctx.is_scope_enabled(scope):
             return None
 
         return PolicyDecision.deny(
@@ -160,11 +167,7 @@ class NetworkAllowlistRule:
                 normalized_url = validate_and_normalize_url(raw_url, require_https=True)
         except ValueError as exc:
             message = str(exc)
-            reason_code = (
-                REASON_DOMAIN_NOT_ALLOWLISTED
-                if "allowed_domains" in message
-                else REASON_SSRF_BLOCKED
-            )
+            reason_code = _classify_network_validation_error(message)
             host = urlsplit(raw_url).hostname
             metadata: dict[str, object] = {"scope": scope, "tool_name": tool_spec.tool_name}
             if host:
@@ -247,7 +250,7 @@ class ApprovalRequiredRule:
     ) -> PolicyDecision | None:
         scope = tool_call.permission_scope
 
-        if scope in ctx.approval_required_scopes:
+        if ctx.requires_scope_approval(scope):
             return PolicyDecision.require_approval(
                 reason_code=REASON_APPROVAL_REQUIRED,
                 message="scope requires approval",
@@ -347,6 +350,14 @@ def _extract_url(args: BaseModel) -> str | None:
             if trimmed:
                 return trimmed
     return None
+
+
+def _classify_network_validation_error(message: str) -> str:
+    if "allowed_domains" in message:
+        return REASON_DOMAIN_NOT_ALLOWLISTED
+    if message in _NETWORK_ARGS_INVALID_MESSAGES:
+        return REASON_ARGS_INVALID
+    return REASON_SSRF_BLOCKED
 
 
 def _iter_candidate_paths(args: BaseModel) -> Iterator[tuple[str, Path]]:

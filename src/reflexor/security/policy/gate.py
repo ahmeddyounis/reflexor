@@ -52,7 +52,13 @@ class PolicyGate:
         metrics: ReflexorMetrics | None = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._rules = list(rules or [])
+        if rules is None:
+            from reflexor.security.policy.defaults import build_default_policy_rules
+
+            resolved_rules = build_default_policy_rules()
+        else:
+            resolved_rules = list(rules)
+        self._rules = resolved_rules
         self._metrics = metrics
 
     @property

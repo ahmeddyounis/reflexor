@@ -9,7 +9,7 @@ Clean Architecture:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -45,6 +45,16 @@ class PolicyContext:
     allowlists: PolicyAllowlists
     workspace_root: Path
     limits: PolicyLimits
+    _enabled_scopes_set: frozenset[str] = field(init=False, repr=False)
+    _approval_required_scopes_set: frozenset[str] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_enabled_scopes_set", frozenset(self.enabled_scopes))
+        object.__setattr__(
+            self,
+            "_approval_required_scopes_set",
+            frozenset(self.approval_required_scopes),
+        )
 
     @classmethod
     def from_settings(cls, settings: ReflexorSettings) -> PolicyContext:
@@ -66,6 +76,12 @@ class PolicyContext:
                 max_run_packet_bytes=settings.max_run_packet_bytes,
             ),
         )
+
+    def is_scope_enabled(self, scope: str) -> bool:
+        return scope in self._enabled_scopes_set
+
+    def requires_scope_approval(self, scope: str) -> bool:
+        return scope in self._approval_required_scopes_set
 
 
 @dataclass(frozen=True, slots=True)
