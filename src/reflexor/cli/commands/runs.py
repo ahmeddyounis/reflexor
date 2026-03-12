@@ -3,11 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-import httpx
 import typer
 
 from reflexor.cli import output
-from reflexor.cli.client import CliClient, ReplayModeStr
+from reflexor.cli.client import CliClient, CliTransportError, ReplayModeStr
 from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 from reflexor.domain.enums import RunStatus
@@ -190,7 +189,7 @@ def register(app: typer.Typer) -> None:
                     limit=limit, offset=offset, status=status, since_ms=since_ms
                 )
             )
-        except (KeyError, ValueError, httpx.HTTPError) as exc:
+        except (KeyError, ValueError, CliTransportError) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return
 
@@ -214,7 +213,7 @@ def register(app: typer.Typer) -> None:
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
         try:
             result = container.run(lambda client: _build_run_show_payload(client, run_id))
-        except (KeyError, ValueError, httpx.HTTPError) as exc:
+        except (KeyError, ValueError, CliTransportError) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return
 
@@ -269,7 +268,7 @@ def register(app: typer.Typer) -> None:
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
         try:
             result = container.run(lambda client: client.export_run_packet(run_id, out_path))
-        except (FileNotFoundError, KeyError, ValueError, httpx.HTTPError) as exc:
+        except (FileNotFoundError, KeyError, ValueError, CliTransportError) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return
         except NotImplementedError:
@@ -307,7 +306,7 @@ def register(app: typer.Typer) -> None:
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
         try:
             result = container.run(lambda client: client.import_run_packet(file_path))
-        except (FileNotFoundError, KeyError, ValueError, httpx.HTTPError) as exc:
+        except (FileNotFoundError, KeyError, ValueError, CliTransportError) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return
         except NotImplementedError:
@@ -376,7 +375,7 @@ def register(app: typer.Typer) -> None:
             KeyError,
             ReplayError,
             ValueError,
-            httpx.HTTPError,
+            CliTransportError,
         ) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return

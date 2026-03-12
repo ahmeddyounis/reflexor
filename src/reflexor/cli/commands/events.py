@@ -5,11 +5,11 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-import httpx
 import typer
 from pydantic import ValidationError
 
 from reflexor.cli import output
+from reflexor.cli.client import CliTransportError
 from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 from reflexor.domain.models_event import Event
@@ -158,7 +158,7 @@ def register(app: typer.Typer) -> None:
 
         try:
             result = container.run(lambda client: client.submit_event(event))
-        except (KeyError, ValueError, httpx.HTTPError) as exc:
+        except (KeyError, ValueError, CliTransportError) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return
 

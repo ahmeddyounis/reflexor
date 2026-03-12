@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 import typer
 
 from reflexor.cli import output
+from reflexor.cli.client import CliRequestError, CliStatusError
 from reflexor.replay.runner.types import ReplayError
 
 
-def _http_error_payload(exc: httpx.HTTPStatusError) -> tuple[str, str, int]:
+def _http_error_payload(exc: CliStatusError) -> tuple[str, str, int]:
     response = exc.response
     status_code = int(response.status_code)
     error_code = "request_failed"
@@ -38,7 +38,7 @@ def _http_error_payload(exc: httpx.HTTPStatusError) -> tuple[str, str, int]:
     return error_code, message, exit_code
 
 
-def _request_error_payload(exc: httpx.RequestError) -> tuple[str, str, int]:
+def _request_error_payload(exc: CliRequestError) -> tuple[str, str, int]:
     message = str(exc).strip()
     if not message:
         message = "request failed"
@@ -71,9 +71,9 @@ def print_query_error(
         error_code = "invalid_input"
         message = str(exc)
         exit_code = 2
-    elif isinstance(exc, httpx.HTTPStatusError):
+    elif isinstance(exc, CliStatusError):
         error_code, message, exit_code = _http_error_payload(exc)
-    elif isinstance(exc, httpx.RequestError):
+    elif isinstance(exc, CliRequestError):
         error_code, message, exit_code = _request_error_payload(exc)
     else:
         raise exc

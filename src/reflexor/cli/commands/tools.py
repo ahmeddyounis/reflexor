@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import httpx
 import typer
 
 from reflexor.cli import output
+from reflexor.cli.client import CliTransportError
 from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 
@@ -29,7 +29,7 @@ def register(app: typer.Typer) -> None:
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
         try:
             tools = container.run(lambda client: client.list_tools())
-        except (KeyError, ValueError, httpx.HTTPError) as exc:
+        except (KeyError, ValueError, CliTransportError) as exc:
             print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
             return
         except NotImplementedError:

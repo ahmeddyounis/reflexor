@@ -4,7 +4,6 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import cast
 
 from sqlalchemy import create_engine
 from typer.testing import CliRunner
@@ -20,7 +19,6 @@ from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.infra.db.models import Base
 from reflexor.storage.ports import RunRecord
-from reflexor.storage.uow import DatabaseSession
 
 
 def _create_schema(db_path: Path) -> None:
@@ -81,8 +79,9 @@ async def _seed_run(container: AppContainer, *, run_id: str) -> None:
 
     uow = container.uow_factory()
     async with uow:
-        session = cast(DatabaseSession, uow.session)
+        session = uow.session
         await container.repos.run_repo(session).create(run_record)
+        await container.repos.event_repo(session).create(event)
         await container.repos.run_packet_repo(session).create(packet)
 
 

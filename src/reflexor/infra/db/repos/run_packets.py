@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.models_run_packet import RunPacket
-from reflexor.infra.db.models import MemoryItemRow, RunPacketRow, RunRow
+from reflexor.infra.db.models import EventRow, MemoryItemRow, RunPacketRow, RunRow
 from reflexor.infra.db.repos._common import _validate_limit_offset
 from reflexor.memory import MEMORY_SUMMARY_VERSION, memory_item_from_run_packet
 from reflexor.observability.audit_sanitize import sanitize_for_audit
@@ -53,6 +53,9 @@ class SqlAlchemyRunPacketRepo:
             existing.packet = sanitized_packet
         await self._session.flush()
         if self._memory_repo is not None:
+            event_row = await self._session.get(EventRow, stored_packet.event.event_id)
+            if event_row is None:
+                raise KeyError(f"unknown event_id: {stored_packet.event.event_id!r}")
             memory_item = memory_item_from_run_packet(stored_packet)
             await self._memory_repo.upsert(memory_item)
         return stored_packet

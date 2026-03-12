@@ -10,7 +10,16 @@ Commands should depend on the `CliClient` protocol and avoid direct ORM/database
 from __future__ import annotations
 
 from reflexor.cli.client.api import ApiClient
+from reflexor.cli.client.errors import CliRequestError, CliStatusError, CliTransportError
 from reflexor.cli.client.local import LocalClient
 from reflexor.cli.client.protocol import CliClient, ReplayModeStr
 
-__all__ = ["ApiClient", "CliClient", "LocalClient", "ReplayModeStr"]
+__all__ = [
+    "ApiClient",
+    "CliClient",
+    "CliRequestError",
+    "CliStatusError",
+    "CliTransportError",
+    "LocalClient",
+    "ReplayModeStr",
+]
