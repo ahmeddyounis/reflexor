@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -70,35 +68,43 @@ def _build_container(
 
 @pytest.mark.asyncio
 async def test_app_container_aclose_continues_after_close_failure(tmp_path: Path) -> None:
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def error(self, message: str, **kwargs: object) -> None:
+            self.calls.append((message, dict(kwargs)))
+
     container, orchestrator, circuit_breaker, queue, engine = _build_container(
         tmp_path=tmp_path,
         orchestrator_error=RuntimeError("Bearer sk-bootstrap-secret-should-not-leak"),
     )
-    stream = io.StringIO()
-    logger = bootstrap_container.logger
-    handler = logging.StreamHandler(stream)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    original_handlers = list(logger.handlers)
-    original_level = logger.level
-    original_propagate = logger.propagate
-    logger.handlers = [handler]
-    logger.setLevel(logging.ERROR)
-    logger.propagate = False
+    logger = _RecordingLogger()
+    original_logger = bootstrap_container.logger
+    bootstrap_container.logger = logger
 
     try:
         with pytest.raises(RuntimeError, match="sk-bootstrap-secret-should-not-leak"):
             await container.aclose()
     finally:
-        logger.handlers = original_handlers
-        logger.setLevel(original_level)
-        logger.propagate = original_propagate
+        bootstrap_container.logger = original_logger
 
     assert orchestrator.close_calls == 1
     assert circuit_breaker.close_calls == 1
     assert queue.close_calls == 1
     assert engine.dispose_calls == 1
-    assert "app container resource close failed" in stream.getvalue()
-    assert "sk-bootstrap-secret-should-not-leak" not in stream.getvalue()
+    assert logger.calls == [
+        (
+            "app container resource close failed",
+            {
+                "extra": {
+                    "event_type": "app_container.close.failed",
+                    "resource": "orchestrator_engine",
+                    "exception_type": "RuntimeError",
+                }
+            },
+        )
+    ]
 
 
 def test_app_container_build_cleans_up_owned_resources_on_failure(

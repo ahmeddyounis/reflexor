@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
-import logging
 from dataclasses import dataclass, field
 
 from prometheus_client import generate_latest
@@ -544,43 +542,37 @@ async def test_planner_memory_failures_emit_structured_policy_decision() -> None
         await engine.aclose()
 
 
-async def test_unexpected_planning_errors_do_not_leak_raw_messages() -> None:
+async def test_unexpected_planning_errors_do_not_leak_raw_messages(monkeypatch) -> None:
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def error(self, message: str, **kwargs: object) -> None:
+            self.calls.append((message, dict(kwargs)))
+
     registry = ToolRegistry()
     registry.register(_MockTool())
 
-    stream = io.StringIO()
-    logger = planning_module.logger
-    handler = logging.StreamHandler(stream)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    original_handlers = list(logger.handlers)
-    original_level = logger.level
-    original_propagate = logger.propagate
-    logger.handlers = [handler]
-    logger.setLevel(logging.ERROR)
-    logger.propagate = False
+    logger = _RecordingLogger()
+    monkeypatch.setattr(planning_module, "logger", logger)
 
     queue = _RecordingQueue()
     sink = _InMemoryRunSink()
     clock = _ManualClock()
 
-    try:
-        engine = OrchestratorEngine(
-            reflex_router=NeedsPlanningRouter(),
-            planner=_ExplodingPlanner(),
-            tool_registry=registry,
-            queue=queue,
-            limits=BudgetLimits(max_events_per_planning_cycle=10),
-            clock=clock,
-            run_sink=sink,
-            enabled_scopes=("fs.read",),
-        )
+    engine = OrchestratorEngine(
+        reflex_router=NeedsPlanningRouter(),
+        planner=_ExplodingPlanner(),
+        tool_registry=registry,
+        queue=queue,
+        limits=BudgetLimits(max_events_per_planning_cycle=10),
+        clock=clock,
+        run_sink=sink,
+        enabled_scopes=("fs.read",),
+    )
 
-        await engine._enqueue_backlog_event(_event("77777777-7777-4777-8777-777777777777"))
-        await engine.run_planning_once(trigger="event")
-    finally:
-        logger.handlers = original_handlers
-        logger.setLevel(original_level)
-        logger.propagate = original_propagate
+    await engine._enqueue_backlog_event(_event("77777777-7777-4777-8777-777777777777"))
+    run_id = await engine.run_planning_once(trigger="event")
 
     assert len(sink.packets) == 1
     planning_packet = sink.packets[0]
@@ -590,8 +582,19 @@ async def test_unexpected_planning_errors_do_not_leak_raw_messages() -> None:
             "message": "unexpected planning error",
         }
     ]
-    assert "unexpected planning error" in stream.getvalue()
-    assert "sk-planning-secret-should-not-leak" not in stream.getvalue()
+    assert logger.calls == [
+        (
+            "unexpected planning error",
+            {
+                "extra": {
+                    "run_id": run_id,
+                    "trigger": "event",
+                    "selected_events": 1,
+                    "exception_type": "RuntimeError",
+                }
+            },
+        )
+    ]
 
 
 async def test_planning_partial_enqueue_records_policy_and_clears_backlog() -> None:

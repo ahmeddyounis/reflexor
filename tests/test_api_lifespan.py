@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import logging
 from pathlib import Path
 
 import pytest
@@ -62,6 +60,13 @@ class _FailingStartupContainer:
 
 
 def test_create_app_closes_container_when_startup_fails(tmp_path: Path) -> None:
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def error(self, message: str, **kwargs: object) -> None:
+            self.calls.append((message, dict(kwargs)))
+
     startup_error = RuntimeError("startup boom")
     container = _FailingStartupContainer(
         settings=ReflexorSettings(workspace_root=tmp_path),
@@ -69,27 +74,27 @@ def test_create_app_closes_container_when_startup_fails(tmp_path: Path) -> None:
         close_error=RuntimeError("Bearer sk-startup-close-secret-should-not-leak"),
     )
     app = create_app(container=container)
-    stream = io.StringIO()
-    logger = api_app_module.logger
-    handler = logging.StreamHandler(stream)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    original_handlers = list(logger.handlers)
-    original_level = logger.level
-    original_propagate = logger.propagate
-    logger.handlers = [handler]
-    logger.setLevel(logging.ERROR)
-    logger.propagate = False
+    logger = _RecordingLogger()
+    original_logger = api_app_module.logger
+    api_app_module.logger = logger
 
     try:
         with pytest.raises(RuntimeError, match="startup boom"):
             with TestClient(app):
                 pass
     finally:
-        logger.handlers = original_handlers
-        logger.setLevel(original_level)
-        logger.propagate = original_propagate
+        api_app_module.logger = original_logger
 
     assert container.close_calls == 1
     assert getattr(app.state, "container", None) is None
-    assert "application startup cleanup failed" in stream.getvalue()
-    assert "sk-startup-close-secret-should-not-leak" not in stream.getvalue()
+    assert logger.calls == [
+        (
+            "application startup cleanup failed",
+            {
+                "extra": {
+                    "event_type": "api.lifespan.startup_cleanup.failed",
+                    "exception_type": "RuntimeError",
+                }
+            },
+        )
+    ]
