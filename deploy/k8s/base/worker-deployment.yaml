@@ -16,6 +16,7 @@ spec:
         app.kubernetes.io/component: worker
     spec:
       serviceAccountName: reflexor
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
