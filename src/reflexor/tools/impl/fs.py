@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import hashlib
+import heapq
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,12 @@ def _dir_entry_kind(entry: os.DirEntry[str]) -> str:
     except OSError:
         return "other"
     return "other"
+
+
+def _path_error_code(message: str) -> str:
+    if "workspace" in message:
+        return "WORKSPACE_VIOLATION"
+    return "INVALID_PATH"
 
 
 class FsReadTextArgs(BaseModel):
@@ -311,7 +318,11 @@ class FsWriteTextTool:
                 create_parents=args.create_parents,
             )
         except ValueError as exc:
-            return ToolResult(ok=False, error_code="INVALID_PATH", error_message=str(exc))
+            return ToolResult(
+                ok=False,
+                error_code=_path_error_code(str(exc)),
+                error_message=str(exc),
+            )
         except OSError as exc:
             return ToolResult(
                 ok=False,
@@ -364,7 +375,8 @@ class FsListDirTool:
 
         try:
             with os.scandir(resolved) as it:
-                entries = sorted(
+                entries = heapq.nsmallest(
+                    args.max_entries + 1,
                     (
                         entry
                         for entry in it
@@ -381,18 +393,17 @@ class FsListDirTool:
             )
 
         items: list[dict[str, object]] = []
-        for entry in entries:
+        for entry in entries[: args.max_entries]:
             items.append({"name": entry.name, "type": _dir_entry_kind(entry)})
 
-        truncated = len(items) > args.max_entries
-        limited = items[: args.max_entries]
+        truncated = len(entries) > args.max_entries
 
         return ToolResult(
             ok=True,
             data={
                 "path": _display_path(resolved, workspace_root=ctx.workspace_root),
                 "truncated": truncated,
-                "items": limited,
+                "items": items,
             },
         )
 

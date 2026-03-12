@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 import os
-import tempfile
+import stat
 from pathlib import Path
+from uuid import uuid4
+
+_DEFAULT_NEW_FILE_MODE = 0o600
 
 
 def resolve_path_in_workspace(
@@ -22,7 +26,7 @@ def resolve_path_in_workspace(
 
     expanded = path.expanduser()
     candidate = expanded if expanded.is_absolute() else (base / expanded)
-    resolved = candidate.resolve(strict=must_exist)
+    resolved = _resolve_candidate_path(candidate, original_path=path, must_exist=must_exist)
 
     if not resolved.is_relative_to(base):
         raise ValueError(f"path escapes workspace root: {path!r}")
@@ -80,29 +84,36 @@ def atomic_write_bytes(
         raise ValueError(f"data exceeds max_bytes={max_bytes}")
 
     resolved = resolve_path_in_workspace(path, workspace_root=workspace_root, must_exist=False)
-    if create_parents:
-        resolved.parent.mkdir(parents=True, exist_ok=True)
+    parent = _prepare_atomic_write_parent(
+        resolved.parent,
+        workspace_root=workspace_root,
+        create_parents=create_parents,
+    )
 
-    tmp_path: Path | None = None
+    parent_fd: int | None = None
+    tmp_name: str | None = None
     fd: int | None = None
     try:
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(resolved.parent),
-            prefix=f".{resolved.name}.",
-            suffix=".tmp",
+        parent_fd = _open_directory_fd(parent)
+        target_mode = _resolve_target_mode(parent_fd, resolved.name, explicit_mode=mode)
+
+        tmp_name = _atomic_temp_name(resolved.name)
+        fd = os.open(
+            tmp_name,
+            _temp_open_flags(),
+            dir_fd=parent_fd,
+            mode=_DEFAULT_NEW_FILE_MODE,
         )
-        tmp_path = Path(tmp_name)
         with os.fdopen(fd, "wb") as handle:
             fd = None
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+            os.fchmod(handle.fileno(), target_mode)
 
-        if mode is not None:
-            tmp_path.chmod(mode)
-
-        os.replace(tmp_path, resolved)
-        tmp_path = None
+        os.replace(tmp_name, resolved.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        _fsync_directory(parent_fd)
+        tmp_name = None
         return resolved
     finally:
         if fd is not None:
@@ -110,11 +121,12 @@ def atomic_write_bytes(
                 os.close(fd)
             except OSError:
                 pass
-        if tmp_path is not None:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        if tmp_name is not None and parent_fd is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name, dir_fd=parent_fd)
+        if parent_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(parent_fd)
 
 
 def atomic_write_text(
@@ -146,3 +158,83 @@ def _normalize_workspace_root(workspace_root: Path) -> Path:
     if not expanded.is_absolute():
         raise ValueError("workspace_root must be an absolute path")
     return expanded.resolve(strict=False)
+
+
+def _resolve_candidate_path(candidate: Path, *, original_path: Path, must_exist: bool) -> Path:
+    if must_exist:
+        try:
+            return candidate.resolve(strict=True)
+        except FileNotFoundError:
+            raise
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"failed to resolve path within workspace: {original_path!r}") from exc
+
+    existing_ancestor = _closest_existing_path(candidate)
+    if existing_ancestor is None:
+        return candidate
+
+    try:
+        resolved_ancestor = existing_ancestor.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise ValueError(f"failed to resolve path within workspace: {original_path!r}") from exc
+
+    suffix = candidate.relative_to(existing_ancestor)
+    return resolved_ancestor / suffix
+
+
+def _closest_existing_path(path: Path) -> Path | None:
+    current = path
+    while True:
+        try:
+            current.lstat()
+            return current
+        except FileNotFoundError:
+            parent = current.parent
+            if parent == current:
+                return None
+            current = parent
+
+
+def _prepare_atomic_write_parent(
+    parent: Path,
+    *,
+    workspace_root: Path,
+    create_parents: bool,
+) -> Path:
+    if create_parents:
+        parent.mkdir(parents=True, exist_ok=True)
+    return resolve_path_in_workspace(parent, workspace_root=workspace_root, must_exist=True)
+
+
+def _open_directory_fd(path: Path) -> int:
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    return os.open(path, flags)
+
+
+def _temp_open_flags() -> int:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    return flags
+
+
+def _atomic_temp_name(target_name: str) -> str:
+    return f".{target_name}.{uuid4().hex}.tmp"
+
+
+def _resolve_target_mode(parent_fd: int, target_name: str, *, explicit_mode: int | None) -> int:
+    if explicit_mode is not None:
+        return explicit_mode
+
+    try:
+        current = os.stat(target_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return _DEFAULT_NEW_FILE_MODE
+
+    return stat.S_IMODE(current.st_mode) or _DEFAULT_NEW_FILE_MODE
+
+
+def _fsync_directory(parent_fd: int) -> None:
+    with contextlib.suppress(OSError):
+        os.fsync(parent_fd)

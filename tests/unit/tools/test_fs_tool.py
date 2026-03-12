@@ -22,7 +22,7 @@ def test_read_text_blocks_workspace_escape(tmp_path: Path) -> None:
     tool = FsReadTextTool(settings=ReflexorSettings(workspace_root=tmp_path))
     ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
 
-    result = asyncio.run(tool.run(FsReadTextArgs(path="../escape.txt"), ctx))
+    result = asyncio.run(tool.run(FsReadTextArgs(path=Path("../escape.txt")), ctx))
     assert result.ok is False
     assert result.error_code == "WORKSPACE_VIOLATION"
 
@@ -32,7 +32,7 @@ def test_write_text_dry_run_has_no_side_effects(tmp_path: Path) -> None:
     ctx = ToolContext(workspace_root=tmp_path, dry_run=True, timeout_s=1.0)
 
     target = tmp_path / "note.txt"
-    result = asyncio.run(tool.run(FsWriteTextArgs(path="note.txt", text="hello"), ctx))
+    result = asyncio.run(tool.run(FsWriteTextArgs(path=Path("note.txt"), text="hello"), ctx))
 
     assert result.ok is True
     assert target.exists() is False
@@ -52,7 +52,7 @@ def test_write_text_dry_run_does_not_modify_existing_file(tmp_path: Path) -> Non
     target = tmp_path / "note.txt"
     target.write_text("old", encoding="utf-8")
 
-    result = asyncio.run(tool.run(FsWriteTextArgs(path="note.txt", text="new"), ctx))
+    result = asyncio.run(tool.run(FsWriteTextArgs(path=Path("note.txt"), text="new"), ctx))
     assert result.ok is True
     assert target.read_text(encoding="utf-8") == "old"
 
@@ -79,7 +79,9 @@ def test_write_text_creates_file_inside_workspace(tmp_path: Path) -> None:
     target = tmp_path / "created.txt"
     assert target.exists() is False
 
-    result = asyncio.run(tool.run(FsWriteTextArgs(path="created.txt", text="hello"), ctx))
+    result = asyncio.run(
+        tool.run(FsWriteTextArgs(path=Path("created.txt"), text="hello"), ctx)
+    )
 
     assert result.ok is True
     assert target.read_text(encoding="utf-8") == "hello"
@@ -103,12 +105,19 @@ def test_write_text_is_atomic_on_replace_failure(
 
     import reflexor.security.fs_safety as fs_safety
 
-    def _boom(_src: str | os.PathLike[str], _dst: str | os.PathLike[str]) -> None:
+    def _boom(
+        _src: str | os.PathLike[str],
+        _dst: str | os.PathLike[str],
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        _ = (src_dir_fd, dst_dir_fd)
         raise OSError("replace failed")
 
     monkeypatch.setattr(fs_safety.os, "replace", _boom)
 
-    result = asyncio.run(tool.run(FsWriteTextArgs(path="file.txt", text="new"), ctx))
+    result = asyncio.run(tool.run(FsWriteTextArgs(path=Path("file.txt"), text="new"), ctx))
     assert result.ok is False
     assert result.error_code == "TOOL_ERROR"
 
@@ -128,7 +137,7 @@ def test_read_text_truncates_large_files(tmp_path: Path) -> None:
     )
     ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
 
-    result = asyncio.run(tool.run(FsReadTextArgs(path="big.txt"), ctx))
+    result = asyncio.run(tool.run(FsReadTextArgs(path=Path("big.txt")), ctx))
     assert result.ok is True
     assert isinstance(result.data, dict)
     assert result.data["truncated"] is True
@@ -145,7 +154,9 @@ def test_read_text_truncates_multibyte_files_without_decode_failure(tmp_path: Pa
     )
     ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
 
-    result = asyncio.run(tool.run(FsReadTextArgs(path="emoji.txt", errors="strict"), ctx))
+    result = asyncio.run(
+        tool.run(FsReadTextArgs(path=Path("emoji.txt"), errors="strict"), ctx)
+    )
 
     assert result.ok is True
     assert isinstance(result.data, dict)
@@ -161,7 +172,7 @@ def test_list_dir_truncates_output(tmp_path: Path) -> None:
     tool = FsListDirTool(settings=ReflexorSettings(workspace_root=tmp_path))
     ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
 
-    result = asyncio.run(tool.run(FsListDirArgs(path=".", max_entries=2), ctx))
+    result = asyncio.run(tool.run(FsListDirArgs(path=Path("."), max_entries=2), ctx))
     assert result.ok is True
     assert isinstance(result.data, dict)
     assert result.data["truncated"] is True
@@ -181,7 +192,7 @@ def test_list_dir_does_not_follow_symlink_targets_for_type_detection(tmp_path: P
     tool = FsListDirTool(settings=ReflexorSettings(workspace_root=tmp_path))
     ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
 
-    result = asyncio.run(tool.run(FsListDirArgs(path="."), ctx))
+    result = asyncio.run(tool.run(FsListDirArgs(path=Path(".")), ctx))
 
     assert result.ok is True
     assert isinstance(result.data, dict)
