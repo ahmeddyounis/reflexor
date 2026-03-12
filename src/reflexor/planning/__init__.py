@@ -5,7 +5,14 @@ from reflexor.planning.backends import (
     HeuristicPlannerBackend,
     OpenAICompatiblePlannerBackend,
 )
-from reflexor.planning.contracts import PlannerBackend, PlannerToolSpec
+from reflexor.planning.contracts import (
+    PlannerBackend,
+    PlannerExecutionError,
+    PlannerMemoryLoadError,
+    PlannerRequestError,
+    PlannerResponseError,
+    PlannerToolSpec,
+)
 from reflexor.planning.service import StructuredPlanner
 
 __all__ = [
@@ -13,6 +20,10 @@ __all__ = [
     "HeuristicPlannerBackend",
     "OpenAICompatiblePlannerBackend",
     "PlannerBackend",
+    "PlannerExecutionError",
+    "PlannerMemoryLoadError",
+    "PlannerRequestError",
+    "PlannerResponseError",
     "PlannerToolSpec",
     "StructuredPlanner",
 ]

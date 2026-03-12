@@ -16,6 +16,11 @@ from reflexor.orchestrator.budgets import BudgetTracker, budget_exceeded_to_audi
 from reflexor.orchestrator.engine.types import PlanningTrigger
 from reflexor.orchestrator.plans import LimitsSnapshot, Plan, PlanningInput
 from reflexor.orchestrator.validation import PlanValidationError, PlanValidator
+from reflexor.planning.contracts import (
+    PlannerMemoryLoadError,
+    PlannerRequestError,
+    PlannerResponseError,
+)
 from reflexor.storage.ports import RunRecord
 
 if TYPE_CHECKING:
@@ -225,6 +230,63 @@ async def run_planning_once(engine: OrchestratorEngine, *, trigger: PlanningTrig
                         policy_decisions.append(
                             {
                                 "type": "plan_validation_error",
+                                "message": str(exc),
+                            }
+                        )
+                    except PlannerMemoryLoadError as exc:
+                        if engine.metrics is not None:
+                            engine.metrics.orchestrator_rejections_total.labels(
+                                reason="memory"
+                            ).inc()
+                        logger.warning(
+                            "planner memory loading failed",
+                            extra={
+                                "run_id": planning_run_id,
+                                "trigger": trigger,
+                                "selected_events": len(selected_events),
+                            },
+                        )
+                        policy_decisions.append(
+                            {
+                                "type": "planning_memory_error",
+                                "message": str(exc),
+                            }
+                        )
+                    except PlannerRequestError as exc:
+                        if engine.metrics is not None:
+                            engine.metrics.orchestrator_rejections_total.labels(
+                                reason="planner_backend"
+                            ).inc()
+                        logger.warning(
+                            "planner backend request failed",
+                            extra={
+                                "run_id": planning_run_id,
+                                "trigger": trigger,
+                                "selected_events": len(selected_events),
+                            },
+                        )
+                        policy_decisions.append(
+                            {
+                                "type": "planning_backend_error",
+                                "message": str(exc),
+                            }
+                        )
+                    except PlannerResponseError as exc:
+                        if engine.metrics is not None:
+                            engine.metrics.orchestrator_rejections_total.labels(
+                                reason="planner_response"
+                            ).inc()
+                        logger.warning(
+                            "planner backend returned invalid response",
+                            extra={
+                                "run_id": planning_run_id,
+                                "trigger": trigger,
+                                "selected_events": len(selected_events),
+                            },
+                        )
+                        policy_decisions.append(
+                            {
+                                "type": "planning_response_error",
                                 "message": str(exc),
                             }
                         )

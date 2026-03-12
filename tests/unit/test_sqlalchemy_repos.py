@@ -29,6 +29,7 @@ from reflexor.infra.db.repos import (
     SqlAlchemyToolCallRepo,
 )
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
+from reflexor.memory.models import MemoryItem
 from reflexor.storage.ports import RunRecord
 
 
@@ -503,9 +504,34 @@ async def test_memory_repo_search_and_delete_older_than() -> None:
         async with uow2:
             session = cast(AsyncSession, uow2.session)
             memory_repo = SqlAlchemyMemoryRepo(session)
+            await memory_repo.upsert(
+                MemoryItem(
+                    run_id=run_old_id,
+                    event_id=event_old.event_id,
+                    event_type=event_old.type,
+                    event_source=event_old.source,
+                    summary="ticket.updated ticket_updated",
+                    content={"kind": "literal_underscore"},
+                    updated_at_ms=100,
+                )
+            )
+            await memory_repo.upsert(
+                MemoryItem(
+                    run_id=run_new_id,
+                    event_id=event_new.event_id,
+                    event_type=event_new.type,
+                    event_source=event_new.source,
+                    summary="ticketXupdated",
+                    content={"kind": "wildcard_candidate"},
+                    updated_at_ms=200,
+                )
+            )
 
             searched = await memory_repo.search(query="ticket.updated", limit=10, offset=0)
-            assert [item.run_id for item in searched] == [run_new_id]
+            assert [item.run_id for item in searched] == [run_old_id]
+
+            literal_match = await memory_repo.search(query="ticket_updated", limit=10, offset=0)
+            assert [item.run_id for item in literal_match] == [run_old_id]
 
             deleted = await memory_repo.delete_older_than(updated_before_ms=150, limit=10)
             assert deleted == 1

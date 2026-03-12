@@ -5,7 +5,12 @@ from dataclasses import dataclass, field
 
 from reflexor.orchestrator.interfaces import Planner
 from reflexor.orchestrator.plans import Plan, PlanningInput
-from reflexor.planning.contracts import PlannerBackend, PlannerToolSpec
+from reflexor.planning.contracts import (
+    PlannerBackend,
+    PlannerExecutionError,
+    PlannerMemoryLoadError,
+    PlannerToolSpec,
+)
 from reflexor.tools.registry import ToolRegistry
 
 MemoryLoader = Callable[[PlanningInput], Awaitable[Sequence[dict[str, object]]]]
@@ -46,7 +51,12 @@ class StructuredPlanner(Planner):
     async def plan(self, input: PlanningInput) -> Plan:
         memory: Sequence[dict[str, object]] = ()
         if self.memory_loader is not None:
-            memory = await self.memory_loader(input)
+            try:
+                memory = await self.memory_loader(input)
+            except PlannerExecutionError:
+                raise
+            except Exception as exc:
+                raise PlannerMemoryLoadError("planner memory loading failed") from exc
         return await self.backend.plan(
             planning_input=input,
             tools=self._tool_specs,

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import httpx
+from pydantic import ValidationError
 
+from reflexor.observability.redaction import Redactor
+from reflexor.observability.truncation import truncate_collection
 from reflexor.orchestrator.plans import BudgetAssertions, Plan, PlanningInput, ProposedTask
-from reflexor.planning.contracts import PlannerToolSpec
+from reflexor.planning.contracts import PlannerRequestError, PlannerResponseError, PlannerToolSpec
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are the Reflexor planner. Return JSON only. "
@@ -16,6 +19,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "Set declared_permission_scope to the selected tool permission_scope when available. "
     "Prefer small plans that satisfy the event intent within the provided limits."
 )
+PLANNER_PROMPT_MAX_BYTES = 64 * 1024
+PLANNER_INPUT_MAX_BYTES = 20 * 1024
+PLANNER_TOOLS_MAX_BYTES = 20 * 1024
+PLANNER_MEMORY_MAX_BYTES = 12 * 1024
+PLANNER_TOOL_SCHEMA_MAX_BYTES = 3 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,16 +131,26 @@ class OpenAICompatiblePlannerBackend:
             },
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=request_body,
-            )
-            response.raise_for_status()
-            payload = response.json()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=request_body,
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise PlannerRequestError(
+                f"planner backend returned HTTP {exc.response.status_code}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise PlannerRequestError("planner backend request failed") from exc
 
-        plan = _parse_openai_plan_response(payload)
+        try:
+            payload = response.json()
+            plan = _parse_openai_plan_response(payload)
+        except (TypeError, ValidationError, ValueError) as exc:
+            raise PlannerResponseError("planner backend returned invalid plan response") from exc
         if plan.planner_version is None:
             return plan.model_copy(update={"planner_version": self.planner_version})
         return plan
@@ -144,17 +162,47 @@ def _build_user_prompt(
     tools: Sequence[PlannerToolSpec],
     memory: Sequence[dict[str, object]],
 ) -> str:
+    redactor = Redactor()
     payload = {
-        "planning_input": planning_input.model_dump(mode="json"),
-        "tools": [tool.to_prompt_dict() for tool in tools],
-        "memory": list(memory),
+        "planning_input": _sanitize_prompt_section(
+            planning_input.model_dump(mode="json"),
+            max_bytes=PLANNER_INPUT_MAX_BYTES,
+            redactor=redactor,
+        ),
+        "tools": _sanitize_prompt_section(
+            [_tool_to_prompt_dict(tool=tool, redactor=redactor) for tool in tools],
+            max_bytes=PLANNER_TOOLS_MAX_BYTES,
+            redactor=redactor,
+        ),
+        "memory": _sanitize_prompt_section(
+            list(memory),
+            max_bytes=PLANNER_MEMORY_MAX_BYTES,
+            redactor=redactor,
+        ),
         "instructions": {
             "output_must_be_valid_plan_json": True,
             "depends_on_references_task_names": True,
             "use_only_listed_tools": True,
         },
     }
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(prompt.encode("utf-8")) > PLANNER_PROMPT_MAX_BYTES:
+        truncated = truncate_collection(
+            payload,
+            max_bytes=PLANNER_PROMPT_MAX_BYTES - 1024,
+            max_depth=redactor.max_depth,
+            max_items=redactor.max_items,
+        )
+        if not isinstance(truncated, Mapping):  # pragma: no cover
+            raise PlannerRequestError("planner prompt exceeded safe size after sanitization")
+        prompt = json.dumps(
+            {str(key): value for key, value in truncated.items()},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    if len(prompt.encode("utf-8")) > PLANNER_PROMPT_MAX_BYTES:
+        raise PlannerRequestError("planner prompt exceeded safe size after sanitization")
+    return prompt
 
 
 def _budget_assertions_for_input(planning_input: PlanningInput) -> BudgetAssertions:
@@ -205,8 +253,33 @@ def _parse_openai_plan_response(payload: dict[str, object]) -> Plan:
     raise ValueError("planner response did not include JSON content")
 
 
+def _sanitize_prompt_section(
+    obj: object,
+    *,
+    max_bytes: int,
+    redactor: Redactor,
+) -> object:
+    return redactor.redact(obj, max_bytes=max_bytes)
+
+
+def _tool_to_prompt_dict(*, tool: PlannerToolSpec, redactor: Redactor) -> dict[str, object]:
+    payload = tool.to_prompt_dict()
+    payload["input_schema"] = _sanitize_prompt_section(
+        payload["input_schema"],
+        max_bytes=PLANNER_TOOL_SCHEMA_MAX_BYTES,
+        redactor=redactor,
+    )
+    payload["output_schema"] = _sanitize_prompt_section(
+        payload["output_schema"],
+        max_bytes=PLANNER_TOOL_SCHEMA_MAX_BYTES,
+        redactor=redactor,
+    )
+    return payload
+
+
 __all__ = [
     "DEFAULT_SYSTEM_PROMPT",
     "HeuristicPlannerBackend",
     "OpenAICompatiblePlannerBackend",
+    "PLANNER_PROMPT_MAX_BYTES",
 ]

@@ -1,10 +1,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Protocol
 
 from reflexor.orchestrator.plans import Plan, PlanningInput
+
+
+class PlannerExecutionError(RuntimeError):
+    """Safe planner failure that can be surfaced in audit packets."""
+
+
+class PlannerMemoryLoadError(PlannerExecutionError):
+    """Planner memory could not be loaded."""
+
+
+class PlannerRequestError(PlannerExecutionError):
+    """Planner backend request failed before a usable plan was returned."""
+
+
+class PlannerResponseError(PlannerExecutionError):
+    """Planner backend returned an unusable response."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +47,8 @@ class PlannerToolSpec:
             "default_timeout_s": self.default_timeout_s,
             "max_output_bytes": self.max_output_bytes,
             "tags": list(self.tags),
-            "input_schema": self.input_schema,
-            "output_schema": self.output_schema,
+            "input_schema": deepcopy(self.input_schema),
+            "output_schema": deepcopy(self.output_schema),
         }
 
 
@@ -46,4 +63,11 @@ class PlannerBackend(Protocol):
     ) -> Plan: ...
 
 
-__all__ = ["PlannerBackend", "PlannerToolSpec"]
+__all__ = [
+    "PlannerBackend",
+    "PlannerExecutionError",
+    "PlannerMemoryLoadError",
+    "PlannerRequestError",
+    "PlannerResponseError",
+    "PlannerToolSpec",
+]

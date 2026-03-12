@@ -35,10 +35,13 @@ def build_planner(
         )
 
     if settings.planner_backend == "openai_compatible":
+        planner_model = settings.planner_model
+        if planner_model is None:
+            raise ValueError("planner_model must be set when planner_backend=openai_compatible")
         return StructuredPlanner(
             backend=OpenAICompatiblePlannerBackend(
                 base_url=settings.planner_base_url,
-                model=settings.planner_model or "",
+                model=planner_model,
                 api_key=settings.planner_api_key,
                 timeout_s=float(settings.planner_timeout_s),
                 temperature=float(settings.planner_temperature),

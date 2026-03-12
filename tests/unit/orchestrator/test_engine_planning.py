@@ -7,6 +7,7 @@ from prometheus_client import generate_latest
 from pydantic import BaseModel
 
 from reflexor.domain.models_event import Event
+from reflexor.domain.models_run_packet import RunPacket
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.budgets import BudgetLimits
 from reflexor.orchestrator.clock import Clock
@@ -15,6 +16,7 @@ from reflexor.orchestrator.interfaces import NeedsPlanningRouter
 from reflexor.orchestrator.plans import BudgetAssertions, Plan, PlanningInput, ProposedTask
 from reflexor.orchestrator.queue import Lease, TaskEnvelope
 from reflexor.orchestrator.sinks import RunPacketSink
+from reflexor.planning import PlannerMemoryLoadError, PlannerRequestError
 from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.sdk import ToolContext, ToolManifest, ToolResult
 
@@ -83,10 +85,10 @@ class _RecordingQueue:
 
 class _InMemoryRunSink(RunPacketSink):
     def __init__(self) -> None:
-        self.packets = []
+        self.packets: list[RunPacket] = []
         self._condition = asyncio.Condition()
 
-    async def emit(self, packet) -> None:  # type: ignore[override]
+    async def emit(self, packet: RunPacket) -> None:
         async with self._condition:
             self.packets.append(packet)
             self._condition.notify_all()
@@ -192,6 +194,18 @@ class _TickPlanner:
             ),
             metadata={},
         )
+
+
+class _PlannerBackendFailure:
+    async def plan(self, input: PlanningInput) -> Plan:
+        _ = input
+        raise PlannerRequestError("planner backend request failed")
+
+
+class _PlannerMemoryFailure:
+    async def plan(self, input: PlanningInput) -> Plan:
+        _ = input
+        raise PlannerMemoryLoadError("planner memory loading failed")
 
 
 async def test_event_driven_planning_enqueues_tasks_and_clears_backlog() -> None:
@@ -394,5 +408,93 @@ async def test_tick_path_runs_even_without_event_triggers() -> None:
         planning_packet = sink.packets[0]
         assert planning_packet.event.type == "planning_cycle"
         assert planning_packet.plan["summary"] == "tick_plan"
+    finally:
+        await engine.aclose()
+
+
+async def test_planner_backend_failures_emit_structured_policy_decision() -> None:
+    registry = ToolRegistry()
+    registry.register(_MockTool())
+
+    queue = _RecordingQueue()
+    sink = _InMemoryRunSink()
+    clock = _ManualClock()
+    metrics = ReflexorMetrics.build()
+
+    engine = OrchestratorEngine(
+        reflex_router=NeedsPlanningRouter(),
+        planner=_PlannerBackendFailure(),
+        tool_registry=registry,
+        queue=queue,
+        limits=BudgetLimits(max_events_per_planning_cycle=10),
+        clock=clock,
+        run_sink=sink,
+        metrics=metrics,
+        planner_debounce_s=1.0,
+        planner_interval_s=10_000.0,
+        enabled_scopes=("fs.read",),
+    )
+    engine.start()
+
+    try:
+        await engine.handle_event(_event("44444444-4444-4444-8444-444444444444"))
+        await clock.advance(seconds=1.0)
+        await sink.wait_for_count(count=2)
+
+        assert queue.envelopes == []
+        planning_packet = sink.packets[1]
+        assert planning_packet.policy_decisions == [
+            {
+                "type": "planning_backend_error",
+                "message": "planner backend request failed",
+            }
+        ]
+
+        metrics_text = generate_latest(metrics.registry).decode()
+        assert 'orchestrator_rejections_total{reason="planner_backend"} 1.0' in metrics_text
+    finally:
+        await engine.aclose()
+
+
+async def test_planner_memory_failures_emit_structured_policy_decision() -> None:
+    registry = ToolRegistry()
+    registry.register(_MockTool())
+
+    queue = _RecordingQueue()
+    sink = _InMemoryRunSink()
+    clock = _ManualClock()
+    metrics = ReflexorMetrics.build()
+
+    engine = OrchestratorEngine(
+        reflex_router=NeedsPlanningRouter(),
+        planner=_PlannerMemoryFailure(),
+        tool_registry=registry,
+        queue=queue,
+        limits=BudgetLimits(max_events_per_planning_cycle=10),
+        clock=clock,
+        run_sink=sink,
+        metrics=metrics,
+        planner_debounce_s=1.0,
+        planner_interval_s=10_000.0,
+        enabled_scopes=("fs.read",),
+    )
+    engine.start()
+
+    try:
+        await engine.handle_event(_event("55555555-5555-4555-8555-555555555555"))
+        await clock.advance(seconds=1.0)
+        await sink.wait_for_count(count=2)
+
+        assert queue.envelopes == []
+        planning_packet = sink.packets[1]
+        assert planning_packet.policy_decisions == [
+            {
+                "type": "planning_memory_error",
+                "message": "planner memory loading failed",
+            }
+        ]
+
+        metrics_text = generate_latest(metrics.registry).decode()
+        assert 'orchestrator_rejections_total{reason="memory"} 1.0' in metrics_text
     finally:
         await engine.aclose()

@@ -8,6 +8,8 @@ from reflexor.infra.db.models import MemoryItemRow, RunRow
 from reflexor.infra.db.repos._common import _normalize_optional_str, _validate_limit_offset
 from reflexor.memory.models import MemoryItem
 
+_LIKE_ESCAPE = "\\"
+
 
 class SqlAlchemyMemoryRepo:
     def __init__(self, session: AsyncSession) -> None:
@@ -103,9 +105,16 @@ class SqlAlchemyMemoryRepo:
 
         normalized_event_type = _normalize_optional_str(event_type)
         normalized_event_source = _normalize_optional_str(event_source)
+        escaped_query = (
+            normalized_query.lower()
+            .replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+            .replace("%", f"{_LIKE_ESCAPE}%")
+            .replace("_", f"{_LIKE_ESCAPE}_")
+        )
+        like_pattern = f"%{escaped_query}%"
 
         stmt: Select[tuple[MemoryItemRow]] = select(MemoryItemRow).where(
-            func.lower(MemoryItemRow.summary).like(f"%{normalized_query.lower()}%")
+            func.lower(MemoryItemRow.summary).like(like_pattern, escape=_LIKE_ESCAPE)
         )
         if normalized_event_type is not None:
             stmt = stmt.where(MemoryItemRow.event_type == normalized_event_type)
