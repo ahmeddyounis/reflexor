@@ -7,6 +7,7 @@ creating metrics and timing async operations.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -38,6 +39,33 @@ def _registry_cache(registry: CollectorRegistry) -> dict[tuple[str, str], _Metri
     return cache
 
 
+def _normalize_labelnames(labels: Sequence[str] | None) -> tuple[str, ...]:
+    labelnames = tuple(str(label).strip() for label in (labels or ()))
+    if any(not label for label in labelnames):
+        raise ValueError("metric label names must be non-empty")
+    if len(set(labelnames)) != len(labelnames):
+        raise ValueError("metric label names must be unique")
+    return labelnames
+
+
+def _normalize_buckets(buckets: Sequence[float] | None) -> tuple[float, ...] | None:
+    if buckets is None:
+        return None
+
+    normalized: list[float] = []
+    previous: float | None = None
+    for raw_bucket in buckets:
+        bucket = float(raw_bucket)
+        if not math.isfinite(bucket):
+            raise ValueError("histogram buckets must be finite")
+        if previous is not None and bucket <= previous:
+            raise ValueError("histogram buckets must be strictly increasing")
+        normalized.append(bucket)
+        previous = bucket
+
+    return tuple(normalized)
+
+
 def counter(
     name: str,
     labels: Sequence[str] | None = None,
@@ -47,7 +75,7 @@ def counter(
 ) -> Counter:
     """Create or return a Counter registered in `registry`."""
 
-    labelnames = tuple(str(label) for label in (labels or ()))
+    labelnames = _normalize_labelnames(labels)
     key = ("counter", str(name))
     cache = _registry_cache(registry)
 
@@ -84,7 +112,7 @@ def gauge(
 ) -> Gauge:
     """Create or return a Gauge registered in `registry`."""
 
-    labelnames = tuple(str(label) for label in (labels or ()))
+    labelnames = _normalize_labelnames(labels)
     key = ("gauge", str(name))
     cache = _registry_cache(registry)
 
@@ -122,8 +150,8 @@ def histogram(
 ) -> Histogram:
     """Create or return a Histogram registered in `registry`."""
 
-    labelnames = tuple(str(label) for label in (labels or ()))
-    buckets_tuple = tuple(float(b) for b in buckets) if buckets is not None else None
+    labelnames = _normalize_labelnames(labels)
+    buckets_tuple = _normalize_buckets(buckets)
     key = ("histogram", str(name))
     cache = _registry_cache(registry)
 

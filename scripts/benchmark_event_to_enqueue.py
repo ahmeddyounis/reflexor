@@ -19,11 +19,13 @@ from reflexor.domain.models_event import Event  # noqa: E402
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue  # noqa: E402
 from reflexor.orchestrator.engine import OrchestratorEngine  # noqa: E402
 from reflexor.orchestrator.plans import (  # noqa: E402
+    BudgetAssertions,
     Plan,
     PlanningInput,
     ProposedTask,
     ReflexDecision,
 )
+from reflexor.orchestrator.sinks import InMemoryRunPacketSink  # noqa: E402
 from reflexor.orchestrator.validation import compute_idempotency_key  # noqa: E402
 from reflexor.tools.mock_tool import MockTool  # noqa: E402
 from reflexor.tools.registry import ToolRegistry  # noqa: E402
@@ -177,6 +179,12 @@ class _OneTaskPerEventPlanner:
         return Plan(
             summary=f"benchmark planner produced {len(tasks)} task(s)",
             tasks=tasks,
+            budget_assertions=BudgetAssertions(
+                max_tool_calls=max(1, len(tasks)),
+                max_runtime_s=60.0,
+                max_tokens=max(1, len(tasks)),
+                max_tasks=max(1, len(tasks)),
+            ),
             metadata={"trigger": input.trigger, "events": len(input.events)},
         )
 
@@ -212,17 +220,87 @@ async def _submit_events(
     expected_keys: dict[str, str],
     concurrency: int,
 ) -> dict[str, float]:
-    semaphore = asyncio.Semaphore(int(concurrency))
+    concurrency_i = int(concurrency)
+    if concurrency_i <= 0:
+        raise ValueError("concurrency must be > 0")
+
+    workers = min(concurrency_i, len(events))
+    if workers <= 0:
+        return {}
+
+    event_iter = iter(events)
+    next_event_lock = asyncio.Lock()
     start_times: dict[str, float] = {}
 
-    async def _run_one(event: Event) -> None:
-        key = expected_keys[event.event_id]
-        async with semaphore:
+    async def _run_worker() -> None:
+        while True:
+            async with next_event_lock:
+                try:
+                    event = next(event_iter)
+                except StopIteration:
+                    return
+
+            key = expected_keys[event.event_id]
             start_times[key] = time.perf_counter()
             await engine.handle_event(event)
 
-    await asyncio.gather(*[asyncio.create_task(_run_one(event)) for event in events])
+    await asyncio.gather(*[asyncio.create_task(_run_worker()) for _ in range(workers)])
     return start_times
+
+
+def _summarize_recent_run_failures(
+    packets: list[dict[str, object]],
+    *,
+    limit: int = 5,
+) -> list[str]:
+    summaries: list[str] = []
+    limit_i = max(1, int(limit))
+
+    for packet in packets:
+        event_id = None
+        event = packet.get("event")
+        if isinstance(event, dict):
+            raw_event_id = event.get("event_id")
+            if isinstance(raw_event_id, str) and raw_event_id.strip():
+                event_id = raw_event_id
+
+        prefix = f"event_id={event_id} " if event_id is not None else ""
+
+        policy_decisions = packet.get("policy_decisions")
+        if isinstance(policy_decisions, list):
+            for decision in policy_decisions:
+                if not isinstance(decision, dict):
+                    continue
+                decision_type = decision.get("type")
+                decision_message = decision.get("message")
+                if not isinstance(decision_type, str) or not decision_type.strip():
+                    continue
+
+                if isinstance(decision_message, str) and decision_message.strip():
+                    summaries.append(f"{prefix}{decision_type}: {decision_message}")
+                else:
+                    summaries.append(f"{prefix}{decision_type}")
+
+                if len(summaries) >= limit_i:
+                    return summaries
+
+        reflex_decision = packet.get("reflex_decision")
+        if isinstance(reflex_decision, dict):
+            action = reflex_decision.get("action")
+            reason = reflex_decision.get("reason")
+            if (
+                isinstance(action, str)
+                and action.strip()
+                and action in {"drop", "flag", "suppressed"}
+            ):
+                if isinstance(reason, str) and reason.strip():
+                    summaries.append(f"{prefix}{action}: {reason}")
+                else:
+                    summaries.append(f"{prefix}{action}")
+                if len(summaries) >= limit_i:
+                    return summaries
+
+    return summaries
 
 
 async def _run_benchmark(*, events: int, concurrency: int, planner: str) -> dict[str, object]:
@@ -267,17 +345,23 @@ async def _run_benchmark(*, events: int, concurrency: int, planner: str) -> dict
     recorder = _EnqueueRecorder.build(expected_idempotency_keys=expected_keys)
 
     queue = _InstrumentedQueue(inner=InMemoryQueue(), recorder=recorder)
+    run_sink = InMemoryRunPacketSink(max_items=max(50, events_i))
+    enabled_scopes = ("fs.read",)
 
+    router: Any
+    planner_impl: Any
     if planner_mode == "on":
         router = _NeedsPlanningRouter()
-        planner_impl: Any = _OneTaskPerEventPlanner(tool_name=tool_name)
+        planner_impl = _OneTaskPerEventPlanner(tool_name=tool_name)
         engine = OrchestratorEngine(
             reflex_router=router,
             planner=planner_impl,
             tool_registry=registry,
             queue=queue,
+            run_sink=run_sink,
             planner_debounce_s=0.01,
             planner_interval_s=3600.0,
+            enabled_scopes=enabled_scopes,
         )
         engine.start()
     else:
@@ -288,6 +372,8 @@ async def _run_benchmark(*, events: int, concurrency: int, planner: str) -> dict
             planner=planner_impl,
             tool_registry=registry,
             queue=queue,
+            run_sink=run_sink,
+            enabled_scopes=enabled_scopes,
         )
 
     started_s = time.perf_counter()
@@ -304,8 +390,14 @@ async def _run_benchmark(*, events: int, concurrency: int, planner: str) -> dict
             await asyncio.wait_for(recorder.done.wait(), timeout=timeout_s)
         except TimeoutError as exc:
             missing = len(expected_keys) - len(recorder.enqueue_times_s)
+            recent_packets = await run_sink.list_recent(limit=10)
+            failure_summaries = _summarize_recent_run_failures(recent_packets)
+            failure_detail = (
+                "" if not failure_summaries else f", recent_failures={failure_summaries!r}"
+            )
             raise RuntimeError(
-                f"timed out waiting for enqueues (missing={missing}, timeout_s={timeout_s})"
+                f"timed out waiting for enqueues (missing={missing}, timeout_s={timeout_s}"
+                f"{failure_detail})"
             ) from exc
 
         end_s = (
@@ -371,6 +463,10 @@ def main(argv: list[str] | None = None) -> int:
 
     latency = report["latency_ms"]
     assert isinstance(latency, dict)
+    throughput = report["throughput_events_per_s"]
+    wall_time = report["wall_time_s"]
+    assert isinstance(throughput, (int, float))
+    assert isinstance(wall_time, (int, float))
     sys.stdout.write("== event_to_enqueue benchmark ==\n")
     sys.stdout.write(
         f"planner={report['planner']} events={report['events']} "
@@ -381,8 +477,8 @@ def main(argv: list[str] | None = None) -> int:
         f"min={latency['min']:.3f} max={latency['max']:.3f} mean={latency['mean']:.3f}\n"
     )
     sys.stdout.write(
-        f"throughput_events_per_s={float(report['throughput_events_per_s']):.2f} "
-        f"wall_time_s={float(report['wall_time_s']):.3f}\n"
+        f"throughput_events_per_s={float(throughput):.2f} "
+        f"wall_time_s={float(wall_time):.3f}\n"
     )
     return 0
 

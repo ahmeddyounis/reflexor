@@ -45,6 +45,19 @@ def test_metric_helpers_reject_label_mismatch_and_kind_conflicts() -> None:
         histogram("unit_test_kind_conflict", registry=registry)
 
 
+def test_metric_helpers_reject_invalid_labels_and_buckets() -> None:
+    registry = CollectorRegistry(auto_describe=True)
+
+    with pytest.raises(ValueError, match="label names must be unique"):
+        counter("unit_test_duplicate_labels", labels=["tool", "tool"], registry=registry)
+
+    with pytest.raises(ValueError, match="buckets must be strictly increasing"):
+        histogram("unit_test_bad_buckets", buckets=[0.2, 0.1], registry=registry)
+
+    with pytest.raises(ValueError, match="buckets must be finite"):
+        histogram("unit_test_nan_bucket", buckets=[0.1, float("nan")], registry=registry)
+
+
 async def test_async_timer_observes_histogram() -> None:
     registry = CollectorRegistry(auto_describe=True)
     h = histogram("unit_test_timer_seconds", registry=registry)
