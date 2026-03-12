@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -9,6 +8,7 @@ from uuid import UUID
 from prometheus_client import generate_latest
 from pydantic import BaseModel
 
+import reflexor.orchestrator.engine.reflex as reflex_module
 from reflexor.config import ReflexorSettings
 from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
@@ -294,9 +294,18 @@ async def test_reflex_rule_validates_and_enqueues_task_envelope(tmp_path: Path) 
 
 
 async def test_unexpected_reflex_errors_do_not_leak_raw_messages(
-    tmp_path: Path, caplog
+    tmp_path: Path, monkeypatch
 ) -> None:
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def exception(self, message: str, **kwargs: object) -> None:
+            self.calls.append((message, dict(kwargs)))
+
     settings = ReflexorSettings(workspace_root=tmp_path, max_run_packet_bytes=10_000)
+    logger = _RecordingLogger()
+    monkeypatch.setattr(reflex_module, "logger", logger)
 
     clock = _FixedClock()
     queue = InMemoryQueue(now_ms=clock.now_ms)
@@ -314,8 +323,6 @@ async def test_unexpected_reflex_errors_do_not_leak_raw_messages(
         enabled_scopes=("net.http",),
     )
 
-    caplog.set_level(logging.ERROR, logger="reflexor.orchestrator.engine.reflex")
-
     run_id = await engine.handle_event(_event(tmp_path))
     stored = await sink.get(run_id)
 
@@ -323,7 +330,7 @@ async def test_unexpected_reflex_errors_do_not_leak_raw_messages(
     assert stored["policy_decisions"][0]["type"] == "reflex_error"
     assert stored["policy_decisions"][0]["message"] == "unexpected reflex error"
     assert "sk-raw-secret-should-not-leak" not in json.dumps(stored)
-    assert "unexpected reflex error" in caplog.text
+    assert logger.calls[0][0] == "unexpected reflex error"
 
 
 async def test_reflex_partial_enqueue_records_policy_and_preserves_partial_state(

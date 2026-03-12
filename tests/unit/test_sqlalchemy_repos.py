@@ -1365,6 +1365,7 @@ async def test_run_packet_repo_sanitizes_memory_summary_content() -> None:
         async with uow:
             session = cast(AsyncSession, uow.session)
             run_repo = SqlAlchemyRunRepo(session)
+            event_repo = SqlAlchemyEventRepo(session)
             memory_repo = SqlAlchemyMemoryRepo(session)
             run_packet_repo = SqlAlchemyRunPacketRepo(
                 session,
@@ -1373,6 +1374,7 @@ async def test_run_packet_repo_sanitizes_memory_summary_content() -> None:
             )
 
             assert await run_repo.create(run) == run
+            assert await event_repo.create(packet.event) == packet.event
             await run_packet_repo.create(packet)
 
             memory_items = await memory_repo.list_recent(limit=10, offset=0)
