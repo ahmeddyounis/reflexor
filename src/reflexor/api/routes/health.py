@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
@@ -12,8 +14,10 @@ router = APIRouter(tags=["health"])
 @router.get("/healthz")
 async def healthz(container: ContainerDep) -> JSONResponse:
     time_ms = int(container.orchestrator_engine.clock.now_ms())
-    db_ok = await container.ping_db(timeout_s=1.0)
-    queue_ok = await container.ping_queue(timeout_s=0.2)
+    db_ok, queue_ok = await asyncio.gather(
+        container.ping_db(timeout_s=1.0),
+        container.ping_queue(timeout_s=0.2),
+    )
 
     payload: dict[str, object] = {
         "ok": bool(db_ok and queue_ok),

@@ -89,3 +89,4 @@ def test_metrics_registry_includes_core_names() -> None:
     assert "queue_depth" in text
     assert "queue_redeliver_total" in text
     assert "orchestrator_rejections_total" in text
+    assert "metrics_refresh_failures_total" in text

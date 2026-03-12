@@ -242,6 +242,7 @@ class ReflexorMetrics:
     # API-facing metrics (still centralized here)
     event_ingest_latency_seconds: Histogram
     approvals_pending_total: Gauge
+    metrics_refresh_failures_total: Counter
     api_requests_total: Counter
 
     @classmethod
@@ -348,6 +349,12 @@ class ReflexorMetrics:
                 "approvals_pending_total",
                 registry=effective_registry,
                 description="Total approvals pending operator decision",
+            ),
+            metrics_refresh_failures_total=counter(
+                "metrics_refresh_failures",
+                labels=["metric"],
+                registry=effective_registry,
+                description="Metric refresh failures by metric name",
             ),
             api_requests_total=counter(
                 "api_requests",

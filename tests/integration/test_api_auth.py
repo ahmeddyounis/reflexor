@@ -45,6 +45,7 @@ def test_admin_endpoints_allow_without_key_in_dev(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.get("/v1/runs")
         assert response.status_code == 200
+        assert client.get("/metrics").status_code == 200
 
 
 def test_admin_endpoints_require_key_when_set(tmp_path: Path) -> None:
@@ -55,12 +56,17 @@ def test_admin_endpoints_require_key_when_set(tmp_path: Path) -> None:
         assert missing.status_code == 401
         assert missing.headers["WWW-Authenticate"] == 'Bearer realm="reflexor-admin"'
 
+        missing_metrics = client.get("/metrics")
+        assert missing_metrics.status_code == 401
+        assert missing_metrics.headers["WWW-Authenticate"] == 'Bearer realm="reflexor-admin"'
+
         invalid = client.get("/v1/runs", headers={"Authorization": "Bearer wrong"})
         assert invalid.status_code == 401
         assert invalid.headers["WWW-Authenticate"] == 'Bearer realm="reflexor-admin"'
 
         assert client.get("/v1/runs", headers={"Authorization": "Bearer secret"}).status_code == 200
         assert client.get("/v1/runs", headers={"X-API-Key": "secret"}).status_code == 200
+        assert client.get("/metrics", headers={"Authorization": "Bearer secret"}).status_code == 200
 
 
 def test_admin_endpoints_denied_without_key_in_prod(tmp_path: Path) -> None:
