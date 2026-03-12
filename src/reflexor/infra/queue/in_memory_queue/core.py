@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING
@@ -24,6 +25,7 @@ from reflexor.orchestrator.queue.observer import (
     QueueObserver,
     QueueRedeliverObservation,
     build_queue_correlation_ids,
+    notify_queue_observer,
 )
 
 
@@ -47,8 +49,11 @@ class InMemoryQueue:
     ) -> None:
         self._now_ms = now_ms or system_now_ms
         self._default_visibility_timeout_s = float(default_visibility_timeout_s)
-        if self._default_visibility_timeout_s <= 0:
-            raise ValueError("default_visibility_timeout_s must be > 0")
+        if (
+            not math.isfinite(self._default_visibility_timeout_s)
+            or self._default_visibility_timeout_s <= 0
+        ):
+            raise ValueError("default_visibility_timeout_s must be finite and > 0")
 
         self._observer = NoopQueueObserver() if observer is None else observer
 
@@ -121,8 +126,16 @@ class InMemoryQueue:
             )
 
         for observation in redeliver:
-            self._observer.on_redeliver(observation)
-        self._observer.on_enqueue(enqueue_obs)
+            notify_queue_observer(
+                self._observer,
+                callback_name="on_redeliver",
+                observation=observation,
+            )
+        notify_queue_observer(
+            self._observer,
+            callback_name="on_enqueue",
+            observation=enqueue_obs,
+        )
 
     async def dequeue(
         self,
@@ -136,16 +149,21 @@ class InMemoryQueue:
         visibility_timeout_s = (
             self._default_visibility_timeout_s if timeout_s is None else float(timeout_s)
         )
-        if visibility_timeout_s <= 0:
-            raise ValueError("timeout_s must be > 0")
+        if not math.isfinite(visibility_timeout_s) or visibility_timeout_s <= 0:
+            raise ValueError("timeout_s must be finite and > 0")
 
-        if wait_s is not None and float(wait_s) < 0:
-            raise ValueError("wait_s must be >= 0")
+        wait_seconds = None if wait_s is None else float(wait_s)
+        if wait_seconds is not None and (
+            not math.isfinite(wait_seconds) or wait_seconds < 0
+        ):
+            raise ValueError("wait_s must be finite and >= 0 when provided")
 
-        if wait_s is None or float(wait_s) > 0:
+        if wait_seconds is None or wait_seconds > 0:
             ensure_background_tasks_started(self)
 
-        deadline = None if wait_s is None else (asyncio.get_running_loop().time() + float(wait_s))
+        deadline = (
+            None if wait_seconds is None else (asyncio.get_running_loop().time() + wait_seconds)
+        )
         while True:
             redeliver: list[QueueRedeliverObservation]
             lease: Lease | None
@@ -165,34 +183,44 @@ class InMemoryQueue:
                     self._ready_event.clear()
 
             for observation in redeliver:
-                self._observer.on_redeliver(observation)
+                notify_queue_observer(
+                    self._observer,
+                    callback_name="on_redeliver",
+                    observation=observation,
+                )
 
             if lease is not None:
-                self._observer.on_dequeue(
-                    QueueDequeueObservation(
+                notify_queue_observer(
+                    self._observer,
+                    callback_name="on_dequeue",
+                    observation=QueueDequeueObservation(
                         lease=lease,
                         correlation_ids=build_queue_correlation_ids(lease.envelope),
                         now_ms=now,
                         queue_depth=queue_depth,
-                    )
+                    ),
                 )
                 return lease
 
-            if wait_s is not None and float(wait_s) == 0.0:
-                self._observer.on_dequeue(
-                    QueueDequeueObservation(
+            if wait_seconds is not None and wait_seconds == 0.0:
+                notify_queue_observer(
+                    self._observer,
+                    callback_name="on_dequeue",
+                    observation=QueueDequeueObservation(
                         lease=None, correlation_ids=None, now_ms=now, queue_depth=queue_depth
-                    )
+                    ),
                 )
                 return None
 
             if deadline is not None:
                 remaining_s = deadline - asyncio.get_running_loop().time()
                 if remaining_s <= 0:
-                    self._observer.on_dequeue(
-                        QueueDequeueObservation(
+                    notify_queue_observer(
+                        self._observer,
+                        callback_name="on_dequeue",
+                        observation=QueueDequeueObservation(
                             lease=None, correlation_ids=None, now_ms=now, queue_depth=queue_depth
-                        )
+                        ),
                     )
                     return None
             else:
@@ -204,10 +232,12 @@ class InMemoryQueue:
                 else:
                     await asyncio.wait_for(self._ready_event.wait(), timeout=remaining_s)
             except TimeoutError:
-                self._observer.on_dequeue(
-                    QueueDequeueObservation(
+                notify_queue_observer(
+                    self._observer,
+                    callback_name="on_dequeue",
+                    observation=QueueDequeueObservation(
                         lease=None, correlation_ids=None, now_ms=now, queue_depth=queue_depth
-                    )
+                    ),
                 )
                 return None
 
@@ -238,9 +268,17 @@ class InMemoryQueue:
                     )
 
         for observation in redeliver:
-            self._observer.on_redeliver(observation)
+            notify_queue_observer(
+                self._observer,
+                callback_name="on_redeliver",
+                observation=observation,
+            )
         if ack_obs is not None:
-            self._observer.on_ack(ack_obs)
+            notify_queue_observer(
+                self._observer,
+                callback_name="on_ack",
+                observation=ack_obs,
+            )
 
     async def nack(
         self, lease: Lease, delay_s: float | None = None, reason: str | None = None
@@ -249,8 +287,8 @@ class InMemoryQueue:
             raise QueueClosed("queue is closed")
 
         delay = 0.0 if delay_s is None else float(delay_s)
-        if delay < 0:
-            raise ValueError("delay_s must be >= 0")
+        if not math.isfinite(delay) or delay < 0:
+            raise ValueError("delay_s must be finite and >= 0")
 
         redeliver: list[QueueRedeliverObservation]
         nack_obs: QueueNackObservation | None = None
@@ -289,9 +327,17 @@ class InMemoryQueue:
                     )
 
         for observation in redeliver:
-            self._observer.on_redeliver(observation)
+            notify_queue_observer(
+                self._observer,
+                callback_name="on_redeliver",
+                observation=observation,
+            )
         if nack_obs is not None:
-            self._observer.on_nack(nack_obs)
+            notify_queue_observer(
+                self._observer,
+                callback_name="on_nack",
+                observation=nack_obs,
+            )
 
     async def aclose(self) -> None:
         tasks: list[asyncio.Task[None]] = []

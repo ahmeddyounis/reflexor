@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
 from reflexor.orchestrator.queue.interface import Lease
 from reflexor.orchestrator.queue.task_envelope import TaskEnvelope
+
+logger = logging.getLogger(__name__)
 
 
 def build_queue_correlation_ids(envelope: TaskEnvelope) -> dict[str, str | None]:
@@ -71,6 +74,7 @@ class QueueObserver(Protocol):
     """Observer interface for queue operations (metrics/logging hooks).
 
     Observer callbacks must be fast and non-blocking; queue backends may call them on the hot path.
+    Backends should isolate callback failures so observability bugs cannot change queue semantics.
     """
 
     def on_enqueue(self, observation: QueueEnqueueObservation) -> None: ...
@@ -101,6 +105,19 @@ class NoopQueueObserver:
         _ = observation
 
 
+def notify_queue_observer(
+    observer: QueueObserver,
+    *,
+    callback_name: str,
+    observation: object,
+) -> None:
+    try:
+        callback = getattr(observer, callback_name)
+        callback(observation)
+    except Exception:
+        logger.exception("queue observer callback failed: %s", callback_name)
+
+
 __all__ = [
     "NoopQueueObserver",
     "QueueAckObservation",
@@ -110,4 +127,5 @@ __all__ = [
     "QueueObserver",
     "QueueRedeliverObservation",
     "build_queue_correlation_ids",
+    "notify_queue_observer",
 ]

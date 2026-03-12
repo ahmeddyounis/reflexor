@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
@@ -35,6 +36,23 @@ class RecordingQueueObserver:
 
     def on_redeliver(self, observation: QueueRedeliverObservation) -> None:
         self.redelivers.append(observation)
+
+
+class FailingQueueObserver:
+    def on_enqueue(self, observation: QueueEnqueueObservation) -> None:
+        raise RuntimeError("observer boom")
+
+    def on_dequeue(self, observation: QueueDequeueObservation) -> None:
+        raise RuntimeError("observer boom")
+
+    def on_ack(self, observation: QueueAckObservation) -> None:
+        raise RuntimeError("observer boom")
+
+    def on_nack(self, observation: QueueNackObservation) -> None:
+        raise RuntimeError("observer boom")
+
+    def on_redeliver(self, observation: QueueRedeliverObservation) -> None:
+        raise RuntimeError("observer boom")
 
 
 async def test_in_memory_queue_calls_observer_hooks() -> None:
@@ -133,3 +151,70 @@ async def test_in_memory_queue_calls_redeliver_hook_on_visibility_timeout() -> N
     assert redeliver_obs.visibility_timeout_s == 5.0
     assert redeliver_obs.correlation_ids["event_id"] == "evt-1"
     assert redeliver_obs.correlation_ids["envelope_id"] == envelope.envelope_id
+
+
+async def test_observer_exceptions_do_not_break_queue_operations() -> None:
+    now_ms = 0
+
+    def clock() -> int:
+        return now_ms
+
+    queue = InMemoryQueue(now_ms=clock, observer=FailingQueueObserver())
+    envelope = TaskEnvelope(
+        envelope_id=str(uuid4()),
+        task_id=str(uuid4()),
+        run_id=str(uuid4()),
+        attempt=0,
+        created_at_ms=0,
+        available_at_ms=0,
+    )
+
+    await queue.enqueue(envelope)
+
+    lease1 = await queue.dequeue(timeout_s=5)
+    assert lease1 is not None
+
+    await queue.nack(lease1, delay_s=0, reason="tests")
+
+    lease2 = await queue.dequeue(timeout_s=5)
+    assert lease2 is not None
+    assert lease2.envelope.envelope_id == envelope.envelope_id
+
+    await queue.ack(lease2)
+    assert await queue.dequeue(timeout_s=5) is None
+
+
+async def test_observer_exceptions_do_not_kill_background_redelivery() -> None:
+    now_ms = 0
+
+    def clock() -> int:
+        return now_ms
+
+    queue = InMemoryQueue(now_ms=clock, observer=FailingQueueObserver())
+    envelope = TaskEnvelope(
+        envelope_id=str(uuid4()),
+        task_id=str(uuid4()),
+        run_id=str(uuid4()),
+        attempt=0,
+        created_at_ms=0,
+        available_at_ms=0,
+    )
+    await queue.enqueue(envelope)
+
+    lease1 = await queue.dequeue(timeout_s=5)
+    assert lease1 is not None
+
+    dequeue_task = asyncio.create_task(queue.dequeue(timeout_s=5, wait_s=None))
+    await asyncio.sleep(0)
+
+    assert queue._lease_reaper_task is not None
+    assert not queue._lease_reaper_task.done()
+
+    now_ms = 5_001
+    lease2 = await asyncio.wait_for(dequeue_task, timeout=0.5)
+    assert lease2 is not None
+    assert lease2.envelope.envelope_id == envelope.envelope_id
+    assert lease2.envelope.attempt == 1
+
+    assert queue._lease_reaper_task is not None
+    assert not queue._lease_reaper_task.done()

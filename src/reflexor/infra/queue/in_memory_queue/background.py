@@ -6,20 +6,19 @@ from typing import TYPE_CHECKING
 
 from reflexor.infra.queue.in_memory_queue.leases import expire_leases
 from reflexor.infra.queue.in_memory_queue.state import promote_delayed
+from reflexor.orchestrator.queue.observer import notify_queue_observer
 
 if TYPE_CHECKING:
     from reflexor.infra.queue.in_memory_queue.core import InMemoryQueue
 
 
 def ensure_background_tasks_started(queue: InMemoryQueue) -> None:
-    if queue._delayed_promoter_task is not None and queue._lease_reaper_task is not None:
-        return
     if queue._closed:
         return
     loop = asyncio.get_running_loop()
-    if queue._delayed_promoter_task is None:
+    if queue._delayed_promoter_task is None or queue._delayed_promoter_task.done():
         queue._delayed_promoter_task = loop.create_task(delayed_promoter_loop(queue))
-    if queue._lease_reaper_task is None:
+    if queue._lease_reaper_task is None or queue._lease_reaper_task.done():
         queue._lease_reaper_task = loop.create_task(lease_reaper_loop(queue))
 
 
@@ -50,7 +49,11 @@ async def lease_reaper_loop(queue: InMemoryQueue) -> None:
                 next_deadline = queue._lease_deadlines[0][0] if queue._lease_deadlines else None
 
             for observation in redeliver:
-                queue._observer.on_redeliver(observation)
+                notify_queue_observer(
+                    queue._observer,
+                    callback_name="on_redeliver",
+                    observation=observation,
+                )
 
             await sleep_until_next(queue, now_ms=now, next_ms=next_deadline)
     except asyncio.CancelledError:
