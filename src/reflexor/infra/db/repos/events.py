@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from sqlalchemy import Select, delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,7 +73,7 @@ class SqlAlchemyEventRepo:
             raise ValueError("dedupe_key must be non-empty")
 
         window_anchor_ms = (
-            int(active_at_ms) if active_at_ms is not None else int(event.received_at_ms)
+            int(active_at_ms) if active_at_ms is not None else int(time.time() * 1000)
         )
         effective_window_ms = (
             DEFAULT_DEDUPE_WINDOW_MS if dedupe_window_ms is None else int(dedupe_window_ms)

@@ -337,6 +337,53 @@ async def test_task_repo_create_requires_existing_run() -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_repo_create_rejects_conflicting_existing_tool_call() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        tool_call_id = _uuid()
+        stored_tool_call = ToolCall(
+            tool_call_id=tool_call_id,
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            created_at_ms=100,
+        )
+        conflicting_tool_call = stored_tool_call.model_copy(
+            update={"status": ToolCallStatus.SUCCEEDED},
+            deep=True,
+        )
+        task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="conflict",
+            tool_call=conflicting_tool_call,
+            created_at_ms=1_000,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            tool_call_repo = SqlAlchemyToolCallRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_id,
+                    parent_run_id=None,
+                    created_at_ms=1,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await tool_call_repo.create(stored_tool_call)
+
+            with pytest.raises(ValueError, match="tool_call_id already exists"):
+                await task_repo.create(task)
+
+
+@pytest.mark.asyncio
 async def test_approval_repo_rejects_unsupported_status_update() -> None:
     async with _in_memory_session_factory() as session_factory:
         uow = SqlAlchemyUnitOfWork(session_factory)
@@ -345,6 +392,89 @@ async def test_approval_repo_rejects_unsupported_status_update() -> None:
             approval_repo = SqlAlchemyApprovalRepo(session)
             with pytest.raises(ValueError, match="unsupported approval status"):
                 await approval_repo.update_status(_uuid(), ApprovalStatus.EXPIRED)
+
+
+@pytest.mark.asyncio
+async def test_approval_repo_create_rejects_mismatched_task_run_and_tool_call() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        other_run_id = _uuid()
+        tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            created_at_ms=100,
+        )
+        other_tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "other"},
+            permission_scope="debug.echo",
+            idempotency_key="k2",
+            created_at_ms=200,
+        )
+        task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="needs-approval",
+            tool_call=tool_call,
+            created_at_ms=1_000,
+        )
+        wrong_run_approval = Approval(
+            approval_id=_uuid(),
+            run_id=other_run_id,
+            task_id=task.task_id,
+            tool_call_id=tool_call.tool_call_id,
+            created_at_ms=2_000,
+        )
+        wrong_tool_call_approval = Approval(
+            approval_id=_uuid(),
+            run_id=run_id,
+            task_id=task.task_id,
+            tool_call_id=other_tool_call.tool_call_id,
+            created_at_ms=2_001,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+            tool_call_repo = SqlAlchemyToolCallRepo(session)
+            approval_repo = SqlAlchemyApprovalRepo(session)
+
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_id,
+                    parent_run_id=None,
+                    created_at_ms=1,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await run_repo.create(
+                RunRecord(
+                    run_id=other_run_id,
+                    parent_run_id=None,
+                    created_at_ms=2,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await tool_call_repo.create(tool_call)
+            await tool_call_repo.create(other_tool_call)
+            await task_repo.create(task)
+
+            with pytest.raises(ValueError, match="task.run_id must match approval.run_id"):
+                await approval_repo.create(wrong_run_approval)
+
+            with pytest.raises(
+                ValueError,
+                match="task.tool_call_id must match approval.tool_call_id",
+            ):
+                await approval_repo.create(wrong_tool_call_approval)
 
 
 @pytest.mark.asyncio
@@ -555,6 +685,7 @@ async def test_event_repo_allows_same_dedupe_key_after_window_expires() -> None:
                 dedupe_key=dedupe_key,
                 event=event1,
                 dedupe_window_ms=5,
+                active_at_ms=10,
             )
             assert created1 is True
 
@@ -583,6 +714,7 @@ async def test_event_repo_allows_same_dedupe_key_after_window_expires() -> None:
                 dedupe_key=dedupe_key,
                 event=event2,
                 dedupe_window_ms=5,
+                active_at_ms=16,
             )
             assert created2 is True
             assert stored2.event_id != stored1.event_id
@@ -592,6 +724,213 @@ async def test_event_repo_allows_same_dedupe_key_after_window_expires() -> None:
                 stored1.event_id,
                 stored2.event_id,
             ]
+
+
+@pytest.mark.asyncio
+async def test_event_repo_dedupe_defaults_to_server_time_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _in_memory_session_factory() as session_factory:
+        dedupe_key = "ticket:T-1"
+        source = "tests"
+        event1 = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source=source,
+            received_at_ms=10,
+            payload={"ticket_id": "T-1", "seq": 1},
+            dedupe_key=dedupe_key,
+        )
+        event2 = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source=source,
+            received_at_ms=999_999_999,
+            payload={"ticket_id": "T-1", "seq": 2},
+            dedupe_key=dedupe_key,
+        )
+
+        monkeypatch.setattr("reflexor.infra.db.repos.events.time.time", lambda: 100.0)
+
+        uow1 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow1:
+            session = cast(AsyncSession, uow1.session)
+            event_repo = SqlAlchemyEventRepo(session)
+            stored1, created1 = await event_repo.create_or_get_by_dedupe(
+                source=source,
+                dedupe_key=dedupe_key,
+                event=event1,
+                dedupe_window_ms=1_000,
+            )
+            assert created1 is True
+
+        monkeypatch.setattr("reflexor.infra.db.repos.events.time.time", lambda: 100.1)
+
+        uow2 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow2:
+            session = cast(AsyncSession, uow2.session)
+            event_repo = SqlAlchemyEventRepo(session)
+            stored2, created2 = await event_repo.create_or_get_by_dedupe(
+                source=source,
+                dedupe_key=dedupe_key,
+                event=event2,
+                dedupe_window_ms=1_000,
+            )
+
+            assert created2 is False
+            assert stored2.event_id == stored1.event_id
+
+
+@pytest.mark.asyncio
+async def test_tool_call_repo_update_rejects_immutable_field_changes() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            created_at_ms=100,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            tool_call_repo = SqlAlchemyToolCallRepo(session)
+            await tool_call_repo.create(tool_call)
+
+            with pytest.raises(
+                ValueError,
+                match="tool_call update changed immutable fields: idempotency_key",
+            ):
+                await tool_call_repo.update(
+                    tool_call.model_copy(update={"idempotency_key": "k2"}, deep=True)
+                )
+
+
+@pytest.mark.asyncio
+async def test_task_repo_update_persists_mutable_fields_and_tool_call_state() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            created_at_ms=100,
+        )
+        task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="pending",
+            tool_call=tool_call,
+            created_at_ms=1_000,
+        )
+        updated_task = task.model_copy(
+            update={
+                "name": "queued",
+                "status": TaskStatus.QUEUED,
+                "attempts": 1,
+                "max_attempts": 3,
+                "timeout_s": 120,
+                "depends_on": ["dep-1"],
+                "started_at_ms": 1_050,
+                "labels": ["urgent"],
+                "metadata": {"source": "tests"},
+                "tool_call": tool_call.model_copy(
+                    update={
+                        "status": ToolCallStatus.RUNNING,
+                        "started_at_ms": 1_050,
+                        "result_ref": "result://call",
+                    },
+                    deep=True,
+                ),
+            },
+            deep=True,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_id,
+                    parent_run_id=None,
+                    created_at_ms=1,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await task_repo.create(task)
+
+            stored = await task_repo.update(updated_task)
+            assert stored.name == "queued"
+            assert stored.max_attempts == 3
+            assert stored.timeout_s == 120
+            assert stored.depends_on == ["dep-1"]
+            assert stored.labels == ["urgent"]
+            assert stored.metadata == {"source": "tests"}
+            assert stored.tool_call is not None
+            assert stored.tool_call.status == ToolCallStatus.RUNNING
+            assert stored.tool_call.result_ref == "result://call"
+
+
+@pytest.mark.asyncio
+async def test_task_repo_update_rejects_tool_call_reference_changes() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            created_at_ms=100,
+        )
+        other_tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "other"},
+            permission_scope="debug.echo",
+            idempotency_key="k2",
+            created_at_ms=200,
+        )
+        task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="pending",
+            tool_call=tool_call,
+            created_at_ms=1_000,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            tool_call_repo = SqlAlchemyToolCallRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_id,
+                    parent_run_id=None,
+                    created_at_ms=1,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await tool_call_repo.create(tool_call)
+            await tool_call_repo.create(other_tool_call)
+            await task_repo.create(task)
+
+            with pytest.raises(ValueError, match="task.tool_call_id cannot be changed"):
+                await task_repo.update(
+                    task.model_copy(update={"tool_call": other_tool_call}, deep=True)
+                )
 
 
 @pytest.mark.asyncio

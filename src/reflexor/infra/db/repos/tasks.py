@@ -6,15 +6,30 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.domain.enums import TaskStatus, ToolCallStatus
-from reflexor.domain.models import Task
+from reflexor.domain.models import Task, ToolCall
 from reflexor.infra.db.mappers import (
     task_from_row_dict,
     task_to_row_dict,
+    tool_call_from_orm,
     tool_call_to_row_dict,
 )
 from reflexor.infra.db.models import RunRow, TaskRow, ToolCallRow
 from reflexor.infra.db.repos._common import _normalize_optional_str, _validate_limit_offset
 from reflexor.storage.ports import TaskSummary
+
+
+def _immutable_tool_call_fields_changed(*, current: ToolCall, incoming: ToolCall) -> list[str]:
+    changed: list[str] = []
+    for field_name in (
+        "tool_name",
+        "args",
+        "permission_scope",
+        "idempotency_key",
+        "created_at_ms",
+    ):
+        if getattr(current, field_name) != getattr(incoming, field_name):
+            changed.append(field_name)
+    return changed
 
 
 def _tool_call_row_to_dict(row: ToolCallRow) -> dict[str, object]:
@@ -90,16 +105,55 @@ class SqlAlchemyTaskRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def _create_tool_call_if_missing(self, tool_call: ToolCall) -> None:
+        row = await self._session.get(ToolCallRow, tool_call.tool_call_id)
+        if row is None:
+            self._session.add(ToolCallRow(**tool_call_to_row_dict(tool_call)))
+            await self._session.flush()
+            return
+
+        existing = tool_call_from_orm(row)
+        if existing != tool_call:
+            raise ValueError("tool_call_id already exists with different fields")
+
+    async def _sync_task_tool_call(
+        self,
+        *,
+        tool_call: ToolCall | None,
+        expected_tool_call_id: str | None,
+    ) -> ToolCallRow | None:
+        if tool_call is None:
+            if expected_tool_call_id is not None:
+                raise ValueError("task.tool_call cannot be cleared once set")
+            return None
+
+        if tool_call.tool_call_id != expected_tool_call_id:
+            raise ValueError("task.tool_call_id cannot be changed")
+
+        row = await self._session.get(ToolCallRow, tool_call.tool_call_id)
+        if row is None:
+            raise KeyError(f"unknown tool_call_id: {tool_call.tool_call_id!r}")
+
+        current = tool_call_from_orm(row)
+        changed = _immutable_tool_call_fields_changed(current=current, incoming=tool_call)
+        if changed:
+            raise ValueError(
+                "task.tool_call update changed immutable fields: " + ", ".join(changed)
+            )
+
+        row.status = tool_call.status.value
+        row.started_at_ms = tool_call.started_at_ms
+        row.completed_at_ms = tool_call.completed_at_ms
+        row.result_ref = tool_call.result_ref
+        return row
+
     async def create(self, task: Task) -> Task:
         run = await self._session.get(RunRow, task.run_id)
         if run is None:
             raise KeyError(f"unknown run_id: {task.run_id!r}")
 
         if task.tool_call is not None:
-            existing = await self._session.get(ToolCallRow, task.tool_call.tool_call_id)
-            if existing is None:
-                self._session.add(ToolCallRow(**tool_call_to_row_dict(task.tool_call)))
-                await self._session.flush()
+            await self._create_tool_call_if_missing(task.tool_call)
 
         row = TaskRow(**task_to_row_dict(task))
         self._session.add(row)
@@ -150,15 +204,28 @@ class SqlAlchemyTaskRepo:
         if task_row is None:
             raise KeyError(f"unknown task_id: {normalized!r}")
 
+        if task.run_id != task_row.run_id:
+            raise ValueError("task.run_id cannot be changed")
+        if task.created_at_ms != int(task_row.created_at_ms):
+            raise ValueError("task.created_at_ms cannot be changed")
+
+        tool_call_row = await self._sync_task_tool_call(
+            tool_call=task.tool_call,
+            expected_tool_call_id=task_row.tool_call_id,
+        )
+
+        task_row.name = task.name
         task_row.status = task.status.value
         task_row.attempts = task.attempts
+        task_row.max_attempts = task.max_attempts
+        task_row.timeout_s = task.timeout_s
+        task_row.depends_on = list(task.depends_on)
         task_row.started_at_ms = task.started_at_ms
         task_row.completed_at_ms = task.completed_at_ms
+        task_row.labels = list(task.labels)
+        task_row.metadata_json = dict(task.metadata)
         await self._session.flush()
 
-        tool_call_row = None
-        if task_row.tool_call_id is not None:
-            tool_call_row = await self._session.get(ToolCallRow, task_row.tool_call_id)
         return _task_from_rows(task_row, tool_call_row)
 
     async def list_by_run(self, run_id: str) -> list[Task]:

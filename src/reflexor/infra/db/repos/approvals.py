@@ -21,14 +21,22 @@ class SqlAlchemyApprovalRepo:
         self._session = session
 
     async def create(self, approval: Approval) -> Approval:
-        for table, pk, name in (
-            (RunRow, approval.run_id, "run_id"),
-            (TaskRow, approval.task_id, "task_id"),
-            (ToolCallRow, approval.tool_call_id, "tool_call_id"),
-        ):
-            existing = await self._session.get(table, pk)
-            if existing is None:
-                raise KeyError(f"unknown {name}: {pk!r}")
+        run_row = await self._session.get(RunRow, approval.run_id)
+        if run_row is None:
+            raise KeyError(f"unknown run_id: {approval.run_id!r}")
+
+        task_row = await self._session.get(TaskRow, approval.task_id)
+        if task_row is None:
+            raise KeyError(f"unknown task_id: {approval.task_id!r}")
+
+        tool_call_row = await self._session.get(ToolCallRow, approval.tool_call_id)
+        if tool_call_row is None:
+            raise KeyError(f"unknown tool_call_id: {approval.tool_call_id!r}")
+
+        if task_row.run_id != approval.run_id:
+            raise ValueError("task.run_id must match approval.run_id")
+        if task_row.tool_call_id != approval.tool_call_id:
+            raise ValueError("task.tool_call_id must match approval.tool_call_id")
 
         row = ApprovalRow(**approval_to_row_dict(approval))
         self._session.add(row)

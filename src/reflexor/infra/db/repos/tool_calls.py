@@ -10,6 +10,20 @@ from reflexor.infra.db.models import ToolCallRow
 from reflexor.infra.db.repos._common import _validate_limit_offset
 
 
+def _immutable_tool_call_fields_changed(*, current: ToolCall, incoming: ToolCall) -> list[str]:
+    changed: list[str] = []
+    for field_name in (
+        "tool_name",
+        "args",
+        "permission_scope",
+        "idempotency_key",
+        "created_at_ms",
+    ):
+        if getattr(current, field_name) != getattr(incoming, field_name):
+            changed.append(field_name)
+    return changed
+
+
 class SqlAlchemyToolCallRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -68,6 +82,13 @@ class SqlAlchemyToolCallRepo:
         row = await self._session.get(ToolCallRow, normalized)
         if row is None:
             raise KeyError(f"unknown tool_call_id: {normalized!r}")
+
+        current = tool_call_from_orm(row)
+        changed = _immutable_tool_call_fields_changed(current=current, incoming=tool_call)
+        if changed:
+            raise ValueError(
+                "tool_call update changed immutable fields: " + ", ".join(changed)
+            )
 
         row.status = tool_call.status.value
         row.started_at_ms = tool_call.started_at_ms
