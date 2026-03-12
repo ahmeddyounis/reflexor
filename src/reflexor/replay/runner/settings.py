@@ -66,6 +66,10 @@ def _derive_allowlists(packet: RunPacket) -> tuple[list[str], list[str]]:
         if tool_call is None:
             continue
 
+        permission_scope = tool_call.permission_scope
+        if permission_scope not in {Scope.NET_HTTP.value, Scope.WEBHOOK_EMIT.value}:
+            continue
+
         args = tool_call.args
         url_value = None
         for key in ("url", "target_url", "webhook_url", "endpoint_url"):
@@ -77,13 +81,6 @@ def _derive_allowlists(packet: RunPacket) -> tuple[list[str], list[str]]:
         if url_value is None:
             continue
 
-        host = urlsplit(url_value).hostname
-        if host:
-            try:
-                http_domains.append(normalize_hostname(host))
-            except ValueError:
-                pass
-
         try:
             normalized = validate_and_normalize_url(
                 url_value,
@@ -91,9 +88,18 @@ def _derive_allowlists(packet: RunPacket) -> tuple[list[str], list[str]]:
                 allowed_domains=None,
             )
         except ValueError:
-            normalized = None
+            continue
 
-        if normalized is not None and tool_call.permission_scope == Scope.WEBHOOK_EMIT.value:
+        if permission_scope == Scope.NET_HTTP.value:
+            host = urlsplit(normalized).hostname
+            if host:
+                try:
+                    http_domains.append(normalize_hostname(host))
+                except ValueError:
+                    pass
+            continue
+
+        if permission_scope == Scope.WEBHOOK_EMIT.value:
             webhook_targets.append(normalized)
 
     return http_domains, webhook_targets
