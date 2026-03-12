@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -24,6 +26,7 @@ from reflexor.orchestrator.queue import Lease, Queue, QueueClosed
 from reflexor.worker.signals import install_shutdown_handlers
 
 _DEFAULT_DEQUEUE_WAIT_S: Final[float] = 0.5
+_WORKER_EXCEPTION_NACK_DELAY_S: Final[float] = 1.0
 
 
 @dataclass(slots=True)
@@ -46,13 +49,16 @@ class WorkerRunner:
     async def run(self) -> None:
         """Run the worker loop until `stop_event` is set or the queue is closed."""
 
-        if self.visibility_timeout_s <= 0:
-            raise ValueError("visibility_timeout_s must be > 0")
-        if self.dequeue_wait_s is not None and self.dequeue_wait_s < 0:
-            raise ValueError("dequeue_wait_s must be >= 0 when provided")
+        if not math.isfinite(self.visibility_timeout_s) or self.visibility_timeout_s <= 0:
+            raise ValueError("visibility_timeout_s must be finite and > 0")
+        if self.dequeue_wait_s is not None and (
+            not math.isfinite(self.dequeue_wait_s) or self.dequeue_wait_s < 0
+        ):
+            raise ValueError("dequeue_wait_s must be finite and >= 0 when provided")
 
+        cleanup_signal_handlers: Callable[[], None] | None = None
         if self.install_signal_handlers:
-            install_shutdown_handlers(self.stop_event)
+            cleanup_signal_handlers = install_shutdown_handlers(self.stop_event)
 
         stop_task = asyncio.create_task(self.stop_event.wait())
         try:
@@ -73,6 +79,8 @@ class WorkerRunner:
                 await stop_task
             except asyncio.CancelledError:
                 pass
+            if cleanup_signal_handlers is not None:
+                cleanup_signal_handlers()
 
             if self.close_queue_on_exit:
                 await self.queue.aclose()
@@ -98,6 +106,9 @@ class WorkerRunner:
             except QueueClosed:
                 self.stop_event.set()
                 return None
+            except Exception:
+                self.logger.exception("worker dequeue failed")
+                raise
 
         dequeue_task.cancel()
         try:
@@ -128,7 +139,11 @@ class WorkerRunner:
                     },
                 )
                 try:
-                    await self.queue.nack(lease, delay_s=0.0, reason="worker_exception")
+                    await self.queue.nack(
+                        lease,
+                        delay_s=min(_WORKER_EXCEPTION_NACK_DELAY_S, self.visibility_timeout_s),
+                        reason="worker_exception",
+                    )
                 except QueueClosed:
                     self.stop_event.set()
 

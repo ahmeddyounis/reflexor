@@ -14,6 +14,7 @@ RELOAD_OPT = typer.Option(True, help="Enable auto-reload (dev only).")
 CONCURRENCY_OPT = typer.Option(
     None,
     "--concurrency",
+    min=1,
     help=(
         "Maximum in-flight task executions. Overrides REFLEXOR_EXECUTOR_MAX_CONCURRENCY. "
         "This also controls how many worker loops are started."

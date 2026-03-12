@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -62,9 +63,10 @@ class Lease(BaseModel):
     @field_validator("visibility_timeout_s")
     @classmethod
     def _validate_visibility_timeout_s(cls, value: float) -> float:
-        if value <= 0:
-            raise ValueError("visibility_timeout_s must be > 0")
-        return float(value)
+        timeout_s = float(value)
+        if not math.isfinite(timeout_s) or timeout_s <= 0:
+            raise ValueError("visibility_timeout_s must be finite and > 0")
+        return timeout_s
 
     @field_validator("attempt")
     @classmethod

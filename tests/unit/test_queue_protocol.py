@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
 from uuid import uuid4
+
+import pytest
 
 from reflexor.config import ReflexorSettings
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
@@ -84,3 +87,23 @@ async def test_nack_delays_redelivery_and_increments_attempt() -> None:
     lease2 = await queue.dequeue(timeout_s=5)
     assert lease2 is not None
     assert lease2.envelope.attempt == 1
+
+
+def test_lease_rejects_non_finite_visibility_timeout() -> None:
+    envelope = TaskEnvelope(
+        envelope_id=str(uuid4()),
+        task_id=str(uuid4()),
+        run_id=str(uuid4()),
+        attempt=0,
+        created_at_ms=0,
+        available_at_ms=0,
+    )
+
+    with pytest.raises(ValueError, match="visibility_timeout_s must be finite and > 0"):
+        Lease(
+            lease_id=str(uuid4()),
+            envelope=envelope,
+            leased_at_ms=0,
+            visibility_timeout_s=math.inf,
+            attempt=0,
+        )
