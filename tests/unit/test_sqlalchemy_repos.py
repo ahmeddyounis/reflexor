@@ -34,6 +34,7 @@ from reflexor.infra.db.repos.runs.summaries import _list_run_summaries_stmt
 from reflexor.infra.db.repos.tasks import _task_summary_stmt
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.memory.models import MemoryItem
+from reflexor.memory.summary import MEMORY_SUMMARY_VERSION
 from reflexor.storage.ports import EventSuppressionRecord, RunRecord
 
 
@@ -674,6 +675,7 @@ async def test_memory_repo_search_and_delete_older_than() -> None:
                     event_source=event_old.source,
                     summary="ticket.updated ticket_updated",
                     content={"kind": "literal_underscore"},
+                    created_at_ms=100,
                     updated_at_ms=100,
                 )
             )
@@ -685,6 +687,7 @@ async def test_memory_repo_search_and_delete_older_than() -> None:
                     event_source=event_new.source,
                     summary="ticketXupdated",
                     content={"kind": "wildcard_candidate"},
+                    created_at_ms=200,
                     updated_at_ms=200,
                 )
             )
@@ -695,11 +698,111 @@ async def test_memory_repo_search_and_delete_older_than() -> None:
             literal_match = await memory_repo.search(query="ticket_updated", limit=10, offset=0)
             assert [item.run_id for item in literal_match] == [run_old_id]
 
+            content_match = await memory_repo.search(query="literal_underscore", limit=10, offset=0)
+            assert [item.run_id for item in content_match] == [run_old_id]
+
             deleted = await memory_repo.delete_older_than(updated_before_ms=150, limit=10)
             assert deleted == 1
 
             remaining = await memory_repo.list_recent(limit=10, offset=0)
             assert [item.run_id for item in remaining] == [run_new_id]
+
+
+@pytest.mark.asyncio
+async def test_run_packet_repo_lists_only_packets_needing_memory_refresh() -> None:
+    settings = ReflexorSettings(max_run_packet_bytes=50_000)
+
+    async with _in_memory_session_factory() as session_factory:
+        current_run_id = _uuid()
+        missing_run_id = _uuid()
+        legacy_run_id = _uuid()
+        current_event = Event(
+            event_id=_uuid(),
+            type="ticket.created",
+            source="tests",
+            received_at_ms=10,
+            payload={"ticket_id": "T-current"},
+        )
+        missing_event = Event(
+            event_id=_uuid(),
+            type="ticket.updated",
+            source="tests",
+            received_at_ms=20,
+            payload={"ticket_id": "T-missing"},
+        )
+        legacy_event = Event(
+            event_id=_uuid(),
+            type="ticket.closed",
+            source="tests",
+            received_at_ms=30,
+            payload={"ticket_id": "T-legacy"},
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            event_repo = SqlAlchemyEventRepo(session)
+            memory_repo = SqlAlchemyMemoryRepo(session)
+            current_packet_repo = SqlAlchemyRunPacketRepo(
+                session,
+                settings=settings,
+                memory_repo=memory_repo,
+            )
+            raw_packet_repo = SqlAlchemyRunPacketRepo(session, settings=settings)
+
+            for run_id, created_at_ms in (
+                (current_run_id, 100),
+                (missing_run_id, 200),
+                (legacy_run_id, 300),
+            ):
+                await run_repo.create(
+                    RunRecord(
+                        run_id=run_id,
+                        parent_run_id=None,
+                        created_at_ms=created_at_ms,
+                        started_at_ms=None,
+                        completed_at_ms=None,
+                    )
+                )
+
+            await event_repo.create(current_event)
+            await event_repo.create(missing_event)
+            await event_repo.create(legacy_event)
+
+            await current_packet_repo.create(
+                RunPacket(run_id=current_run_id, event=current_event, created_at_ms=100)
+            )
+            await raw_packet_repo.create(
+                RunPacket(run_id=missing_run_id, event=missing_event, created_at_ms=200)
+            )
+            await raw_packet_repo.create(
+                RunPacket(run_id=legacy_run_id, event=legacy_event, created_at_ms=300)
+            )
+            await memory_repo.upsert(
+                MemoryItem(
+                    run_id=legacy_run_id,
+                    event_id=legacy_event.event_id,
+                    event_type=legacy_event.type,
+                    event_source=legacy_event.source,
+                    summary="legacy summary",
+                    content={"event": {"event_id": legacy_event.event_id}},
+                    created_at_ms=300,
+                    updated_at_ms=300,
+                )
+            )
+
+        uow2 = SqlAlchemyUnitOfWork(session_factory)
+        async with uow2:
+            session = cast(AsyncSession, uow2.session)
+            run_packet_repo = SqlAlchemyRunPacketRepo(session, settings=settings)
+
+            needing_refresh = await run_packet_repo.list_for_memory_refresh_before(
+                created_before_ms=400,
+                memory_version=MEMORY_SUMMARY_VERSION,
+                limit=10,
+            )
+            assert [packet.run_id for packet in needing_refresh] == [missing_run_id, legacy_run_id]
 
 
 @pytest.mark.asyncio

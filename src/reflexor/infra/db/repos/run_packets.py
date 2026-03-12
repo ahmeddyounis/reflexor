@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.config import ReflexorSettings
 from reflexor.domain.models_run_packet import RunPacket
-from reflexor.infra.db.models import RunPacketRow, RunRow
+from reflexor.infra.db.models import MemoryItemRow, RunPacketRow, RunRow
 from reflexor.infra.db.repos._common import _validate_limit_offset
-from reflexor.memory import memory_item_from_run_packet
+from reflexor.memory import MEMORY_SUMMARY_VERSION, memory_item_from_run_packet
 from reflexor.observability.audit_sanitize import sanitize_for_audit
 from reflexor.storage.ports import MemoryRepo
 
@@ -97,6 +97,40 @@ class SqlAlchemyRunPacketRepo:
         stmt: Select[tuple[RunPacketRow]] = (
             select(RunPacketRow)
             .where(RunPacketRow.created_at_ms < int(created_before_ms))
+            .order_by(RunPacketRow.created_at_ms, RunPacketRow.run_id)
+            .limit(limit_int)
+            .offset(offset_int)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [self._row_to_packet(row) for row in rows]
+
+    async def list_for_memory_refresh_before(
+        self,
+        *,
+        created_before_ms: int,
+        memory_version: str = MEMORY_SUMMARY_VERSION,
+        limit: int,
+        offset: int = 0,
+    ) -> list[RunPacket]:
+        limit_int, offset_int = _validate_limit_offset(limit=limit, offset=offset)
+        if limit_int == 0:
+            return []
+
+        normalized_version = memory_version.strip()
+        if not normalized_version:
+            raise ValueError("memory_version must be non-empty")
+
+        stmt: Select[tuple[RunPacketRow]] = (
+            select(RunPacketRow)
+            .outerjoin(MemoryItemRow, RunPacketRow.run_id == MemoryItemRow.run_id)
+            .where(
+                RunPacketRow.created_at_ms < int(created_before_ms),
+                or_(
+                    MemoryItemRow.run_id.is_(None),
+                    MemoryItemRow.content["memory_version"].as_string().is_(None),
+                    MemoryItemRow.content["memory_version"].as_string() != normalized_version,
+                ),
+            )
             .order_by(RunPacketRow.created_at_ms, RunPacketRow.run_id)
             .limit(limit_int)
             .offset(offset_int)

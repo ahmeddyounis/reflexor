@@ -3,6 +3,8 @@ from __future__ import annotations
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.memory.models import MemoryItem
 
+MEMORY_SUMMARY_VERSION = "1"
+
 
 def memory_item_from_run_packet(packet: RunPacket) -> MemoryItem:
     event = packet.event
@@ -59,6 +61,7 @@ def memory_item_from_run_packet(packet: RunPacket) -> MemoryItem:
         f"and {counts['policy_decisions_total']} policy decision(s)"
     )
     content: dict[str, object] = {
+        "memory_version": MEMORY_SUMMARY_VERSION,
         "event": {
             "event_id": event.event_id,
             "type": event.type,
@@ -96,4 +99,4 @@ def memory_item_from_run_packet(packet: RunPacket) -> MemoryItem:
     )
 
 
-__all__ = ["memory_item_from_run_packet"]
+__all__ = ["MEMORY_SUMMARY_VERSION", "memory_item_from_run_packet"]

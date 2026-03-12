@@ -6,6 +6,7 @@ from dataclasses import asdict
 import typer
 
 from reflexor.cli import output
+from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 
 JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
@@ -41,10 +42,14 @@ def register(app: typer.Typer) -> None:
                 await app_container.aclose()
             return {"ok": True, **asdict(outcome)}
 
-        payload = asyncio.run(_runner())
-
         pretty_enabled = bool(container.output_pretty or pretty)
         json_enabled = bool(container.output_json or json_output or pretty_enabled)
+        try:
+            payload = asyncio.run(_runner())
+        except Exception as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            raise AssertionError("unreachable") from None
+
         if json_enabled:
             output.print_json(payload, pretty=pretty_enabled)
             return

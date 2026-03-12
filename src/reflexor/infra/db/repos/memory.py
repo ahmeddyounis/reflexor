@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, String, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.infra.db.mappers import memory_item_from_orm, memory_item_to_row_dict
@@ -114,7 +114,15 @@ class SqlAlchemyMemoryRepo:
         like_pattern = f"%{escaped_query}%"
 
         stmt: Select[tuple[MemoryItemRow]] = select(MemoryItemRow).where(
-            func.lower(MemoryItemRow.summary).like(like_pattern, escape=_LIKE_ESCAPE)
+            or_(
+                func.lower(MemoryItemRow.summary).like(like_pattern, escape=_LIKE_ESCAPE),
+                func.lower(cast(MemoryItemRow.content, String)).like(
+                    like_pattern, escape=_LIKE_ESCAPE
+                ),
+                func.lower(cast(MemoryItemRow.tags, String)).like(
+                    like_pattern, escape=_LIKE_ESCAPE
+                ),
+            )
         )
         if normalized_event_type is not None:
             stmt = stmt.where(MemoryItemRow.event_type == normalized_event_type)

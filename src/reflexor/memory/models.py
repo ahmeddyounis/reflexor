@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MemoryItem(BaseModel):
@@ -54,8 +55,8 @@ class MemoryItem(BaseModel):
     @classmethod
     def _validate_content_json(cls, value: dict[str, object]) -> dict[str, object]:
         try:
-            json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        except TypeError as exc:
+            json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
             raise ValueError("content must be JSON-serializable") from exc
         return value
 
@@ -73,6 +74,40 @@ class MemoryItem(BaseModel):
             seen.add(trimmed)
             normalized.append(trimmed)
         return normalized
+
+    @field_validator("created_at_ms", "updated_at_ms", mode="before")
+    @classmethod
+    def _validate_timestamp_ms(cls, value: object, info: object) -> int:
+        field_name = getattr(info, "field_name", None) or "value"
+        if isinstance(value, bool):
+            raise TypeError(f"{field_name} must be an integer timestamp")
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError(f"{field_name} must be finite")
+            if not value.is_integer():
+                raise ValueError(f"{field_name} must be an integer timestamp")
+            parsed = int(value)
+        elif isinstance(value, str):
+            trimmed = value.strip()
+            if not trimmed:
+                raise ValueError(f"{field_name} must be non-empty")
+            try:
+                parsed = int(trimmed)
+            except ValueError as exc:
+                raise ValueError(f"{field_name} must be an integer timestamp") from exc
+        else:
+            raise TypeError(f"{field_name} must be an integer timestamp")
+        if parsed < 0:
+            raise ValueError(f"{field_name} must be >= 0")
+        return parsed
+
+    @model_validator(mode="after")
+    def _validate_timestamp_order(self) -> MemoryItem:
+        if self.updated_at_ms < self.created_at_ms:
+            raise ValueError("updated_at_ms must be >= created_at_ms")
+        return self
 
     def to_planning_dict(self) -> dict[str, object]:
         return {

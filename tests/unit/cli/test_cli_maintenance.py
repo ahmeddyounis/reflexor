@@ -13,8 +13,11 @@ from reflexor.config import ReflexorSettings
 class _FakeMaintenance:
     def __init__(self) -> None:
         self.seen_now_ms: int | None = None
+        self.error: Exception | None = None
 
     async def run_once(self, *, now_ms: int | None = None) -> MaintenanceOutcome:
+        if self.error is not None:
+            raise self.error
         self.seen_now_ms = now_ms
         return MaintenanceOutcome(
             compacted_run_packets=1,
@@ -79,3 +82,32 @@ def test_maintenance_run_rejects_remote_api_mode(tmp_path) -> None:
 
     assert result.exit_code == 1
     assert "local mode" in result.output
+
+
+def test_maintenance_run_reports_json_validation_errors(monkeypatch, tmp_path) -> None:
+    fake_app = _FakeAppContainer()
+    fake_app.maintenance.error = ValueError("now_ms must be >= 0")
+
+    from reflexor.bootstrap import container as bootstrap_container
+
+    monkeypatch.setattr(
+        bootstrap_container.AppContainer,
+        "build",
+        lambda *, settings: fake_app,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["maintenance", "run", "--json"],
+        obj=CliContainer.build(settings=ReflexorSettings(workspace_root=tmp_path)),
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload == {
+        "error_code": "invalid_input",
+        "message": "now_ms must be >= 0",
+        "ok": False,
+    }
+    assert fake_app.closed is True

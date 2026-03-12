@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from reflexor.config import ReflexorSettings
 from reflexor.memory import memory_item_from_run_packet
+from reflexor.memory.summary import MEMORY_SUMMARY_VERSION
 from reflexor.orchestrator.clock import Clock
 from reflexor.storage.ports import EventRepo, MemoryRepo, RunPacketRepo, TaskRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
@@ -61,8 +62,9 @@ class MaintenanceService:
         async with uow:
             run_packet_repo = self.run_packet_repo(uow.session)
             memory_repo = self.memory_repo(uow.session)
-            packets = await run_packet_repo.list_before(
+            packets = await run_packet_repo.list_for_memory_refresh_before(
                 created_before_ms=compact_before_ms,
+                memory_version=MEMORY_SUMMARY_VERSION,
                 limit=limit,
                 offset=0,
             )

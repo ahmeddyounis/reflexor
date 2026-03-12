@@ -296,6 +296,15 @@ class RunPacketRepo(Protocol):
         offset: int = 0,
     ) -> list[RunPacket]: ...
 
+    async def list_for_memory_refresh_before(
+        self,
+        *,
+        created_before_ms: int,
+        memory_version: str,
+        limit: int,
+        offset: int = 0,
+    ) -> list[RunPacket]: ...
+
     async def get_run_id_for_event(self, event_id: str) -> str | None: ...
 
 
