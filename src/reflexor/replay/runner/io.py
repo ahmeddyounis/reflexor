@@ -10,6 +10,14 @@ from reflexor.replay.exporter import EXPORT_SCHEMA_VERSION
 from reflexor.replay.runner.types import ReplayError
 
 
+def _read_bytes_limited(path: Path, *, max_bytes: int) -> bytes:
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ReplayError(f"replay file is too large (>{max_bytes} bytes)")
+    return data
+
+
 def _read_json_file(path: Path, *, max_bytes: int) -> object:
     if max_bytes <= 0:
         raise ValueError("max_bytes must be > 0")
@@ -19,13 +27,7 @@ def _read_json_file(path: Path, *, max_bytes: int) -> object:
     if not path.is_file():
         raise ReplayError(f"not a file: {path}")
 
-    size = path.stat().st_size
-    if size > max_bytes:
-        raise ReplayError(f"replay file is too large ({size} bytes); max is {max_bytes}")
-
-    data = path.read_bytes()
-    if len(data) > max_bytes:
-        raise ReplayError(f"replay file is too large ({len(data)} bytes); max is {max_bytes}")
+    data = _read_bytes_limited(path, max_bytes=max_bytes)
 
     try:
         return json.loads(data)
