@@ -54,6 +54,10 @@ _URL_ARGS_INVALID_MESSAGES: frozenset[str] = frozenset(
 )
 
 
+def _exception_type_debug(exc: BaseException, **extra: object) -> dict[str, object]:
+    return {"exception_type": type(exc).__name__, **extra}
+
+
 def _utf8_len(value: str) -> int:
     return len(value.encode("utf-8"))
 
@@ -306,7 +310,7 @@ class WebhookEmitTool:
                 ok=False,
                 error_code="INVALID_PAYLOAD",
                 error_message="payload must be JSON-serializable",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
 
         max_payload_bytes = int(settings.max_event_payload_bytes)
@@ -347,11 +351,11 @@ class WebhookEmitTool:
                     ok=False,
                     error_code="SECRET_RESOLVE_FAILED",
                     error_message="failed to resolve secret",
-                    debug={
-                        "exception": repr(exc),
-                        "provider": secret_ref.provider,
-                        "key": secret_ref.key,
-                    },
+                    debug=_exception_type_debug(
+                        exc,
+                        provider=secret_ref.provider,
+                        key=secret_ref.key,
+                    ),
                 )
 
             signature_header = args.signature.header_name
@@ -406,14 +410,14 @@ class WebhookEmitTool:
                 ok=False,
                 error_code="TIMEOUT",
                 error_message="webhook request timed out",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
         except httpx.RequestError as exc:
             return ToolResult(
                 ok=False,
                 error_code="TOOL_ERROR",
                 error_message=f"webhook request failed: {type(exc).__name__}",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
 
         return ToolResult(

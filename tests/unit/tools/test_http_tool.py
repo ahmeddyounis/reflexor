@@ -223,3 +223,25 @@ async def test_fragmented_url_is_rejected_without_network_call(tmp_path) -> None
         assert result.ok is False
         assert result.error_code == "INVALID_ARGS"
         assert route.called is False
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_does_not_leak_raw_message(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
+        route = router.get("https://example.com/").mock(
+            side_effect=httpx.ReadTimeout("Bearer sk-http-secret-should-not-leak")
+        )
+
+        tool = HttpTool(
+            settings=ReflexorSettings(workspace_root=tmp_path, http_allowed_domains=["example.com"])
+        )
+        args = HttpRequestArgs(method="GET", url="https://example.com/")
+        ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+        result = await tool.run(args, ctx)
+
+        assert result.ok is False
+        assert result.error_code == "TIMEOUT"
+        assert result.debug == {"exception_type": "ReadTimeout"}
+        assert route.called is True
+        assert "sk-http-secret" not in str(result.model_dump(mode="json"))

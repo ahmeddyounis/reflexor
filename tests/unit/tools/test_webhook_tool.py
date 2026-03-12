@@ -32,6 +32,12 @@ class EmptySecretsProvider:
         return ""
 
 
+class FailingSecretsProvider:
+    def resolve(self, ref: SecretRef) -> str:
+        _ = ref
+        raise RuntimeError("Bearer sk-webhook-secret-should-not-leak")
+
+
 @pytest.mark.asyncio
 async def test_allowlisted_target_success(tmp_path) -> None:  # type: ignore[no-untyped-def]
     with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
@@ -326,6 +332,48 @@ async def test_empty_resolved_secret_is_rejected(tmp_path) -> None:  # type: ign
         assert result.ok is False
         assert result.error_code == "SECRET_RESOLVE_FAILED"
         assert route.called is False
+
+
+@pytest.mark.asyncio
+async def test_secret_resolution_failure_does_not_leak_raw_message(
+    tmp_path: Path,
+) -> None:
+    with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
+        route = router.post("https://hooks.example.com/hook").mock(
+            return_value=httpx.Response(204, text="")
+        )
+
+        tool = WebhookEmitTool(
+            settings=ReflexorSettings(
+                workspace_root=tmp_path,
+                webhook_allowed_targets=["https://hooks.example.com/hook"],
+            )
+        )
+        ctx = ToolContext(
+            workspace_root=tmp_path,
+            dry_run=False,
+            timeout_s=1.0,
+            secrets_provider=FailingSecretsProvider(),
+        )
+        args = WebhookEmitArgs(
+            url="https://hooks.example.com/hook",
+            payload={"ok": True},
+            signature=WebhookSignatureArgs(
+                secret_ref=SecretRef(provider="env", key="WEBHOOK_SECRET")
+            ),
+        )
+
+        result = await tool.run(args, ctx)
+
+        assert result.ok is False
+        assert result.error_code == "SECRET_RESOLVE_FAILED"
+        assert result.debug == {
+            "exception_type": "RuntimeError",
+            "provider": "env",
+            "key": "WEBHOOK_SECRET",
+        }
+        assert route.called is False
+        assert "sk-webhook-secret" not in str(result.model_dump(mode="json"))
 
 
 @pytest.mark.asyncio

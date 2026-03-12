@@ -48,6 +48,10 @@ _URL_ARGS_INVALID_MESSAGES: frozenset[str] = frozenset(
 )
 
 
+def _exception_type_debug(exc: BaseException, **extra: object) -> dict[str, object]:
+    return {"exception_type": type(exc).__name__, **extra}
+
+
 def _utf8_len(value: str) -> int:
     return len(value.encode("utf-8"))
 
@@ -318,7 +322,7 @@ class HttpTool:
                     ok=False,
                     error_code="INVALID_ARGS",
                     error_message="json body must be JSON-serializable",
-                    debug={"exception": repr(exc)},
+                    debug=_exception_type_debug(exc),
                 )
             payload_bytes = payload_json.encode("utf-8")
             if len(payload_bytes) > max_request_bytes:
@@ -396,14 +400,14 @@ class HttpTool:
                 ok=False,
                 error_code="TIMEOUT",
                 error_message="http request timed out",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
         except httpx.RequestError as exc:
             return ToolResult(
                 ok=False,
                 error_code="TOOL_ERROR",
                 error_message=f"http request failed: {type(exc).__name__}",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
 
         return ToolResult(

@@ -120,6 +120,8 @@ def test_write_text_is_atomic_on_replace_failure(
     result = asyncio.run(tool.run(FsWriteTextArgs(path=Path("file.txt"), text="new"), ctx))
     assert result.ok is False
     assert result.error_code == "TOOL_ERROR"
+    assert result.debug == {"exception_type": "OSError"}
+    assert "replace failed" not in str(result.model_dump(mode="json"))
 
     assert target.read_text(encoding="utf-8") == "old"
     assert not any(

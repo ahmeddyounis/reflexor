@@ -22,6 +22,10 @@ from reflexor.tools.sdk.tool import ToolContext
 _MAX_LIST_ENTRIES_CAP = 1_000
 
 
+def _exception_type_debug(exc: BaseException, **extra: object) -> dict[str, object]:
+    return {"exception_type": type(exc).__name__, **extra}
+
+
 def _normalize_non_empty_str(value: str, *, field_name: str) -> str:
     trimmed = value.strip()
     if not trimmed:
@@ -190,7 +194,7 @@ class FsReadTextTool:
                 ok=False,
                 error_code="TOOL_ERROR",
                 error_message="failed to read file",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
 
         truncated = len(raw) > max_output_bytes
@@ -206,14 +210,14 @@ class FsReadTextTool:
                 ok=False,
                 error_code="ENCODING_ERROR",
                 error_message="unknown text encoding",
-                debug={"exception": repr(exc), "encoding": args.encoding},
+                debug=_exception_type_debug(exc, encoding=args.encoding),
             )
         except UnicodeDecodeError as exc:
             return ToolResult(
                 ok=False,
                 error_code="DECODE_ERROR",
                 error_message="failed to decode file",
-                debug={"exception": repr(exc), "encoding": args.encoding},
+                debug=_exception_type_debug(exc, encoding=args.encoding),
             )
 
         if truncated:
@@ -274,14 +278,14 @@ class FsWriteTextTool:
                 ok=False,
                 error_code="ENCODING_ERROR",
                 error_message="unknown text encoding",
-                debug={"exception": repr(exc), "encoding": args.encoding},
+                debug=_exception_type_debug(exc, encoding=args.encoding),
             )
         except UnicodeEncodeError as exc:
             return ToolResult(
                 ok=False,
                 error_code="ENCODE_ERROR",
                 error_message="failed to encode text",
-                debug={"exception": repr(exc), "encoding": args.encoding},
+                debug=_exception_type_debug(exc, encoding=args.encoding),
             )
 
         max_bytes = int(settings.max_event_payload_bytes)
@@ -328,7 +332,7 @@ class FsWriteTextTool:
                 ok=False,
                 error_code="TOOL_ERROR",
                 error_message="failed to write file",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
 
         return ToolResult(ok=True, data={"dry_run": False, **summary})
@@ -389,7 +393,7 @@ class FsListDirTool:
                 ok=False,
                 error_code="TOOL_ERROR",
                 error_message="failed to list directory",
-                debug={"exception": repr(exc)},
+                debug=_exception_type_debug(exc),
             )
 
         items: list[dict[str, object]] = []
