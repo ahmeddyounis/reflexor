@@ -313,6 +313,76 @@ async def test_approval_repo_rejects_unsupported_status_update() -> None:
 
 
 @pytest.mark.asyncio
+async def test_approval_repo_status_updates_are_terminal_and_idempotent() -> None:
+    async with _in_memory_session_factory() as session_factory:
+        run_id = _uuid()
+        tool_call = ToolCall(
+            tool_call_id=_uuid(),
+            tool_name="mock.echo",
+            args={"message": "hello"},
+            permission_scope="debug.echo",
+            idempotency_key="k1",
+            status=ToolCallStatus.PENDING,
+            created_at_ms=100,
+        )
+        task = Task(
+            task_id=_uuid(),
+            run_id=run_id,
+            name="needs-approval",
+            status=TaskStatus.WAITING_APPROVAL,
+            tool_call=tool_call,
+            created_at_ms=1_000,
+        )
+        approval = Approval(
+            approval_id=_uuid(),
+            run_id=run_id,
+            task_id=task.task_id,
+            tool_call_id=tool_call.tool_call_id,
+            status=ApprovalStatus.PENDING,
+            created_at_ms=2_000,
+            preview="approve this",
+            payload_hash="hash-1",
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            run_repo = SqlAlchemyRunRepo(session)
+            task_repo = SqlAlchemyTaskRepo(session)
+            approval_repo = SqlAlchemyApprovalRepo(session)
+
+            await run_repo.create(
+                RunRecord(
+                    run_id=run_id,
+                    parent_run_id=None,
+                    created_at_ms=1,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await task_repo.create(task)
+            await approval_repo.create(approval)
+
+            approved = await approval_repo.update_status(
+                approval.approval_id,
+                ApprovalStatus.APPROVED,
+                decided_at_ms=3_000,
+                decided_by="tester",
+            )
+            approved_again = await approval_repo.update_status(
+                approval.approval_id,
+                ApprovalStatus.APPROVED,
+                decided_at_ms=4_000,
+                decided_by="other",
+            )
+
+            assert approved_again == approved
+
+            with pytest.raises(ValueError, match="already been decided as approved"):
+                await approval_repo.update_status(approval.approval_id, ApprovalStatus.DENIED)
+
+
+@pytest.mark.asyncio
 async def test_event_repo_create_or_get_by_dedupe_is_idempotent() -> None:
     async with _in_memory_session_factory() as session_factory:
         dedupe_key = "ticket:T-1"

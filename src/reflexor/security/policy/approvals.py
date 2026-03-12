@@ -122,6 +122,11 @@ class InMemoryApprovalStore:
             if approval is None:
                 raise KeyError(f"unknown approval_id: {approval_id}")
 
+            if approval.status == decision:
+                return approval.model_copy(deep=True)
+            if approval.status != ApprovalStatus.PENDING:
+                raise ValueError(f"approval has already been decided as {approval.status.value}")
+
             updated = (
                 approval.approve(decided_by=decided_by)
                 if decision == ApprovalStatus.APPROVED

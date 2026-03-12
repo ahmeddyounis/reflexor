@@ -174,3 +174,74 @@ def test_approvals_list_filters_pending_only_and_scope() -> None:
     payload = json.loads(result.output)
     assert payload["total"] == 1
     assert [item["approval_id"] for item in payload["items"]] == ["a2"]
+
+
+def test_approvals_list_scope_filter_paginates_matches_without_losing_total() -> None:
+    class _PagedApprovalsClient(_FakeApprovalsClient):
+        async def list_approvals(
+            self,
+            *,
+            limit: int,
+            offset: int,
+            status: ApprovalStatus | None = None,
+            run_id: str | None = None,
+        ) -> dict[str, object]:
+            self.list_calls.append(
+                {"limit": limit, "offset": offset, "status": status, "run_id": run_id}
+            )
+            items = [
+                {
+                    "approval_id": f"a{i}",
+                    "run_id": run_id or "r1",
+                    "task_id": f"t{i}",
+                    "tool_call_id": f"tc{i}",
+                    "status": "pending",
+                    "created_at_ms": i,
+                    "decided_at_ms": None,
+                    "decided_by": None,
+                    "payload_hash": "h",
+                    "preview": (
+                        "permission_scope: fs.write"
+                        if i % 2 == 0
+                        else "permission_scope: fs.read"
+                    ),
+                }
+                for i in range(205)
+            ]
+            if status is not None:
+                items = [item for item in items if item.get("status") == str(status)]
+            return {
+                "limit": limit,
+                "offset": offset,
+                "total": len(items),
+                "items": items[offset : offset + limit],
+            }
+
+    client = _PagedApprovalsClient()
+    container = CliContainer.build(
+        settings=ReflexorSettings(profile="dev"),
+        client=client,  # type: ignore[arg-type]
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "approvals",
+            "list",
+            "--scope",
+            "fs.write",
+            "--limit",
+            "2",
+            "--offset",
+            "100",
+            "--json",
+        ],
+        obj=container,
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["total"] == 103
+    assert [item["approval_id"] for item in payload["items"]] == ["a200", "a202"]
+    assert len(client.list_calls) == 2

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.domain.enums import ApprovalStatus
@@ -77,18 +77,37 @@ class SqlAlchemyApprovalRepo:
         if not normalized:
             raise ValueError("approval_id must be non-empty")
 
+        if status == ApprovalStatus.PENDING:
+            decided_at_value: int | None = None
+            decided_by_value: str | None = None
+        else:
+            now_ms = int(time.time() * 1000)
+            decided_at_value = now_ms if decided_at_ms is None else int(decided_at_ms)
+            decided_by_value = _normalize_optional_str(decided_by)
+
+        result = await self._session.execute(
+            update(ApprovalRow)
+            .where(
+                ApprovalRow.approval_id == normalized,
+                ApprovalRow.status == ApprovalStatus.PENDING.value,
+            )
+            .values(
+                status=status.value,
+                decided_at_ms=decided_at_value,
+                decided_by=decided_by_value,
+            )
+        )
+        updated_rows = int(getattr(result, "rowcount", 0) or 0)
+
         row = await self._session.get(ApprovalRow, normalized)
         if row is None:
             raise KeyError(f"unknown approval_id: {normalized!r}")
 
-        row.status = status.value
-        if status == ApprovalStatus.PENDING:
-            row.decided_at_ms = None
-            row.decided_by = None
-        else:
-            now_ms = int(time.time() * 1000)
-            row.decided_at_ms = now_ms if decided_at_ms is None else int(decided_at_ms)
-            row.decided_by = _normalize_optional_str(decided_by)
+        if updated_rows == 0:
+            current = approval_from_orm(row)
+            if current.status == status:
+                return current
+            raise ValueError(f"approval has already been decided as {current.status.value}")
 
         await self._session.flush()
         return approval_from_orm(row)

@@ -15,6 +15,7 @@ from reflexor.api.schemas import (
     Page,
 )
 from reflexor.domain.enums import ApprovalStatus
+from reflexor.domain.models import Approval
 
 router = APIRouter(
     prefix="/v1/approvals", tags=["approvals"], dependencies=[Depends(require_admin)]
@@ -25,6 +26,21 @@ compat_router = APIRouter(
 
 _STATUS_FILTER_QUERY = Query(None, alias="status")
 _RUN_ID_QUERY = Query(None)
+
+
+def _to_summary(approval: Approval) -> ApprovalSummary:
+    return ApprovalSummary(
+        approval_id=approval.approval_id,
+        run_id=approval.run_id,
+        task_id=approval.task_id,
+        tool_call_id=approval.tool_call_id,
+        status=approval.status,
+        created_at_ms=approval.created_at_ms,
+        decided_at_ms=approval.decided_at_ms,
+        decided_by=approval.decided_by,
+        payload_hash=approval.payload_hash,
+        preview=approval.preview,
+    )
 
 
 async def list_approvals(
@@ -40,24 +56,12 @@ async def list_approvals(
         status=status_filter,
         run_id=run_id,
     )
-
-    summaries = [
-        ApprovalSummary(
-            approval_id=item.approval_id,
-            run_id=item.run_id,
-            task_id=item.task_id,
-            tool_call_id=item.tool_call_id,
-            status=item.status,
-            created_at_ms=item.created_at_ms,
-            decided_at_ms=item.decided_at_ms,
-            decided_by=item.decided_by,
-            payload_hash=item.payload_hash,
-            preview=item.preview,
-        )
-        for item in items
-    ]
-
-    return Page[ApprovalSummary](limit=limit, offset=offset, total=total, items=summaries)
+    return Page[ApprovalSummary](
+        limit=limit,
+        offset=offset,
+        total=total,
+        items=[_to_summary(item) for item in items],
+    )
 
 
 async def list_pending_approvals(
@@ -72,24 +76,12 @@ async def list_pending_approvals(
         status=ApprovalStatus.PENDING,
         run_id=run_id,
     )
-
-    summaries = [
-        ApprovalSummary(
-            approval_id=item.approval_id,
-            run_id=item.run_id,
-            task_id=item.task_id,
-            tool_call_id=item.tool_call_id,
-            status=item.status,
-            created_at_ms=item.created_at_ms,
-            decided_at_ms=item.decided_at_ms,
-            decided_by=item.decided_by,
-            payload_hash=item.payload_hash,
-            preview=item.preview,
-        )
-        for item in items
-    ]
-
-    return Page[ApprovalSummary](limit=limit, offset=offset, total=total, items=summaries)
+    return Page[ApprovalSummary](
+        limit=limit,
+        offset=offset,
+        total=total,
+        items=[_to_summary(item) for item in items],
+    )
 
 
 async def approve(
@@ -99,20 +91,7 @@ async def approve(
 ) -> ApprovalDecisionResponse:
     decided_by = None if request is None else request.decided_by
     approval = await approvals.approve(approval_id, decided_by=decided_by)
-    return ApprovalDecisionResponse(
-        approval=ApprovalSummary(
-            approval_id=approval.approval_id,
-            run_id=approval.run_id,
-            task_id=approval.task_id,
-            tool_call_id=approval.tool_call_id,
-            status=approval.status,
-            created_at_ms=approval.created_at_ms,
-            decided_at_ms=approval.decided_at_ms,
-            decided_by=approval.decided_by,
-            payload_hash=approval.payload_hash,
-            preview=approval.preview,
-        )
-    )
+    return ApprovalDecisionResponse(approval=_to_summary(approval))
 
 
 async def deny(
@@ -122,20 +101,7 @@ async def deny(
 ) -> ApprovalDecisionResponse:
     decided_by = None if request is None else request.decided_by
     approval = await approvals.deny(approval_id, decided_by=decided_by)
-    return ApprovalDecisionResponse(
-        approval=ApprovalSummary(
-            approval_id=approval.approval_id,
-            run_id=approval.run_id,
-            task_id=approval.task_id,
-            tool_call_id=approval.tool_call_id,
-            status=approval.status,
-            created_at_ms=approval.created_at_ms,
-            decided_at_ms=approval.decided_at_ms,
-            decided_by=approval.decided_by,
-            payload_hash=approval.payload_hash,
-            preview=approval.preview,
-        )
-    )
+    return ApprovalDecisionResponse(approval=_to_summary(approval))
 
 
 async def decide(

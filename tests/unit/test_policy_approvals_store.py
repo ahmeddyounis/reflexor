@@ -83,6 +83,24 @@ async def test_decide_approves_and_removes_from_pending() -> None:
 
 
 @pytest.mark.asyncio
+async def test_decide_is_idempotent_for_same_terminal_decision_and_rejects_conflicts() -> None:
+    store = InMemoryApprovalStore()
+    created = await store.create_pending(_approval(tool_call_id=str(uuid4())))
+
+    approved = await store.decide(created.approval_id, ApprovalStatus.APPROVED, decided_by="alice")
+    approved_again = await store.decide(
+        created.approval_id,
+        ApprovalStatus.APPROVED,
+        decided_by="bob",
+    )
+
+    assert approved_again == approved
+
+    with pytest.raises(ValueError, match="already been decided as approved"):
+        await store.decide(created.approval_id, ApprovalStatus.DENIED, decided_by="carol")
+
+
+@pytest.mark.asyncio
 async def test_concurrent_create_pending_is_idempotent() -> None:
     store = InMemoryApprovalStore()
     tool_call_id = str(uuid4())

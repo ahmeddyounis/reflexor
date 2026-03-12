@@ -70,8 +70,10 @@ async def _list_approvals_with_scope(
     # Apply scope filtering client-side (API does not expose scope as a query filter).
     chunk_limit = MAX_PAGE_LIMIT
     chunk_offset = 0
-    matched: list[dict[str, object]] = []
+    matched_total = 0
+    window: list[dict[str, object]] = []
     total_unfiltered: int | None = None
+    window_stop = offset + limit
 
     while True:
         page = await client.list_approvals(
@@ -94,7 +96,9 @@ async def _list_approvals_with_scope(
 
         for item in items:
             if _approval_matches_scope(item, scope=normalized_scope):
-                matched.append(item)
+                if offset <= matched_total < window_stop:
+                    window.append(item)
+                matched_total += 1
 
         chunk_offset += chunk_limit
         if total_unfiltered is not None and chunk_offset >= total_unfiltered:
@@ -102,8 +106,7 @@ async def _list_approvals_with_scope(
         if len(items) < chunk_limit:
             break
 
-    window = matched[offset : offset + limit]
-    return {"limit": limit, "offset": offset, "total": len(matched), "items": window}
+    return {"limit": limit, "offset": offset, "total": matched_total, "items": window}
 
 
 def _require_prod_approval_confirmation(

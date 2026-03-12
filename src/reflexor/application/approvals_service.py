@@ -14,7 +14,7 @@ Clean Architecture:
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 from reflexor.domain.execution_state import complete_canceled, complete_denied
@@ -28,6 +28,15 @@ from reflexor.storage.ports import ApprovalRepo, TaskRepo, ToolCallRepo
 from reflexor.storage.uow import DatabaseSession, UnitOfWork
 
 
+class ApprovalEnqueueError(RuntimeError):
+    def __init__(self, *, approval_id: str, task_id: str) -> None:
+        super().__init__(
+            f"failed to enqueue approved task {task_id!r} for approval {approval_id!r}"
+        )
+        self.approval_id = approval_id
+        self.task_id = task_id
+
+
 @dataclass(frozen=True, slots=True)
 class ApprovalCommandService:
     """Operator-facing approval workflows (approve/deny + requeue)."""
@@ -37,7 +46,7 @@ class ApprovalCommandService:
     task_repo: Callable[[DatabaseSession], TaskRepo]
     tool_call_repo: Callable[[DatabaseSession], ToolCallRepo]
     queue: Queue
-    clock: Clock = SystemClock()
+    clock: Clock = field(default_factory=SystemClock)
 
     async def list_approvals(
         self,
@@ -72,6 +81,8 @@ class ApprovalCommandService:
                     ApprovalStatus.APPROVED,
                     decided_by=decided_by,
                 )
+            elif approval.status != ApprovalStatus.APPROVED:
+                raise ValueError("denied approval cannot be approved")
 
             task = await tasks.get(approval.task_id)
             if task is None:
@@ -119,8 +130,19 @@ class ApprovalCommandService:
                         },
                     )
 
+        assert approval is not None
         if envelope is not None:
-            await self.queue.enqueue(envelope)
+            try:
+                await self.queue.enqueue(envelope)
+            except Exception as exc:
+                await self._restore_waiting_approval_task(
+                    approval_id=approval.approval_id,
+                    task_id=envelope.task_id,
+                )
+                raise ApprovalEnqueueError(
+                    approval_id=approval.approval_id,
+                    task_id=envelope.task_id,
+                ) from exc
 
         return approval
 
@@ -141,6 +163,8 @@ class ApprovalCommandService:
                     ApprovalStatus.DENIED,
                     decided_by=decided_by,
                 )
+            elif approval.status != ApprovalStatus.DENIED:
+                raise ValueError("approved approval cannot be denied")
 
             task = await tasks.get(approval.task_id)
             if task is None:
@@ -162,5 +186,29 @@ class ApprovalCommandService:
 
         return approval
 
+    async def _restore_waiting_approval_task(self, *, approval_id: str, task_id: str) -> None:
+        uow = self.uow_factory()
+        async with uow:
+            approvals = self.approval_repo(uow.session)
+            tasks = self.task_repo(uow.session)
 
-__all__ = ["ApprovalCommandService"]
+            approval = await approvals.get(approval_id)
+            if approval is None or approval.status != ApprovalStatus.APPROVED:
+                return
+
+            task = await tasks.get(task_id)
+            if task is None or task.status != TaskStatus.QUEUED:
+                return
+
+            tool_call = task.tool_call
+            if tool_call is None or tool_call.status != ToolCallStatus.PENDING:
+                return
+
+            waiting_task = transition_task(
+                task.model_copy(update={"tool_call": tool_call}),
+                TaskStatus.WAITING_APPROVAL,
+            )
+            await tasks.update(waiting_task)
+
+
+__all__ = ["ApprovalCommandService", "ApprovalEnqueueError"]

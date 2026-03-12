@@ -59,6 +59,17 @@ class _RecordingQueue(Queue):
         return
 
 
+@dataclass(slots=True)
+class _FailFirstEnqueueQueue(_RecordingQueue):
+    enqueue_attempts: int = 0
+
+    async def enqueue(self, envelope: TaskEnvelope) -> None:
+        self.enqueue_attempts += 1
+        if self.enqueue_attempts == 1:
+            raise RuntimeError("queue unavailable")
+        await super().enqueue(envelope)
+
+
 async def _seed(container: AppContainer) -> dict[str, str]:
     run_id_1 = _uuid()
     run_id_2 = _uuid()
@@ -202,6 +213,7 @@ async def _seed(container: AppContainer) -> dict[str, str]:
         "approval_id_existing_approved": approval_id_existing_approved,
         "approval_id_deny": approval_id_deny,
         "task_id_approve": task_approve.task_id,
+        "task_id_existing_approved": task_existing_approved.task_id,
         "task_id_deny": task_deny.task_id,
         "tool_call_id_deny": tool_call_3.tool_call_id,
     }
@@ -216,6 +228,10 @@ async def _assert_db_state(container: AppContainer, seeded: dict[str, str]) -> N
         approved_task = await task_repo.get(seeded["task_id_approve"])
         assert approved_task is not None
         assert approved_task.status == TaskStatus.QUEUED
+
+        existing_approved_task = await task_repo.get(seeded["task_id_existing_approved"])
+        assert existing_approved_task is not None
+        assert existing_approved_task.status == TaskStatus.QUEUED
 
         denied_task = await task_repo.get(seeded["task_id_deny"])
         assert denied_task is not None
@@ -241,7 +257,7 @@ def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(tmp_path: Pa
     seeded = asyncio.run(_seed(container))
 
     app = create_app(container=container)
-    with TestClient(app) as client:
+    with TestClient(app, raise_server_exceptions=False) as client:
         assert client.get("/approvals").status_code == 401
 
         headers = {"X-API-Key": "secret"}
@@ -287,6 +303,15 @@ def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(tmp_path: Pa
         assert approved_again.json()["approval"]["status"] == ApprovalStatus.APPROVED.value
         assert len(queue.enqueued) == 1, "approve should be idempotent (no duplicate enqueue)"
 
+        deny_approved = client.post(
+            f"/approvals/{seeded['approval_id_existing_approved']}/deny",
+            headers=headers,
+            json={"decided_by": "operator"},
+        )
+        assert deny_approved.status_code == 400
+        assert deny_approved.json()["message"] == "approved approval cannot be denied"
+        assert len(queue.enqueued) == 1
+
         denied = client.post(
             f"/approvals/{seeded['approval_id_deny']}/deny",
             headers=headers,
@@ -305,4 +330,67 @@ def test_approvals_list_approve_and_deny_are_idempotent_and_requeue(tmp_path: Pa
         assert denied_again.json()["approval"]["status"] == ApprovalStatus.DENIED.value
         assert len(queue.enqueued) == 1, "deny should be idempotent"
 
+        approve_denied = client.post(
+            f"/approvals/{seeded['approval_id_deny']}/approve",
+            headers=headers,
+            json={"decided_by": "operator"},
+        )
+        assert approve_denied.status_code == 400
+        assert approve_denied.json()["message"] == "denied approval cannot be approved"
+        assert len(queue.enqueued) == 1
+
     asyncio.run(_assert_db_state(container, seeded))
+
+
+def test_approve_recovers_waiting_task_when_requeue_fails(tmp_path: Path) -> None:
+    db_path = tmp_path / "reflexor_api_approvals_requeue_recovery.db"
+    _create_schema(db_path)
+
+    queue = _FailFirstEnqueueQueue()
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=[],
+        database_url=f"sqlite+aiosqlite:///{db_path}",
+        admin_api_key="secret",
+    )
+    container = AppContainer.build(settings=settings, queue=queue)
+    seeded = asyncio.run(_seed(container))
+
+    app = create_app(container=container)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        headers = {"X-API-Key": "secret"}
+
+        failed = client.post(
+            f"/approvals/{seeded['approval_id_approve']}/approve",
+            headers=headers,
+            json={"decided_by": "operator"},
+        )
+        assert failed.status_code == 500
+        assert failed.json()["error_code"] == "internal_error"
+        assert queue.enqueued == []
+
+        async def _assert_recovered_waiting_state() -> None:
+            uow = container.uow_factory()
+            async with uow:
+                approval_repo = container.repos.approval_repo(uow.session)
+                task_repo = container.repos.task_repo(uow.session)
+
+                approval = await approval_repo.get(seeded["approval_id_approve"])
+                assert approval is not None
+                assert approval.status == ApprovalStatus.APPROVED
+
+                task = await task_repo.get(seeded["task_id_approve"])
+                assert task is not None
+                assert task.status == TaskStatus.WAITING_APPROVAL
+
+        asyncio.run(_assert_recovered_waiting_state())
+
+        retried = client.post(
+            f"/approvals/{seeded['approval_id_approve']}/approve",
+            headers=headers,
+            json={"decided_by": "operator"},
+        )
+        assert retried.status_code == 200
+        assert retried.json()["approval"]["status"] == ApprovalStatus.APPROVED.value
+        assert len(queue.enqueued) == 1
+        assert queue.enqueued[0].task_id == seeded["task_id_approve"]
