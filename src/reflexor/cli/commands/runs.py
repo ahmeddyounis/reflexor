@@ -11,6 +11,7 @@ from reflexor.cli.client import CliClient, ReplayModeStr
 from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 from reflexor.domain.enums import RunStatus
+from reflexor.replay.runner.types import ReplayError
 
 MAX_PAGE_LIMIT = 200
 SHOW_TASKS_LIMIT = 200
@@ -264,11 +265,14 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
         try:
             result = container.run(lambda client: client.export_run_packet(run_id, out_path))
+        except (FileNotFoundError, KeyError, ValueError, httpx.HTTPStatusError) as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            return
         except NotImplementedError:
-            pretty_enabled = bool(container.output_pretty or pretty)
-            json_enabled = bool(container.output_json or json_output or pretty_enabled)
             if json_enabled:
                 output.print_json(
                     {
@@ -280,9 +284,6 @@ def register(app: typer.Typer) -> None:
                 )
                 raise typer.Exit(2) from None
             output.abort("run export is not supported by this client", exit_code=2)
-
-        pretty_enabled = bool(container.output_pretty or pretty)
-        json_enabled = bool(container.output_json or json_output or pretty_enabled)
         if json_enabled:
             output.print_json(result, pretty=pretty_enabled)
             return
@@ -302,11 +303,14 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
         try:
             result = container.run(lambda client: client.import_run_packet(file_path))
+        except (FileNotFoundError, KeyError, ValueError, httpx.HTTPStatusError) as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            return
         except NotImplementedError:
-            pretty_enabled = bool(container.output_pretty or pretty)
-            json_enabled = bool(container.output_json or json_output or pretty_enabled)
             if json_enabled:
                 output.print_json(
                     {
@@ -318,9 +322,6 @@ def register(app: typer.Typer) -> None:
                 )
                 raise typer.Exit(2) from None
             output.abort("run import is not supported by this client", exit_code=2)
-
-        pretty_enabled = bool(container.output_pretty or pretty)
-        json_enabled = bool(container.output_json or json_output or pretty_enabled)
         if json_enabled:
             output.print_json(result, pretty=pretty_enabled)
             return
@@ -370,6 +371,15 @@ def register(app: typer.Typer) -> None:
             result = container.run(
                 lambda client: client.replay_run_packet(file_path, mode=replay_mode)
             )
+        except (
+            FileNotFoundError,
+            KeyError,
+            ReplayError,
+            ValueError,
+            httpx.HTTPStatusError,
+        ) as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            return
         except NotImplementedError:
             if json_enabled:
                 output.print_json(

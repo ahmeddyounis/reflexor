@@ -154,6 +154,8 @@ def test_cli_runs_export_import_replay_flow(tmp_path: Path) -> None:
         assert imported_show_payload["run"]["summary"]["run_id"] == imported_run_id
         assert imported_show_payload["run"]["run_packet"]["run_id"] == imported_run_id
         assert imported_show_payload["run"]["run_packet"]["parent_run_id"] == run_id
+        assert imported_show_payload["tasks"]["total"] == 1
+        assert imported_show_payload["tasks"]["items"][0]["run_id"] == imported_run_id
 
         replayed = runner.invoke(
             app,

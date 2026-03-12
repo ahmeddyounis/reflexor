@@ -6,6 +6,7 @@ import httpx
 import typer
 
 from reflexor.cli import output
+from reflexor.replay.runner.types import ReplayError
 
 
 def _http_error_payload(exc: httpx.HTTPStatusError) -> tuple[str, str, int]:
@@ -51,7 +52,15 @@ def print_query_error(
         error_code = "not_found"
         message = str(exc.args[0]) if exc.args else str(exc)
         exit_code = 1
+    elif isinstance(exc, FileNotFoundError):
+        error_code = "not_found"
+        message = str(exc.args[0]) if exc.args else str(exc)
+        exit_code = 1
     elif isinstance(exc, ValueError):
+        error_code = "invalid_input"
+        message = str(exc)
+        exit_code = 2
+    elif isinstance(exc, ReplayError):
         error_code = "invalid_input"
         message = str(exc)
         exit_code = 2

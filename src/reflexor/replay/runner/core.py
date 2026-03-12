@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -9,11 +10,16 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reflexor.config import ReflexorSettings, get_settings
+from reflexor.domain.enums import TaskStatus
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.executor.concurrency import ConcurrencyLimiter
 from reflexor.executor.retries import RetryPolicy
 from reflexor.executor.service import ExecutorRepoFactory, ExecutorService
-from reflexor.infra.db.engine import create_async_engine, create_async_session_factory
+from reflexor.infra.db.engine import (
+    AsyncSessionFactory,
+    create_async_engine,
+    create_async_session_factory,
+)
 from reflexor.infra.db.repos import (
     SqlAlchemyApprovalRepo,
     SqlAlchemyIdempotencyLedger,
@@ -31,7 +37,7 @@ from reflexor.replay.runner.io import _extract_packet, _read_json_file
 from reflexor.replay.runner.mock_tools import ReplayInvocation, _AlwaysOkTool, _RecordedResultTool
 from reflexor.replay.runner.packet import _build_replay_tasks, _extract_recorded_tool_results
 from reflexor.replay.runner.settings import _derive_replay_settings
-from reflexor.replay.runner.types import ReplayMode, ReplayOutcome
+from reflexor.replay.runner.types import ReplayError, ReplayMode, ReplayOutcome
 from reflexor.security.policy.approvals import InMemoryApprovalStore
 from reflexor.security.policy.defaults import build_default_policy_rules
 from reflexor.security.policy.enforcement import PolicyEnforcedToolRunner
@@ -43,6 +49,64 @@ from reflexor.tools.registry import ToolRegistry
 from reflexor.tools.runner import ToolRunner
 from reflexor.tools.sdk import ToolResult
 
+_REPLAY_POLL_INTERVAL_S = 0.05
+
+
+@dataclass(slots=True)
+class _SyntheticReplayClock:
+    wall_now_ms: int
+    monotonic_now_ms: int
+
+    @classmethod
+    def from_clock(cls, clock: Clock) -> _SyntheticReplayClock:
+        return cls(
+            wall_now_ms=int(clock.now_ms()),
+            monotonic_now_ms=int(clock.monotonic_ms()),
+        )
+
+    def now_ms(self) -> int:
+        return self.wall_now_ms
+
+    def monotonic_ms(self) -> int:
+        return self.monotonic_now_ms
+
+    async def sleep(self, seconds: float) -> None:
+        duration_s = float(seconds)
+        if not math.isfinite(duration_s) or duration_s < 0:
+            raise ValueError("seconds must be finite and >= 0")
+
+        advance_ms = int(math.ceil(duration_s * 1000))
+        self.wall_now_ms += advance_ms
+        self.monotonic_now_ms += advance_ms
+        await asyncio.sleep(0)
+
+
+async def _incomplete_task_ids(
+    *,
+    session_factory: AsyncSessionFactory,
+    run_id: str,
+    limit: int,
+) -> list[str]:
+    incomplete_statuses = {
+        TaskStatus.PENDING,
+        TaskStatus.QUEUED,
+        TaskStatus.WAITING_APPROVAL,
+        TaskStatus.RUNNING,
+    }
+    uow = SqlAlchemyUnitOfWork(session_factory)
+    async with uow:
+        repo = SqlAlchemyTaskRepo(cast(AsyncSession, uow.session))
+        tasks = await repo.list_summaries(limit=max(1, int(limit)), offset=0, run_id=run_id)
+
+    incomplete: list[str] = []
+    for task in tasks:
+        if task.status in incomplete_statuses:
+            incomplete.append(task.task_id)
+            continue
+        if task.status == TaskStatus.FAILED and int(task.attempts) < int(task.max_attempts):
+            incomplete.append(task.task_id)
+    return incomplete
+
 
 @dataclass(slots=True)
 class ReplayRunner:
@@ -51,7 +115,8 @@ class ReplayRunner:
 
     async def replay_from_file(self, path: str | Path, mode: ReplayMode) -> ReplayOutcome:
         base_settings = get_settings() if self.settings is None else self.settings
-        replay_clock = SystemClock() if self.clock is None else self.clock
+        seed_clock = SystemClock() if self.clock is None else self.clock
+        replay_clock = _SyntheticReplayClock.from_clock(seed_clock)
 
         file_path = Path(path)
         payload = await asyncio.to_thread(
@@ -225,13 +290,48 @@ class ReplayRunner:
                     )
                     await queue.enqueue(envelope)
 
-                max_steps = max(1, len(tasks) * 10)
-                steps = 0
-                while steps < max_steps:
-                    steps += 1
+                max_processed_leases = max(1, len(tasks) * max(1, retry_policy.max_attempts) * 5)
+                max_idle_polls = max(
+                    20,
+                    int(
+                        (
+                            max(
+                                _REPLAY_POLL_INTERVAL_S,
+                                float(retry_policy.max_delay_s)
+                                * max(1, int(retry_policy.max_attempts)),
+                            )
+                        )
+                        / _REPLAY_POLL_INTERVAL_S
+                    )
+                    + len(tasks) * 10,
+                )
+                processed_leases = 0
+                idle_polls = 0
+                while True:
                     lease = await queue.dequeue(wait_s=0.0)
                     if lease is None:
-                        break
+                        incomplete = await _incomplete_task_ids(
+                            session_factory=session_factory,
+                            run_id=replay_run_id,
+                            limit=len(tasks),
+                        )
+                        if not incomplete:
+                            break
+                        idle_polls += 1
+                        if idle_polls > max_idle_polls:
+                            raise ReplayError(
+                                "replay did not reach a terminal state; "
+                                f"incomplete task_ids={incomplete}"
+                            )
+                        await replay_clock.sleep(_REPLAY_POLL_INTERVAL_S)
+                        continue
+                    idle_polls = 0
+                    processed_leases += 1
+                    if processed_leases > max_processed_leases:
+                        raise ReplayError(
+                            "replay exceeded the maximum processing steps; "
+                            f"run_id={replay_run_id!r}"
+                        )
                     await executor.process_lease(lease)
 
         finally:

@@ -18,7 +18,7 @@ from reflexor.domain.models_event import Event
 from reflexor.domain.models_run_packet import RunPacket
 from reflexor.infra.db.engine import AsyncSessionFactory, create_async_session_factory
 from reflexor.infra.db.models import Base
-from reflexor.infra.db.repos import SqlAlchemyRunPacketRepo, SqlAlchemyRunRepo
+from reflexor.infra.db.repos import SqlAlchemyRunPacketRepo, SqlAlchemyRunRepo, SqlAlchemyTaskRepo
 from reflexor.infra.db.unit_of_work import SqlAlchemyUnitOfWork
 from reflexor.replay.exporter import export_run_packet
 from reflexor.replay.runner import ReplayMode, ReplayRunner
@@ -179,5 +179,126 @@ async def test_replay_runner_mock_tools_recorded_creates_child_run_and_executes(
             assert replay_packet.parent_run_id == captured_run_id
             assert len(replay_packet.tool_results) == 2
 
+            replay_tasks = await SqlAlchemyTaskRepo(session).list_by_run(outcome.run_id)
+            assert len(replay_tasks) == 2
+            assert replay_tasks[0].tool_call is not None
+            assert replay_tasks[1].tool_call is not None
+            assert replay_tasks[0].tool_call.idempotency_key != "k1"
+            assert replay_tasks[1].tool_call.idempotency_key != "k2"
+            assert replay_tasks[0].metadata["replay"] == {
+                "original_task_id": task_id_1,
+                "original_run_id": captured_run_id,
+                "original_tool_call_id": tool_call_id_1,
+                "original_idempotency_key": "k1",
+            }
+            assert replay_tasks[1].metadata["replay"] == {
+                "original_task_id": task_id_2,
+                "original_run_id": captured_run_id,
+                "original_tool_call_id": tool_call_id_2,
+                "original_idempotency_key": "k2",
+            }
+
             dumped = json.dumps(replay_packet.model_dump(mode="json"), ensure_ascii=False)
             assert "sk-captured-secret-1234567890" not in dumped
+
+
+@pytest.mark.asyncio
+async def test_replay_runner_processes_delayed_retries_until_terminal_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_name = "tests.replay_retry"
+
+    async with _sqlite_file_session_factory(tmp_path) as (session_factory, database_url):
+        settings = ReflexorSettings(
+            workspace_root=tmp_path,
+            database_url=database_url,
+            enabled_scopes=[Scope.FS_READ.value],
+            max_tool_output_bytes=2_000,
+            max_run_packet_bytes=32_000,
+        )
+
+        captured_run_id = _uuid()
+        tool_call_id = _uuid()
+        task_id = _uuid()
+
+        packet = RunPacket(
+            run_id=captured_run_id,
+            event=Event(
+                event_id=_uuid(),
+                type="tests.retry",
+                source="tests",
+                received_at_ms=1,
+                payload={},
+            ),
+            tasks=[
+                Task(
+                    task_id=task_id,
+                    run_id=captured_run_id,
+                    name="retry-task",
+                    status=TaskStatus.PENDING,
+                    tool_call=ToolCall(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        args={"path": "notes.txt"},
+                        permission_scope=Scope.FS_READ.value,
+                        idempotency_key="retry-key",
+                        status=ToolCallStatus.PENDING,
+                        created_at_ms=10,
+                    ),
+                    max_attempts=3,
+                    created_at_ms=10,
+                )
+            ],
+            tool_results=[
+                {
+                    "tool_call_id": tool_call_id,
+                    "result_summary": ToolResult(
+                        ok=False,
+                        error_code="TIMEOUT",
+                        error_message="temporary failure",
+                    ).model_dump(mode="json"),
+                }
+            ],
+            created_at_ms=10,
+        )
+
+        uow = SqlAlchemyUnitOfWork(session_factory)
+        async with uow:
+            session = cast(AsyncSession, uow.session)
+            await SqlAlchemyRunRepo(session).create(
+                RunRecord(
+                    run_id=captured_run_id,
+                    parent_run_id=None,
+                    created_at_ms=10,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                )
+            )
+            await SqlAlchemyRunPacketRepo(session, settings=settings).create(packet)
+
+        monkeypatch.setenv("REFLEXOR_DATABASE_URL", database_url)
+        monkeypatch.setenv("REFLEXOR_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.setenv("REFLEXOR_ENABLED_SCOPES", Scope.FS_READ.value)
+        monkeypatch.setenv("REFLEXOR_MAX_TOOL_OUTPUT_BYTES", str(settings.max_tool_output_bytes))
+        monkeypatch.setenv("REFLEXOR_MAX_RUN_PACKET_BYTES", str(settings.max_run_packet_bytes))
+        clear_settings_cache()
+
+        export_path = tmp_path / "retry_export.json"
+        await export_run_packet(captured_run_id, export_path)
+
+        runner = ReplayRunner(settings=settings)
+        outcome = await runner.replay_from_file(export_path, mode=ReplayMode.MOCK_TOOLS_RECORDED)
+
+        assert outcome.parent_run_id == captured_run_id
+        assert outcome.tool_calls_total == 1
+        assert outcome.tool_invocations_total == 3
+        assert outcome.tool_invocations_by_name == {tool_name: 3}
+
+        replay_uow = SqlAlchemyUnitOfWork(session_factory)
+        async with replay_uow:
+            session = cast(AsyncSession, replay_uow.session)
+            replay_tasks = await SqlAlchemyTaskRepo(session).list_by_run(outcome.run_id)
+            assert len(replay_tasks) == 1
+            assert replay_tasks[0].status == TaskStatus.FAILED
+            assert replay_tasks[0].attempts == 3

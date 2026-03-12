@@ -239,6 +239,12 @@ async def test_import_run_packet_creates_new_run_and_packet(
             event=event,
             reflex_decision={"authorization": "Bearer sk-import-secret-1234567890"},
             tasks=[task],
+            tool_results=[
+                {
+                    "tool_call_id": tool_call_id,
+                    "result_summary": {"ok": True, "data": {"note": "done"}},
+                }
+            ],
             created_at_ms=10,
         )
 
@@ -285,6 +291,29 @@ async def test_import_run_packet_creates_new_run_and_packet(
             imported_packet = await packet_repo.get(imported_run_id)
             assert imported_packet is not None
             assert imported_packet.run_id == imported_run_id
+            assert len(imported_packet.tasks) == 1
+            assert imported_packet.tasks[0].run_id == imported_run_id
+            assert imported_packet.tasks[0].task_id != task_id
+            assert imported_packet.tasks[0].tool_call is not None
+            assert imported_packet.tasks[0].tool_call.tool_call_id != tool_call_id
+            assert imported_packet.tasks[0].metadata["import"] == {
+                "original_run_id": run_id,
+                "original_task_id": task_id,
+                "original_tool_call_id": tool_call_id,
+            }
+            assert imported_packet.tool_results[0]["tool_call_id"] == (
+                imported_packet.tasks[0].tool_call.tool_call_id
+            )
+
+            task_repo = SqlAlchemyTaskRepo(cast(AsyncSession, uow.session))
+            imported_tasks = await task_repo.list_by_run(imported_run_id)
+            assert len(imported_tasks) == 1
+            assert imported_tasks[0].task_id == imported_packet.tasks[0].task_id
+            assert imported_tasks[0].run_id == imported_run_id
+            assert imported_tasks[0].tool_call is not None
+            assert imported_tasks[0].tool_call.tool_call_id == (
+                imported_packet.tasks[0].tool_call.tool_call_id
+            )
 
             dumped = json.dumps(imported_packet.model_dump(mode="json"), ensure_ascii=False)
             assert "sk-import-secret-1234567890" not in dumped

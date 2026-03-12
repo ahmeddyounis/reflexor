@@ -11,6 +11,10 @@ from reflexor.domain.models_run_packet import RunPacket
 from reflexor.tools.sdk import ToolResult
 
 
+def _replay_idempotency_key(*, replay_run_id: str, original_key: str) -> str:
+    return f"replay:{replay_run_id}:{original_key}"
+
+
 def _build_replay_tasks(
     packet: RunPacket, *, replay_run_id: str
 ) -> tuple[list[Task], dict[str, str]]:
@@ -29,7 +33,10 @@ def _build_replay_tasks(
                 tool_name=tool_call.tool_name,
                 args=dict(tool_call.args),
                 permission_scope=tool_call.permission_scope,
-                idempotency_key=tool_call.idempotency_key,
+                idempotency_key=_replay_idempotency_key(
+                    replay_run_id=replay_run_id,
+                    original_key=tool_call.idempotency_key,
+                ),
                 status=ToolCallStatus.PENDING,
                 created_at_ms=tool_call.created_at_ms,
                 started_at_ms=None,
@@ -48,6 +55,9 @@ def _build_replay_tasks(
                     "original_task_id": task.task_id,
                     "original_run_id": packet.run_id,
                     "original_tool_call_id": None if tool_call is None else tool_call.tool_call_id,
+                    "original_idempotency_key": None
+                    if tool_call is None
+                    else tool_call.idempotency_key,
                 }
             )
 

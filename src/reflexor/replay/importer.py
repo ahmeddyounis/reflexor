@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from reflexor.infra.db.engine import (
     create_async_engine,
     create_async_session_factory,
 )
-from reflexor.infra.db.repos import SqlAlchemyRunPacketRepo, SqlAlchemyRunRepo
+from reflexor.infra.db.repos import SqlAlchemyRunPacketRepo, SqlAlchemyRunRepo, SqlAlchemyTaskRepo
 from reflexor.replay.exporter import EXPORT_SCHEMA_VERSION
 from reflexor.storage.ports import RunRecord
 
@@ -52,19 +53,124 @@ def _read_export_file(path: Path, *, max_bytes: int) -> bytes:
     return data
 
 
-def _rewrite_task_run_ids(tasks_obj: object, *, run_id: str) -> object:
-    if not isinstance(tasks_obj, list):
-        return tasks_obj
+def _metadata_with_import_provenance(
+    metadata_obj: object,
+    *,
+    original_run_id: str | None,
+    original_task_id: str | None,
+    original_tool_call_id: str | None,
+) -> dict[str, object]:
+    metadata = dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
+    import_meta_obj = metadata.get("import")
+    import_meta = dict(import_meta_obj) if isinstance(import_meta_obj, Mapping) else {}
+    import_meta.update(
+        {
+            "original_run_id": original_run_id,
+            "original_task_id": original_task_id,
+            "original_tool_call_id": original_tool_call_id,
+        }
+    )
+    metadata["import"] = import_meta
+    return metadata
+
+
+def _rewrite_tool_result_ids(
+    tool_results_obj: object,
+    *,
+    tool_call_id_map: Mapping[str, str],
+) -> object:
+    if not isinstance(tool_results_obj, list):
+        return tool_results_obj
 
     rewritten: list[object] = []
-    for item in tasks_obj:
-        if isinstance(item, dict):
-            updated = dict(item)
-            updated["run_id"] = run_id
-            rewritten.append(updated)
-        else:
+    for item in tool_results_obj:
+        if not isinstance(item, dict):
             rewritten.append(item)
+            continue
+
+        updated = dict(item)
+        tool_call_id = updated.get("tool_call_id")
+        if isinstance(tool_call_id, str):
+            updated["tool_call_id"] = tool_call_id_map.get(tool_call_id, tool_call_id)
+        rewritten.append(updated)
     return rewritten
+
+
+def _rewrite_packet_for_import(
+    packet_obj: dict[str, Any],
+    *,
+    new_run_id: str,
+    parent_run_id: str | None,
+) -> dict[str, Any]:
+    packet_dict: dict[str, Any] = dict(packet_obj)
+    original_run_id_obj = packet_dict.get("run_id")
+    original_run_id = original_run_id_obj if isinstance(original_run_id_obj, str) else None
+
+    task_id_map: dict[str, str] = {}
+    tool_call_id_map: dict[str, str] = {}
+    rewritten_tasks: list[object] = []
+
+    tasks_obj = packet_dict.get("tasks")
+    if isinstance(tasks_obj, list):
+        for item in tasks_obj:
+            if not isinstance(item, dict):
+                rewritten_tasks.append(item)
+                continue
+
+            updated = dict(item)
+            original_task_id_obj = updated.get("task_id")
+            original_task_id = (
+                original_task_id_obj if isinstance(original_task_id_obj, str) else None
+            )
+            if original_task_id is not None:
+                task_id_map[original_task_id] = str(uuid.uuid4())
+                updated["task_id"] = task_id_map[original_task_id]
+
+            updated["run_id"] = new_run_id
+
+            original_tool_call_id: str | None = None
+            tool_call_obj = updated.get("tool_call")
+            if isinstance(tool_call_obj, dict):
+                rewritten_tool_call = dict(tool_call_obj)
+                original_tool_call_id_obj = rewritten_tool_call.get("tool_call_id")
+                original_tool_call_id = (
+                    original_tool_call_id_obj
+                    if isinstance(original_tool_call_id_obj, str)
+                    else None
+                )
+                if original_tool_call_id is not None:
+                    tool_call_id_map[original_tool_call_id] = str(uuid.uuid4())
+                    rewritten_tool_call["tool_call_id"] = tool_call_id_map[original_tool_call_id]
+                updated["tool_call"] = rewritten_tool_call
+
+            updated["metadata"] = _metadata_with_import_provenance(
+                updated.get("metadata"),
+                original_run_id=original_run_id,
+                original_task_id=original_task_id,
+                original_tool_call_id=original_tool_call_id,
+            )
+            rewritten_tasks.append(updated)
+
+        for index, item in enumerate(rewritten_tasks):
+            if not isinstance(item, dict):
+                continue
+            depends_on_obj = item.get("depends_on")
+            if not isinstance(depends_on_obj, list):
+                continue
+            updated = dict(item)
+            updated["depends_on"] = [
+                task_id_map.get(dep, dep) if isinstance(dep, str) else dep for dep in depends_on_obj
+            ]
+            rewritten_tasks[index] = updated
+
+    packet_dict["run_id"] = new_run_id
+    packet_dict["parent_run_id"] = parent_run_id
+    packet_dict["tasks"] = rewritten_tasks
+    packet_dict["tool_results"] = _rewrite_tool_result_ids(
+        packet_dict.get("tool_results"),
+        tool_call_id_map=tool_call_id_map,
+    )
+    return packet_dict
 
 
 async def import_run_packet(
@@ -110,15 +216,16 @@ async def import_run_packet(
 
     new_run_id = str(uuid.uuid4())
 
-    packet_dict: dict[str, Any] = dict(packet_obj)
-    original_run_id_obj = packet_dict.get("run_id")
+    original_run_id_obj = packet_obj.get("run_id")
     original_run_id = original_run_id_obj if isinstance(original_run_id_obj, str) else None
     if normalized_parent is None and isinstance(original_run_id, str) and original_run_id.strip():
         normalized_parent = original_run_id.strip()
 
-    packet_dict["run_id"] = new_run_id
-    packet_dict["parent_run_id"] = normalized_parent
-    packet_dict["tasks"] = _rewrite_task_run_ids(packet_dict.get("tasks"), run_id=new_run_id)
+    packet_dict = _rewrite_packet_for_import(
+        packet_obj,
+        new_run_id=new_run_id,
+        parent_run_id=normalized_parent,
+    )
 
     try:
         packet = RunPacket.model_validate(packet_dict)
@@ -139,6 +246,9 @@ async def import_run_packet(
         async with async_session_scope(session_factory) as session:
             async with session.begin():
                 await SqlAlchemyRunRepo(session).create(run_record)
+                task_repo = SqlAlchemyTaskRepo(session)
+                for task in packet.tasks:
+                    await task_repo.create(task)
                 await SqlAlchemyRunPacketRepo(session, settings=resolved_settings).create(packet)
     finally:
         await engine.dispose()
