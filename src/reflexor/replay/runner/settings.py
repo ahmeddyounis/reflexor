@@ -23,6 +23,7 @@ def _derive_replay_settings(
 ) -> ReflexorSettings:
     base_payload = base.model_dump()
     base_payload["dry_run"] = True
+    base_payload["queue_backend"] = "inmemory"
 
     scopes_used = {
         task.tool_call.permission_scope

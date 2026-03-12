@@ -51,6 +51,8 @@ def test_dry_run_no_tools_does_not_enable_unused_fs_read_scope(tmp_path: Path) -
     base = ReflexorSettings(
         workspace_root=tmp_path,
         enabled_scopes=[Scope.FS_READ.value, Scope.NET_HTTP.value],
+        queue_backend="redis_streams",
+        redis_url="redis://localhost:6379/0",
     )
 
     replay = _derive_replay_settings(
@@ -60,12 +62,15 @@ def test_dry_run_no_tools_does_not_enable_unused_fs_read_scope(tmp_path: Path) -
     )
 
     assert replay.enabled_scopes == []
+    assert replay.queue_backend == "inmemory"
 
 
 def test_dry_run_no_tools_preserves_fs_read_when_packet_used_it(tmp_path: Path) -> None:
     base = ReflexorSettings(
         workspace_root=tmp_path,
         enabled_scopes=[Scope.FS_READ.value, Scope.NET_HTTP.value],
+        queue_backend="redis_streams",
+        redis_url="redis://localhost:6379/0",
     )
 
     replay = _derive_replay_settings(
@@ -75,3 +80,4 @@ def test_dry_run_no_tools_preserves_fs_read_when_packet_used_it(tmp_path: Path) 
     )
 
     assert replay.enabled_scopes == [Scope.FS_READ.value]
+    assert replay.queue_backend == "inmemory"
