@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 
 import pytest
@@ -39,10 +40,16 @@ def test_run_packet_run_id_and_parent_run_id_validation() -> None:
     with pytest.raises(ValueError, match="parent_run_id must be a UUID4"):
         RunPacket(run_id=RUN_ID, parent_run_id=str(uuid.uuid1()), event=_event())
 
+    with pytest.raises(ValueError, match="parent_run_id must differ from run_id"):
+        RunPacket(run_id=RUN_ID, parent_run_id=RUN_ID, event=_event())
+
 
 def test_run_packet_rejects_non_json_and_oversized_reflex_decision() -> None:
-    with pytest.raises(ValueError, match="reflex_decision must be JSON-serializable"):
+    with pytest.raises(ValueError, match="reflex_decision must be valid JSON"):
         RunPacket(run_id=RUN_ID, event=_event(), reflex_decision={"bad": object()})
+
+    with pytest.raises(ValueError, match="reflex_decision must be valid JSON"):
+        RunPacket(run_id=RUN_ID, event=_event(), reflex_decision={"bad": math.nan})
 
     too_large = {"data": "x" * (DEFAULT_MAX_REFLEX_DECISION_BYTES + 10)}
     with pytest.raises(ValueError, match="reflex_decision is too large"):
@@ -50,8 +57,11 @@ def test_run_packet_rejects_non_json_and_oversized_reflex_decision() -> None:
 
 
 def test_run_packet_rejects_non_json_and_oversized_plan() -> None:
-    with pytest.raises(ValueError, match="plan must be JSON-serializable"):
+    with pytest.raises(ValueError, match="plan must be valid JSON"):
         RunPacket(run_id=RUN_ID, event=_event(), plan={"bad": object()})
+
+    with pytest.raises(ValueError, match="plan must be valid JSON"):
+        RunPacket(run_id=RUN_ID, event=_event(), plan={"bad": math.inf})
 
     too_large = {"data": "x" * (DEFAULT_MAX_PLAN_BYTES + 10)}
     with pytest.raises(ValueError, match="plan is too large"):
@@ -59,7 +69,7 @@ def test_run_packet_rejects_non_json_and_oversized_plan() -> None:
 
 
 def test_run_packet_rejects_non_json_tool_results_and_policy_decisions() -> None:
-    with pytest.raises(ValueError, match="tool_results must be JSON-serializable"):
+    with pytest.raises(ValueError, match="tool_results must be valid JSON"):
         RunPacket(
             run_id=RUN_ID,
             event=_event(),
@@ -67,12 +77,28 @@ def test_run_packet_rejects_non_json_tool_results_and_policy_decisions() -> None
             tool_results=[{"ok": True}, {"bad": object()}],
         )
 
-    with pytest.raises(ValueError, match="policy_decisions must be JSON-serializable"):
+    with pytest.raises(ValueError, match="tool_results must be valid JSON"):
+        RunPacket(
+            run_id=RUN_ID,
+            event=_event(),
+            created_at_ms=0,
+            tool_results=[{"bad": math.nan}],
+        )
+
+    with pytest.raises(ValueError, match="policy_decisions must be valid JSON"):
         RunPacket(
             run_id=RUN_ID,
             event=_event(),
             created_at_ms=0,
             policy_decisions=[{"bad": object()}],
+        )
+
+    with pytest.raises(ValueError, match="policy_decisions must be valid JSON"):
+        RunPacket(
+            run_id=RUN_ID,
+            event=_event(),
+            created_at_ms=0,
+            policy_decisions=[{"bad": math.inf}],
         )
 
 

@@ -18,7 +18,9 @@ DEFAULT_MAX_TASKS = 500
 
 
 def _json_bytes(value: object) -> int:
-    payload_json = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    payload_json = json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
     return len(payload_json.encode("utf-8"))
 
 
@@ -85,8 +87,8 @@ class RunPacket(BaseModel):
     def _validate_reflex_decision(cls, value: dict[str, object]) -> dict[str, object]:
         try:
             size_bytes = _json_bytes(value)
-        except TypeError as exc:
-            raise ValueError("reflex_decision must be JSON-serializable") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError("reflex_decision must be valid JSON") from exc
         if size_bytes > DEFAULT_MAX_REFLEX_DECISION_BYTES:
             raise ValueError(
                 "reflex_decision is too large "
@@ -99,8 +101,8 @@ class RunPacket(BaseModel):
     def _validate_plan(cls, value: dict[str, object]) -> dict[str, object]:
         try:
             size_bytes = _json_bytes(value)
-        except TypeError as exc:
-            raise ValueError("plan must be JSON-serializable") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError("plan must be valid JSON") from exc
         if size_bytes > DEFAULT_MAX_PLAN_BYTES:
             raise ValueError(
                 f"plan is too large ({size_bytes} bytes); max is {DEFAULT_MAX_PLAN_BYTES}"
@@ -114,8 +116,8 @@ class RunPacket(BaseModel):
         for item in value:
             try:
                 size_bytes = _json_bytes(item)
-            except TypeError as exc:
-                raise ValueError("tool_results must be JSON-serializable") from exc
+            except (TypeError, ValueError) as exc:
+                raise ValueError("tool_results must be valid JSON") from exc
             if size_bytes > DEFAULT_MAX_TOOL_RESULT_BYTES:
                 raise ValueError(
                     "tool_results entry is too large "
@@ -131,8 +133,8 @@ class RunPacket(BaseModel):
         for item in value:
             try:
                 size_bytes = _json_bytes(item)
-            except TypeError as exc:
-                raise ValueError("policy_decisions must be JSON-serializable") from exc
+            except (TypeError, ValueError) as exc:
+                raise ValueError("policy_decisions must be valid JSON") from exc
             if size_bytes > DEFAULT_MAX_POLICY_DECISION_BYTES:
                 raise ValueError(
                     "policy_decisions entry is too large "
@@ -157,6 +159,12 @@ class RunPacket(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_parent_linkage(self) -> RunPacket:
+        if self.parent_run_id is not None and self.parent_run_id == self.run_id:
+            raise ValueError("parent_run_id must differ from run_id")
+        return self
+
+    @model_validator(mode="after")
     def _validate_timestamps(self) -> RunPacket:
         if self.started_at_ms is not None and self.started_at_ms < self.created_at_ms:
             raise ValueError("started_at_ms must be >= created_at_ms")
@@ -171,8 +179,8 @@ class RunPacket(BaseModel):
     def _validate_total_size(self) -> RunPacket:
         try:
             size_bytes = _json_bytes(self.model_dump(mode="json"))
-        except TypeError as exc:  # pragma: no cover
-            raise ValueError("run packet must be JSON-serializable") from exc
+        except (TypeError, ValueError) as exc:  # pragma: no cover
+            raise ValueError("run packet must be valid JSON") from exc
 
         if size_bytes > DEFAULT_MAX_PACKET_BYTES:
             raise ValueError(

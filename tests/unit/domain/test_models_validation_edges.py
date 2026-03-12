@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 
 import pytest
@@ -62,6 +63,19 @@ def test_tool_call_rejects_completed_before_created() -> None:
             created_at_ms=10,
             completed_at_ms=9,
         )
+
+
+def test_tool_call_and_task_reject_non_finite_json_values() -> None:
+    with pytest.raises(ValueError, match="args must be valid JSON"):
+        ToolCall(
+            tool_name="x",
+            permission_scope="p",
+            idempotency_key="k",
+            args={"delay": math.inf},
+        )
+
+    with pytest.raises(ValueError, match="metadata must be valid JSON"):
+        Task(run_id=RUN_ID, name="x", metadata={"score": math.nan})
 
 
 def test_task_id_and_run_id_validators_cover_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:

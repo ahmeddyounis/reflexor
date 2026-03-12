@@ -49,7 +49,7 @@ def test_tool_call_rejects_empty_fields() -> None:
 
 
 def test_tool_call_rejects_non_json_args() -> None:
-    with pytest.raises(ValueError, match="args must be JSON-serializable"):
+    with pytest.raises(ValueError, match="args must be valid JSON"):
         ToolCall(
             tool_name="x",
             permission_scope="x",

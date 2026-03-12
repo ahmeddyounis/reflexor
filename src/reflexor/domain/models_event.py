@@ -25,7 +25,9 @@ def _count_payload_keys(value: object) -> int:
 
 
 def _payload_bytes(value: object) -> int:
-    payload_json = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    payload_json = json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
     return len(payload_json.encode("utf-8"))
 
 
@@ -66,6 +68,14 @@ class Event(BaseModel):
             raise ValueError("type must be non-empty")
         return trimmed
 
+    @field_validator("source")
+    @classmethod
+    def _validate_source(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("source must be non-empty")
+        return trimmed
+
     @field_validator("dedupe_key")
     @classmethod
     def _normalize_dedupe_key(cls, value: str | None) -> str | None:
@@ -92,8 +102,8 @@ class Event(BaseModel):
 
         try:
             size_bytes = _payload_bytes(value)
-        except TypeError as exc:
-            raise ValueError("payload must be JSON-serializable") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError("payload must be valid JSON") from exc
 
         if size_bytes > max_bytes:
             raise ValueError(f"payload is too large ({size_bytes} bytes); max is {max_bytes}")

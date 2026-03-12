@@ -11,6 +11,13 @@ from reflexor.domain.enums import ApprovalStatus, TaskStatus, ToolCallStatus
 DEFAULT_MAX_APPROVAL_PREVIEW_CHARS = 1_000
 
 
+def _ensure_jsonable(value: object, *, field_name: str) -> None:
+    try:
+        json.dumps(value, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be valid JSON") from exc
+
+
 class ToolCall(BaseModel):
     tool_call_id: str = Field(default_factory=lambda: str(uuid4()))
     tool_name: str
@@ -79,10 +86,7 @@ class ToolCall(BaseModel):
     @field_validator("args")
     @classmethod
     def _validate_args(cls, value: dict[str, object]) -> dict[str, object]:
-        try:
-            json.dumps(value, ensure_ascii=False)
-        except TypeError as exc:
-            raise ValueError("args must be JSON-serializable") from exc
+        _ensure_jsonable(value, field_name="args")
         return value
 
     @model_validator(mode="after")
@@ -209,10 +213,7 @@ class Task(BaseModel):
     @field_validator("metadata")
     @classmethod
     def _validate_metadata(cls, value: dict[str, object]) -> dict[str, object]:
-        try:
-            json.dumps(value, ensure_ascii=False)
-        except TypeError as exc:
-            raise ValueError("metadata must be JSON-serializable") from exc
+        _ensure_jsonable(value, field_name="metadata")
         return value
 
     @model_validator(mode="after")

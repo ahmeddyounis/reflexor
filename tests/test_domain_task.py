@@ -71,5 +71,5 @@ def test_task_supports_optional_tool_call() -> None:
 
 
 def test_task_rejects_non_json_metadata() -> None:
-    with pytest.raises(ValueError, match="metadata must be JSON-serializable"):
+    with pytest.raises(ValueError, match="metadata must be valid JSON"):
         Task(run_id=str(uuid.uuid4()), name="x", metadata={"bad": object()})

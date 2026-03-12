@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 
 import pytest
@@ -14,7 +15,7 @@ from reflexor.domain.models_event import (
 def test_event_round_trip_via_model_dump_and_validate() -> None:
     event = Event(
         type="  example.event  ",
-        source="tests",
+        source="  tests  ",
         received_at_ms=1_700_000_000_000,
         payload={"ok": True, "count": 1},
     )
@@ -22,6 +23,7 @@ def test_event_round_trip_via_model_dump_and_validate() -> None:
     parsed = uuid.UUID(event.event_id)
     assert parsed.version == 4
     assert event.type == "example.event"
+    assert event.source == "tests"
 
     dumped = event.model_dump()
     restored = Event.model_validate(dumped)
@@ -38,13 +40,31 @@ def test_event_rejects_empty_type() -> None:
         )
 
 
+def test_event_rejects_empty_source() -> None:
+    with pytest.raises(ValueError, match="source must be non-empty"):
+        Event(
+            type="example",
+            source="   ",
+            received_at_ms=0,
+            payload={},
+        )
+
+
 def test_event_rejects_non_json_payload() -> None:
-    with pytest.raises(ValueError, match="payload must be JSON-serializable"):
+    with pytest.raises(ValueError, match="payload must be valid JSON"):
         Event(
             type="example",
             source="tests",
             received_at_ms=0,
             payload={"bad": object()},
+        )
+
+    with pytest.raises(ValueError, match="payload must be valid JSON"):
+        Event(
+            type="example",
+            source="tests",
+            received_at_ms=0,
+            payload={"bad": math.nan},
         )
 
 

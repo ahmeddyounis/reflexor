@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from reflexor.domain.serialization import canonical_json, make_idempotency_key, stable_sha256
@@ -35,3 +37,14 @@ def test_make_idempotency_key_is_stable_and_sensitive_to_inputs() -> None:
 def test_make_idempotency_key_rejects_non_json_args() -> None:
     with pytest.raises(TypeError):
         make_idempotency_key("x", {"bad": object()}, "evt_123")
+
+    with pytest.raises(ValueError):
+        make_idempotency_key("x", {"bad": math.nan}, "evt_123")
+
+
+def test_make_idempotency_key_rejects_blank_identifiers() -> None:
+    with pytest.raises(ValueError, match="tool_name must be non-empty"):
+        make_idempotency_key("   ", {"ok": True}, "evt_123")
+
+    with pytest.raises(ValueError, match="event_id must be non-empty"):
+        make_idempotency_key("tool", {"ok": True}, "   ")

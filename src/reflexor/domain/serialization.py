@@ -11,9 +11,16 @@ def canonical_json(obj: Any) -> str:
     - Sorted keys
     - No insignificant whitespace (stable separators)
     - UTF-8 friendly (ensure_ascii=False)
+    - Standard JSON only (`NaN`/`Infinity` are rejected)
     """
 
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def stable_sha256(*parts: str | bytes) -> str:
@@ -33,4 +40,12 @@ def stable_sha256(*parts: str | bytes) -> str:
 def make_idempotency_key(tool_name: str, args: dict[str, object], event_id: str) -> str:
     """Create a stable idempotency key for a tool call."""
 
-    return stable_sha256(tool_name.strip(), canonical_json(args), event_id.strip())
+    normalized_tool_name = tool_name.strip()
+    if not normalized_tool_name:
+        raise ValueError("tool_name must be non-empty")
+
+    normalized_event_id = event_id.strip()
+    if not normalized_event_id:
+        raise ValueError("event_id must be non-empty")
+
+    return stable_sha256(normalized_tool_name, canonical_json(args), normalized_event_id)
