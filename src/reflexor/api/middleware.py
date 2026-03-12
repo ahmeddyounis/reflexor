@@ -149,20 +149,61 @@ async def _maybe_reject_oversized_events_request(
         except ValueError:
             pass
 
-    body = await request.body()
-    if len(body) > max_bytes_int:
+    body, body_bytes = await _read_request_body_limited(request, max_bytes=max_bytes_int)
+    if body is None:
         logger.info(
             "api request rejected: payload too large",
             extra={
                 "event_type": "api.request.payload_too_large",
                 "path": request.url.path,
-                "body_bytes": len(body),
+                "body_bytes": body_bytes,
                 "max_bytes": max_bytes_int,
             },
         )
         return _payload_too_large_response(request_id=request_id)
 
     return None
+
+
+async def _read_request_body_limited(
+    request: Request, *, max_bytes: int
+) -> tuple[bytes | None, int]:
+    chunks: list[bytes] = []
+    total = 0
+    exceeded = False
+
+    async for chunk in request.stream():
+        total += len(chunk)
+        if exceeded:
+            continue
+        if total > max_bytes:
+            exceeded = True
+            continue
+        if chunk:
+            chunks.append(chunk)
+
+    if exceeded:
+        return None, total
+
+    body = b"".join(chunks)
+    _cache_request_body(request, body)
+    return body, total
+
+
+def _cache_request_body(request: Request, body: bytes) -> None:
+    request._body = body
+
+    body_sent = False
+
+    async def _receive() -> dict[str, object]:
+        nonlocal body_sent
+        if body_sent:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        body_sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request._receive = _receive
+    request._stream_consumed = True
 
 
 def _get_max_event_payload_bytes(request: Request) -> int | None:

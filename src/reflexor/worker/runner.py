@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from reflexor.executor.service import ExecutorService
-from reflexor.observability.context import correlation_context
+from reflexor.observability.context import correlation_context, request_id_context
 from reflexor.orchestrator.queue import Lease, Queue, QueueClosed
 from reflexor.worker.signals import install_shutdown_handlers
 
@@ -120,32 +120,33 @@ class WorkerRunner:
     async def _handle_lease(self, lease: Lease) -> None:
         correlation_ids = lease.envelope.correlation_ids or {}
 
-        with correlation_context(
-            event_id=correlation_ids.get("event_id"),
-            run_id=correlation_ids.get("run_id") or lease.envelope.run_id,
-            task_id=correlation_ids.get("task_id") or lease.envelope.task_id,
-            tool_call_id=correlation_ids.get("tool_call_id"),
-        ):
-            try:
-                await self.executor.process_lease(lease)
-            except Exception:
-                self.logger.exception(
-                    "worker failed to process lease",
-                    extra={
-                        "envelope_id": lease.envelope.envelope_id,
-                        "task_id": lease.envelope.task_id,
-                        "run_id": lease.envelope.run_id,
-                        "attempt": lease.attempt,
-                    },
-                )
+        with request_id_context(None):
+            with correlation_context(
+                event_id=correlation_ids.get("event_id"),
+                run_id=correlation_ids.get("run_id") or lease.envelope.run_id,
+                task_id=correlation_ids.get("task_id") or lease.envelope.task_id,
+                tool_call_id=correlation_ids.get("tool_call_id"),
+            ):
                 try:
-                    await self.queue.nack(
-                        lease,
-                        delay_s=min(_WORKER_EXCEPTION_NACK_DELAY_S, self.visibility_timeout_s),
-                        reason="worker_exception",
+                    await self.executor.process_lease(lease)
+                except Exception:
+                    self.logger.exception(
+                        "worker failed to process lease",
+                        extra={
+                            "envelope_id": lease.envelope.envelope_id,
+                            "task_id": lease.envelope.task_id,
+                            "run_id": lease.envelope.run_id,
+                            "attempt": lease.attempt,
+                        },
                     )
-                except QueueClosed:
-                    self.stop_event.set()
+                    try:
+                        await self.queue.nack(
+                            lease,
+                            delay_s=min(_WORKER_EXCEPTION_NACK_DELAY_S, self.visibility_timeout_s),
+                            reason="worker_exception",
+                        )
+                    except QueueClosed:
+                        self.stop_event.set()
 
 
 __all__ = ["WorkerRunner"]

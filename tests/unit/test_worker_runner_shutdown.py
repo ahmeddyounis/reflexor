@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
+import logging
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
+from reflexor.config import ReflexorSettings
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
+from reflexor.observability.context import request_id_context
+from reflexor.observability.logging import build_json_handler
 from reflexor.orchestrator.queue import Lease, QueueClosed, TaskEnvelope
 from reflexor.worker.runner import WorkerRunner
 
@@ -79,7 +86,7 @@ async def test_worker_shutdown_unblocks_waiting_dequeue() -> None:
 
     runner = WorkerRunner(
         queue=queue,
-        executor=_NoopExecutor(),  # type: ignore[arg-type]
+        executor=cast(Any, _NoopExecutor()),
         stop_event=stop_event,
         dequeue_wait_s=None,
         install_signal_handlers=False,
@@ -100,7 +107,7 @@ async def test_worker_runner_rejects_non_finite_timing_values() -> None:
 
     runner = WorkerRunner(
         queue=queue,
-        executor=_NoopExecutor(),  # type: ignore[arg-type]
+        executor=cast(Any, _NoopExecutor()),
         visibility_timeout_s=float("nan"),
         install_signal_handlers=False,
     )
@@ -109,7 +116,7 @@ async def test_worker_runner_rejects_non_finite_timing_values() -> None:
 
     runner = WorkerRunner(
         queue=queue,
-        executor=_NoopExecutor(),  # type: ignore[arg-type]
+        executor=cast(Any, _NoopExecutor()),
         dequeue_wait_s=float("inf"),
         install_signal_handlers=False,
     )
@@ -120,8 +127,8 @@ async def test_worker_runner_rejects_non_finite_timing_values() -> None:
 async def test_worker_exception_requeues_with_backoff() -> None:
     queue = _RecordingQueue()
     runner = WorkerRunner(
-        queue=queue,  # type: ignore[arg-type]
-        executor=_ExplodingExecutor(),  # type: ignore[arg-type]
+        queue=queue,
+        executor=cast(Any, _ExplodingExecutor()),
         visibility_timeout_s=30.0,
         install_signal_handlers=False,
         close_queue_on_exit=False,
@@ -131,3 +138,36 @@ async def test_worker_exception_requeues_with_backoff() -> None:
     await runner._handle_lease(lease)
 
     assert queue.nack_calls == [(lease, 1.0, "worker_exception")]
+
+
+async def test_worker_logs_clear_stale_request_id_context() -> None:
+    queue = _RecordingQueue()
+    stream = io.StringIO()
+    logger = logging.getLogger("reflexor.tests.worker_runner")
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.handlers = [build_json_handler(stream=stream, settings=ReflexorSettings())]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
+
+    try:
+        runner = WorkerRunner(
+            queue=queue,
+            executor=cast(Any, _ExplodingExecutor()),
+            visibility_timeout_s=30.0,
+            install_signal_handlers=False,
+            close_queue_on_exit=False,
+            logger=logger,
+        )
+
+        with request_id_context("req-stale"):
+            await runner._handle_lease(_lease())
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    payload = json.loads(stream.getvalue().splitlines()[0])
+    assert payload["message"] == "worker failed to process lease"
+    assert payload["request_id"] is None

@@ -145,8 +145,8 @@ def configure_logging(
         for handler in root.handlers:
             if getattr(handler, _CONFIGURED_HANDLER_ATTR, False):
                 return
-
-    root.handlers.clear()
+    else:
+        root.handlers.clear()
     root.addHandler(build_json_handler(settings=settings, stream=stream, level=level))
 
     # Ensure common library loggers are not filtered out by an overly strict default level.

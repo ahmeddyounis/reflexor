@@ -7,10 +7,10 @@ because queue backends call them on hot paths.
 from __future__ import annotations
 
 import logging
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 
-from reflexor.observability.context import correlation_context
+from reflexor.observability.context import correlation_context, request_id_context
 from reflexor.observability.metrics import ReflexorMetrics
 from reflexor.orchestrator.queue.observer import (
     QueueAckObservation,
@@ -53,16 +53,19 @@ class LoggingQueueObserver:
 
     def _with_correlation_context(
         self, correlation_ids: dict[str, str | None] | None
-    ) -> AbstractContextManager[None]:
-        if not correlation_ids:
-            return correlation_context()
-
-        return correlation_context(
-            event_id=correlation_ids.get("event_id"),
-            run_id=correlation_ids.get("run_id"),
-            task_id=correlation_ids.get("task_id"),
-            tool_call_id=correlation_ids.get("tool_call_id"),
+    ) -> AbstractContextManager[object]:
+        ids = correlation_ids or {}
+        stack = ExitStack()
+        stack.enter_context(request_id_context(None))
+        stack.enter_context(
+            correlation_context(
+                event_id=ids.get("event_id"),
+                run_id=ids.get("run_id"),
+                task_id=ids.get("task_id"),
+                tool_call_id=ids.get("tool_call_id"),
+            )
         )
+        return stack
 
     def on_enqueue(self, observation: QueueEnqueueObservation) -> None:
         if not self._logger.isEnabledFor(logging.DEBUG):
@@ -85,13 +88,14 @@ class LoggingQueueObserver:
         if observation.lease is None:
             if not self._logger.isEnabledFor(logging.DEBUG):
                 return
-            self._logger.debug(
-                "queue dequeue empty",
-                extra={
-                    "event_type": "queue.dequeue.empty",
-                    "queue_depth": observation.queue_depth,
-                },
-            )
+            with self._with_correlation_context(None):
+                self._logger.debug(
+                    "queue dequeue empty",
+                    extra={
+                        "event_type": "queue.dequeue.empty",
+                        "queue_depth": observation.queue_depth,
+                    },
+                )
             return
 
         lease = observation.lease
