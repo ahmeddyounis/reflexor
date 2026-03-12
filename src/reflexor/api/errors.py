@@ -155,6 +155,9 @@ def install_error_handlers(app: FastAPI) -> None:
         elif status_code == 409:
             error_code = "conflict"
             message = _str_detail(detail) or "conflict"
+        elif status_code == 503:
+            error_code = "http_error"
+            message = _str_detail(detail) or "service unavailable"
         elif status_code == 501:
             error_code = "not_implemented"
             message = "not implemented"
@@ -166,7 +169,7 @@ def install_error_handlers(app: FastAPI) -> None:
             message = _str_detail(detail) or "request failed"
 
         with correlation_context(**_extract_correlation_ids(request)):
-            if status_code >= 500 and status_code != 501:
+            if status_code >= 500 and status_code not in {501, 503}:
                 logger.exception(
                     "http exception",
                     extra={"request_id": _get_request_id(request), "status_code": status_code},
