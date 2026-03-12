@@ -16,8 +16,8 @@ def _require_non_empty_str(value: str, *, field_name: str) -> str:
 
 def _require_json_serializable(value: object, *, field_name: str) -> None:
     try:
-        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    except TypeError as exc:
+        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be JSON-serializable") from exc
 
 

@@ -35,6 +35,11 @@ class NormalizeArgs(BaseModel):
     url: str
 
 
+class NestedNormalizeArgs(BaseModel):
+    files: dict[str, Path]
+    urls: dict[str, str]
+
+
 class NormalizeTool:
     manifest = ToolManifest(
         name="tests.normalize",
@@ -48,6 +53,27 @@ class NormalizeTool:
 
     async def run(self, args: NormalizeArgs, ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=True, data={"path": str(args.path), "url": args.url})
+
+
+class NestedNormalizeTool:
+    manifest = ToolManifest(
+        name="tests.normalize_nested",
+        version="0.1.0",
+        description="Nested normalization tool for runner tests.",
+        permission_scope="fs.read",
+        idempotent=True,
+        max_output_bytes=10_000,
+    )
+    ArgsModel = NestedNormalizeArgs
+
+    async def run(self, args: NestedNormalizeArgs, ctx: ToolContext) -> ToolResult:
+        return ToolResult(
+            ok=True,
+            data={
+                "files": {key: str(value) for key, value in args.files.items()},
+                "urls": dict(args.urls),
+            },
+        )
 
 
 class SecretArgs(BaseModel):
@@ -147,6 +173,34 @@ def test_runner_rejects_workspace_escape_paths(tmp_path: Path) -> None:
     assert result.error_code == "INVALID_ARGS"
     assert result.error_message is not None
     assert "escapes workspace root" in result.error_message
+
+
+def test_runner_normalizes_nested_paths_and_urls(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(NestedNormalizeTool())
+    runner = ToolRunner(registry=registry, settings=ReflexorSettings(workspace_root=tmp_path))
+
+    ctx = ToolContext(workspace_root=tmp_path, timeout_s=1.0)
+    result = asyncio.run(
+        runner.run_tool(
+            "tests.normalize_nested",
+            {
+                "files": {"one": "nested/file.txt"},
+                "urls": {"primary": " HTTPS://Example.com/Nested "},
+            },
+            ctx=ctx,
+        )
+    )
+
+    assert result.ok is True
+    assert isinstance(result.data, dict)
+    files = result.data["files"]
+    assert isinstance(files, dict)
+    assert Path(files["one"]).is_absolute()
+    assert Path(files["one"]).is_relative_to(tmp_path)
+    urls = result.data["urls"]
+    assert isinstance(urls, dict)
+    assert urls["primary"] == "https://example.com/Nested"
 
 
 def test_runner_sanitizes_and_truncates_tool_output(tmp_path: Path) -> None:

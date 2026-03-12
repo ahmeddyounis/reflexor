@@ -102,6 +102,12 @@ class ToolRegistry:
         trusted = {_canonicalize_dist_name(name) for name in settings.trusted_tool_packages}
         blocked = {_canonicalize_dist_name(name) for name in settings.blocked_tool_packages}
 
+        if settings.profile == "prod" and not trusted:
+            raise ValueError(
+                "prod with enable_tool_entrypoints=true requires trusted_tool_packages "
+                "to be explicitly configured"
+            )
+
         loaded = 0
         for entrypoint in metadata.entry_points(group="reflexor.tools"):
             dist = _entrypoint_distribution_name(entrypoint)

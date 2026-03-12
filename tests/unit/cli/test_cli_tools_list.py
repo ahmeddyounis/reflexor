@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 from typer.testing import CliRunner
 
 from reflexor.cli.client import LocalClient
@@ -70,3 +71,25 @@ def test_tools_list_remote_not_supported_returns_json_error() -> None:
     payload = json.loads(result.output)
     assert payload["ok"] is False
     assert payload["error_code"] == "not_supported"
+
+
+class _RequestErrorToolsClient:
+    async def list_tools(self) -> list[dict[str, object]]:
+        request = httpx.Request("GET", "https://example.test/v1/tools")
+        raise httpx.ConnectError("connection failed", request=request)
+
+
+def test_tools_list_remote_request_error_returns_json_error() -> None:
+    container = CliContainer.build(
+        settings=ReflexorSettings(api_url="https://example.test"),
+        client=_RequestErrorToolsClient(),  # type: ignore[arg-type]
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tools", "list", "--json"], obj=container)
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "request_failed"
+    assert "connection failed" in payload["message"]

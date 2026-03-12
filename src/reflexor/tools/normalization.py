@@ -69,6 +69,11 @@ def _normalize_value(*, field_name: str, value: object, workspace_root: Path) ->
     if isinstance(value, str) and "url" in field_name.lower():
         return normalize_http_url(value)
 
+    if isinstance(value, dict):
+        return _normalize_mapping(
+            field_name=field_name, value=value, workspace_root=workspace_root
+        )
+
     if isinstance(value, list):
         return _normalize_iterable(
             field_name=field_name, value=value, workspace_root=workspace_root
@@ -99,5 +104,23 @@ def _normalize_iterable(
         normalized_items.append(normalized)
 
     if not changed and isinstance(value, list):
+        return value
+    return normalized_items
+
+
+def _normalize_mapping(
+    *, field_name: str, value: dict[object, object], workspace_root: Path
+) -> dict[object, object]:
+    normalized_items: dict[object, object] = {}
+    changed = False
+    for key, item in value.items():
+        normalized = _normalize_value(
+            field_name=field_name, value=item, workspace_root=workspace_root
+        )
+        if normalized is not item:
+            changed = True
+        normalized_items[key] = normalized
+
+    if not changed:
         return value
     return normalized_items

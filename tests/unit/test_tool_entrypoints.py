@@ -91,7 +91,7 @@ def test_load_entrypoints_is_disabled_by_default(
     assert registry.load_entrypoints(settings=settings) == 0
 
 
-def test_load_entrypoints_registers_tools_from_instance_and_factory(
+def test_load_entrypoints_requires_explicit_trust_allowlist_in_prod(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     eps = [
@@ -108,6 +108,31 @@ def test_load_entrypoints_registers_tools_from_instance_and_factory(
     settings = ReflexorSettings(
         workspace_root=tmp_path,
         profile="prod",
+        enable_tool_entrypoints=True,
+    )
+    registry = ToolRegistry()
+
+    with pytest.raises(ValueError, match=r"requires trusted_tool_packages"):
+        registry.load_entrypoints(settings=settings)
+
+
+def test_load_entrypoints_registers_tools_from_instance_and_factory_in_dev_without_allowlist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    eps = [
+        FakeEntryPoint(name="plugin-1", obj=PluginTool()),
+        FakeEntryPoint(name="plugin-2", obj=build_plugin_tool),
+    ]
+
+    def _fake_entry_points(**params: object) -> object:
+        assert params.get("group") == "reflexor.tools"
+        return eps
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", _fake_entry_points)
+
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        profile="dev",
         enable_tool_entrypoints=True,
     )
     registry = ToolRegistry()
@@ -180,6 +205,7 @@ def test_load_entrypoints_rejects_unsupported_sdk_version_in_prod(
         workspace_root=tmp_path,
         profile="prod",
         enable_tool_entrypoints=True,
+        trusted_tool_packages=["fake-plugin"],
     )
     registry = ToolRegistry()
 
@@ -292,6 +318,7 @@ def test_load_entrypoints_refuses_blocked_packages_without_importing(
         profile="prod",
         enable_tool_entrypoints=True,
         blocked_tool_packages=["bad-pkg"],
+        trusted_tool_packages=["bad-pkg"],
     )
     registry = ToolRegistry()
 

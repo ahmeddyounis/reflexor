@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from reflexor.tools.sdk import ToolManifest, ToolResult
@@ -89,6 +91,18 @@ def test_tool_result_rejects_non_json_serializable_fields() -> None:
 
     with pytest.raises(ValueError, match="produced_artifacts must be JSON-serializable"):
         ToolResult(ok=True, produced_artifacts=[{"bad": object()}])
+
+    with pytest.raises(ValueError, match="data must be JSON-serializable"):
+        ToolResult(ok=True, data={"delay_s": math.inf})
+
+    with pytest.raises(ValueError, match="output_schema must be JSON-serializable"):
+        ToolManifest(
+            name="debug.echo",
+            version="0.1.0",
+            description="test",
+            permission_scope="fs.read",
+            output_schema={"value": math.nan},
+        )
 
 
 def test_tool_result_strips_and_validates_error_fields() -> None:

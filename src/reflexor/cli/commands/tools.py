@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import httpx
 import typer
 
 from reflexor.cli import output
+from reflexor.cli.commands._query_errors import print_query_error
 from reflexor.cli.container import CliContainer
 
 JSON_OPT = typer.Option(False, "--json", help="Output machine-readable JSON.")
@@ -23,11 +25,14 @@ def register(app: typer.Typer) -> None:
         if not isinstance(container, CliContainer):
             output.abort("internal error: invalid CLI context object")
 
+        pretty_enabled = bool(container.output_pretty or pretty)
+        json_enabled = bool(container.output_json or json_output or pretty_enabled)
         try:
             tools = container.run(lambda client: client.list_tools())
+        except (KeyError, ValueError, httpx.HTTPError) as exc:
+            print_query_error(exc, json_enabled=json_enabled, pretty_enabled=pretty_enabled)
+            return
         except NotImplementedError:
-            pretty_enabled = bool(container.output_pretty or pretty)
-            json_enabled = bool(container.output_json or json_output or pretty_enabled)
             if json_enabled:
                 output.print_json(
                     {
@@ -40,8 +45,6 @@ def register(app: typer.Typer) -> None:
                 raise typer.Exit(2) from None
             output.abort("tool listing is not supported by this client", exit_code=2)
 
-        pretty_enabled = bool(container.output_pretty or pretty)
-        json_enabled = bool(container.output_json or json_output or pretty_enabled)
         if json_enabled:
             output.print_json({"items": tools}, pretty=pretty_enabled)
             return
