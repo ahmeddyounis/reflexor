@@ -63,6 +63,14 @@ class SecretsProvider(Protocol):
     def resolve(self, ref: SecretRef) -> str: ...
 
 
+def validate_resolved_secret(secret: str) -> str:
+    if not isinstance(secret, str):
+        raise TypeError("resolved secret must be a string")
+    if secret == "":
+        raise ValueError("resolved secret must be non-empty")
+    return secret
+
+
 class EnvSecretsProvider:
     """Secrets provider backed by environment variables.
 
@@ -80,6 +88,6 @@ class EnvSecretsProvider:
             )
 
         try:
-            return os.environ[ref.key]
+            return validate_resolved_secret(os.environ[ref.key])
         except KeyError as exc:
             raise KeyError(f"missing environment variable for secret key: {ref.key!r}") from exc

@@ -295,6 +295,65 @@ def test_network_allowlist_rule_allows_allowlisted_webhook_target(tmp_path: Path
     assert decision is None
 
 
+def test_network_allowlist_rule_allows_webhook_target_with_default_https_port(
+    tmp_path: Path,
+) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["webhook.emit"],
+        webhook_allowed_targets=["https://hooks.example.com:443/path"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.webhook",
+        version="0.1.0",
+        description="webhook tool",
+        permission_scope="webhook.emit",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = NetworkAllowlistRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="webhook.emit"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://hooks.example.com/path"),
+        ctx=ctx,
+    )
+
+    assert decision is None
+
+
+def test_network_allowlist_rule_allows_webhook_target_wildcard_host(tmp_path: Path) -> None:
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        enabled_scopes=["webhook.emit"],
+        allow_wildcards=True,
+        webhook_allowed_targets=["https://*.example.com/path"],
+    )
+    ctx = PolicyContext.from_settings(settings)
+
+    manifest = ToolManifest(
+        name="tests.webhook",
+        version="0.1.0",
+        description="webhook tool",
+        permission_scope="webhook.emit",
+        idempotent=True,
+    )
+    tool_spec = ToolSpec(tool_name=manifest.name, manifest=manifest, args_model=UrlArgs)
+
+    rule = NetworkAllowlistRule()
+    decision = rule.evaluate(
+        tool_call=_tool_call(tool_name=manifest.name, scope="webhook.emit"),
+        tool_spec=tool_spec,
+        parsed_args=UrlArgs(url="https://hooks.example.com/path"),
+        ctx=ctx,
+    )
+
+    assert decision is None
+
+
 def test_network_allowlist_rule_denies_unallowlisted_webhook_target(tmp_path: Path) -> None:
     settings = ReflexorSettings(
         workspace_root=tmp_path,

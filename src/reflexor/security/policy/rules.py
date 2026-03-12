@@ -22,7 +22,11 @@ from pydantic import BaseModel
 
 from reflexor.domain.models import ToolCall
 from reflexor.security.fs_safety import resolve_path_in_workspace
-from reflexor.security.net_safety import hostname_matches_allowlist, validate_and_normalize_url
+from reflexor.security.net_safety import (
+    hostname_matches_allowlist,
+    validate_and_normalize_url,
+    webhook_target_matches_allowlist,
+)
 from reflexor.security.policy.context import PolicyContext, ToolSpec
 from reflexor.security.policy.decision import (
     REASON_APPROVAL_REQUIRED,
@@ -175,7 +179,9 @@ class NetworkAllowlistRule:
             )
 
         if scope == Scope.WEBHOOK_EMIT.value:
-            if normalized_url not in ctx.allowlists.webhook_allowed_targets:
+            if not webhook_target_matches_allowlist(
+                normalized_url, ctx.allowlists.webhook_allowed_targets
+            ):
                 host = urlsplit(normalized_url).hostname
                 metadata = {"scope": scope, "tool_name": tool_spec.tool_name, "url": normalized_url}
                 if host:

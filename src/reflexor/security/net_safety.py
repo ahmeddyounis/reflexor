@@ -99,6 +99,37 @@ def hostname_matches_allowlist(hostname: str, allowlist: Iterable[str]) -> bool:
     return _hostname_in_allowlist(normalized_host, normalized_allowlist)
 
 
+def webhook_target_matches_allowlist(url: str, allowlist: Iterable[str]) -> bool:
+    normalized_url = validate_and_normalize_url(url, require_https=False)
+    split = urlsplit(normalized_url)
+    if split.hostname is None:  # pragma: no cover
+        return False
+
+    scheme = split.scheme.lower()
+    host = normalize_hostname(split.hostname)
+    port = split.port if split.port is not None else _default_port_for_scheme(scheme)
+
+    for raw_target in allowlist:
+        try:
+            target = _normalize_webhook_target(raw_target)
+        except ValueError:
+            continue
+
+        target_scheme, target_host, target_port, target_path, target_query, target_fragment = target
+        if target_scheme != scheme or target_port != port:
+            continue
+        if (
+            target_path != split.path
+            or target_query != split.query
+            or target_fragment != split.fragment
+        ):
+            continue
+        if _hostname_in_allowlist(host, [target_host]):
+            return True
+
+    return False
+
+
 DnsResolver = Callable[[str, int | None], Awaitable[Iterable[str]]]
 
 
@@ -265,6 +296,40 @@ def _is_default_port(scheme: str, port: int) -> bool:
     if scheme == "http" and port == 80:
         return True
     return False
+
+
+def _default_port_for_scheme(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def _normalize_webhook_target(
+    target: str,
+) -> tuple[str, str, int, str, str, str]:
+    text = target.strip()
+    split = urlsplit(text)
+    scheme = split.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError("webhook target must use http(s)")
+    if split.hostname is None:
+        raise ValueError("webhook target must include a host")
+    if split.username is not None or split.password is not None:
+        raise ValueError("webhook target must not include credentials")
+
+    raw_host = split.hostname
+    if "*" in raw_host:
+        if raw_host.count("*") != 1 or not raw_host.startswith("*."):
+            raise ValueError("webhook target wildcard must use a leading '*.' prefix")
+        base = normalize_hostname(raw_host[2:])
+        if "." not in base:
+            raise ValueError("wildcard webhook targets must include at least two labels")
+        host = f"*.{base}"
+    else:
+        host = normalize_hostname(raw_host)
+        if _try_parse_ip_literal(host) is not None:
+            raise ValueError("IP literals are not allowed in webhook target allowlists")
+
+    port = split.port if split.port is not None else _default_port_for_scheme(scheme)
+    return (scheme, host, port, split.path, split.query, split.fragment)
 
 
 def _normalize_allow_domain(value: str) -> str:

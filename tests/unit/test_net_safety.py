@@ -9,6 +9,7 @@ from reflexor.security import net_safety
 from reflexor.security.net_safety import (
     validate_and_normalize_url,
     validate_and_normalize_url_async,
+    webhook_target_matches_allowlist,
 )
 
 
@@ -137,3 +138,17 @@ async def test_url_dns_resolution_rejects_non_finite_timeout(timeout_s: float) -
             resolve_dns=True,
             dns_timeout_s=timeout_s,
         )
+
+
+def test_webhook_target_matches_allowlist_normalizes_default_ports() -> None:
+    assert webhook_target_matches_allowlist(
+        "https://hooks.example.com/hook",
+        ["https://hooks.example.com:443/hook"],
+    )
+
+
+def test_webhook_target_matches_allowlist_supports_wildcard_hosts() -> None:
+    assert webhook_target_matches_allowlist(
+        "https://hooks.example.com/hook",
+        ["https://*.example.com/hook"],
+    )

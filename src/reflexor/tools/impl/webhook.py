@@ -5,17 +5,21 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from reflexor.config import ReflexorSettings, get_settings
-from reflexor.security.net_safety import validate_and_normalize_url_async
+from reflexor.security.net_safety import (
+    validate_and_normalize_url_async,
+    webhook_target_matches_allowlist,
+)
 from reflexor.security.scopes import Scope
-from reflexor.security.secrets import SecretRef
+from reflexor.security.secrets import SecretRef, validate_resolved_secret
 from reflexor.tools.sdk.contracts import ToolManifest, ToolResult
 from reflexor.tools.sdk.tool import ToolContext
 
@@ -38,6 +42,7 @@ _MAX_HEADER_COUNT = 50
 _MAX_HEADER_NAME_BYTES = 256
 _MAX_HEADER_VALUE_BYTES = 4_096
 _MAX_TOTAL_HEADER_BYTES = 8_192
+_MANAGED_HEADER_NAMES: frozenset[str] = frozenset({"content-type", "idempotency-key"})
 
 
 def _utf8_len(value: str) -> int:
@@ -51,6 +56,25 @@ def _require_non_empty_str(value: str, *, field_name: str) -> str:
     return trimmed
 
 
+def _validate_header_name(name: str, *, field_name: str) -> str:
+    normalized = _require_non_empty_str(name, field_name=field_name)
+    if any(ch.isspace() for ch in normalized):
+        raise ValueError(f"{field_name} must not contain whitespace")
+    if _utf8_len(normalized) > _MAX_HEADER_NAME_BYTES:
+        raise ValueError(f"{field_name} is too long: {normalized!r}")
+    return normalized
+
+
+def _lookup_header_case_insensitive(
+    headers: Mapping[str, str], name: str
+) -> tuple[str, str] | None:
+    name_lower = name.lower()
+    for header_name, header_value in headers.items():
+        if header_name.lower() == name_lower:
+            return (header_name, header_value)
+    return None
+
+
 class WebhookSignatureArgs(BaseModel):
     """Optional HMAC signature configuration."""
 
@@ -62,10 +86,12 @@ class WebhookSignatureArgs(BaseModel):
     @field_validator("header_name")
     @classmethod
     def _validate_header_name(cls, value: str) -> str:
-        name = _require_non_empty_str(value, field_name="header_name")
+        name = _validate_header_name(value, field_name="header_name")
         name_lower = name.lower()
         if name_lower in _DISALLOWED_REQUEST_HEADERS:
             raise ValueError(f"header is not allowed: {name!r}")
+        if name_lower in _MANAGED_HEADER_NAMES:
+            raise ValueError(f"header is reserved: {name!r}")
         return name
 
 
@@ -102,15 +128,13 @@ class WebhookEmitArgs(BaseModel):
         total_bytes = 0
         for raw_name, raw_value in value.items():
             name = str(raw_name).strip()
-            if not name:
-                raise ValueError("header names must be non-empty")
+            name = _validate_header_name(name, field_name="header names")
 
             name_lower = name.lower()
             if name_lower in _DISALLOWED_REQUEST_HEADERS:
                 raise ValueError(f"header is not allowed: {name!r}")
-
-            if "\n" in name or "\r" in name:
-                raise ValueError("header names must not contain newlines")
+            if any(existing.lower() == name_lower for existing in normalized):
+                raise ValueError("headers contain duplicate names after normalization")
 
             if not isinstance(raw_value, str):
                 raise TypeError(f"header values must be strings (got {type(raw_value).__name__})")
@@ -119,14 +143,11 @@ class WebhookEmitArgs(BaseModel):
             if "\n" in value_str or "\r" in value_str:
                 raise ValueError("header values must not contain newlines")
 
-            name_bytes = _utf8_len(name)
             value_bytes = _utf8_len(value_str)
-            if name_bytes > _MAX_HEADER_NAME_BYTES:
-                raise ValueError(f"header name too long: {name!r}")
             if value_bytes > _MAX_HEADER_VALUE_BYTES:
                 raise ValueError(f"header value too long for {name!r}")
 
-            total_bytes += name_bytes + value_bytes
+            total_bytes += _utf8_len(name) + value_bytes
             if total_bytes > _MAX_TOTAL_HEADER_BYTES:
                 raise ValueError("headers total size is too large")
 
@@ -141,6 +162,8 @@ class WebhookEmitArgs(BaseModel):
         if value is None:
             return None
         timeout_s = float(value)
+        if not math.isfinite(timeout_s):
+            raise ValueError("timeout must be finite")
         if timeout_s <= 0:
             raise ValueError("timeout must be > 0")
         return timeout_s
@@ -152,6 +175,20 @@ class WebhookEmitArgs(BaseModel):
             return None
         trimmed = value.strip()
         return trimmed or None
+
+    @model_validator(mode="after")
+    def _validate_header_collisions(self) -> WebhookEmitArgs:
+        if self.signature is not None:
+            existing = _lookup_header_case_insensitive(self.headers, self.signature.header_name)
+            if existing is not None:
+                raise ValueError("signature.header_name must not duplicate a request header")
+
+        if self.idempotency_key is not None:
+            existing = _lookup_header_case_insensitive(self.headers, "Idempotency-Key")
+            if existing is not None and existing[1] != self.idempotency_key:
+                raise ValueError("idempotency_key conflicts with Idempotency-Key header")
+
+        return self
 
 
 def _json_bytes(payload: dict[str, object]) -> bytes:
@@ -170,14 +207,21 @@ def _default_headers(headers: dict[str, str]) -> dict[str, str]:
     return merged
 
 
-def _maybe_add_idempotency_key(headers: dict[str, str], key: str | None) -> dict[str, str]:
+def _resolve_idempotency_header(
+    headers: dict[str, str], key: str | None
+) -> tuple[dict[str, str], str | None]:
+    existing = _lookup_header_case_insensitive(headers, "Idempotency-Key")
+    if existing is not None:
+        if key is not None and existing[1] != key:
+            raise ValueError("idempotency_key conflicts with Idempotency-Key header")
+        return headers, existing[1]
+
     if key is None:
-        return headers
-    if any(name.lower() == "idempotency-key" for name in headers):
-        return headers
+        return headers, None
+
     merged = dict(headers)
     merged["Idempotency-Key"] = key
-    return merged
+    return merged, key
 
 
 def _hmac_sha256(secret: str, payload_bytes: bytes) -> str:
@@ -220,7 +264,7 @@ class WebhookEmitTool:
         except ValueError as exc:
             return ToolResult(ok=False, error_code="SSRF_BLOCKED", error_message=str(exc))
 
-        if normalized_url not in settings.webhook_allowed_targets:
+        if not webhook_target_matches_allowlist(normalized_url, settings.webhook_allowed_targets):
             return ToolResult(
                 ok=False,
                 error_code="TARGET_NOT_ALLOWLISTED",
@@ -250,7 +294,12 @@ class WebhookEmitTool:
         payload_hash = _payload_sha256(payload_bytes)
 
         headers = _default_headers(args.headers)
-        headers = _maybe_add_idempotency_key(headers, args.idempotency_key)
+        try:
+            headers, resolved_idempotency_key = _resolve_idempotency_header(
+                headers, args.idempotency_key
+            )
+        except ValueError as exc:
+            return ToolResult(ok=False, error_code="INVALID_ARGS", error_message=str(exc))
 
         signed = False
         signature_header: str | None = None
@@ -265,7 +314,7 @@ class WebhookEmitTool:
 
             secret_ref = args.signature.secret_ref
             try:
-                secret = provider.resolve(secret_ref)
+                secret = validate_resolved_secret(provider.resolve(secret_ref))
             except Exception as exc:
                 return ToolResult(
                     ok=False,
@@ -288,7 +337,7 @@ class WebhookEmitTool:
             "payload_bytes": len(payload_bytes),
             "signed": signed,
             "signature_header": signature_header,
-            "idempotency_key": args.idempotency_key,
+            "idempotency_key": resolved_idempotency_key,
             "headers": sorted(list(headers.keys())),
         }
 
