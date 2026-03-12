@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
 import socket
 from collections.abc import Awaitable, Callable, Iterable
 from urllib.parse import urlsplit, urlunsplit
@@ -135,6 +136,8 @@ async def validate_and_normalize_url_async(
         return normalized
 
     timeout_s = float(dns_timeout_s)
+    if not math.isfinite(timeout_s):
+        raise ValueError("dns_timeout_s must be finite")
     if timeout_s <= 0:
         raise ValueError("dns_timeout_s must be > 0")
 

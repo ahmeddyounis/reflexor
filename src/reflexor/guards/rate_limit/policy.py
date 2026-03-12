@@ -11,15 +11,11 @@ from reflexor.domain.models import ToolCall
 from reflexor.guards.rate_limit.key import RateLimitKey
 from reflexor.guards.rate_limit.limiter import RateLimiter, RateLimitResult
 from reflexor.guards.rate_limit.spec import RateLimitSpec
+from reflexor.security.net_safety import normalize_hostname
 
 
 def _normalize_tool_name(tool_name: str) -> str:
     return tool_name.strip().lower()
-
-
-def _normalize_hostname(hostname: str) -> str:
-    return hostname.strip().lower().rstrip(".")
-
 
 def _extract_destination_hostname(parsed_args: BaseModel) -> str | None:
     url_value = getattr(parsed_args, "url", None)
@@ -34,7 +30,10 @@ def _extract_destination_hostname(parsed_args: BaseModel) -> str | None:
     hostname = split.hostname
     if hostname is None:
         return None
-    normalized = _normalize_hostname(hostname)
+    try:
+        normalized = normalize_hostname(hostname)
+    except ValueError:
+        return None
     return normalized or None
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import httpx
 import pytest
 import respx
@@ -113,6 +115,16 @@ def test_invalid_method_rejected() -> None:
         HttpRequestArgs(method="PUT", url="https://example.com/")
 
 
+def test_non_finite_params_rejected() -> None:
+    with pytest.raises(ValidationError, match="must be finite"):
+        HttpRequestArgs(method="GET", url="https://example.com/", params={"x": math.nan})
+
+
+def test_non_serializable_json_body_rejected() -> None:
+    with pytest.raises(ValidationError, match="JSON-serializable"):
+        HttpRequestArgs(method="POST", url="https://example.com/", json={"x": math.nan})
+
+
 def test_disallowed_header_rejected() -> None:
     with pytest.raises(ValidationError, match="header is not allowed"):
         HttpRequestArgs(method="GET", url="https://example.com/", headers={"Host": "evil.example"})
@@ -137,3 +149,59 @@ async def test_dry_run_does_not_call_network(tmp_path) -> None:  # type: ignore[
         assert isinstance(data, dict)
         assert data["dry_run"] is True
         assert data["request"]["url"] == "https://example.com/"
+
+
+@pytest.mark.asyncio
+async def test_follow_redirects_reports_redirect_allowlist_failures(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
+        route1 = router.get("https://example.com/").mock(
+            return_value=httpx.Response(302, headers={"Location": "https://evil.example/next"})
+        )
+        route2 = router.get("https://evil.example/next").mock(
+            return_value=httpx.Response(200, text="followed")
+        )
+
+        tool = HttpTool(
+            settings=ReflexorSettings(workspace_root=tmp_path, http_allowed_domains=["example.com"])
+        )
+        args = HttpRequestArgs(method="GET", url="https://example.com/", follow_redirects=True)
+        ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+        result = await tool.run(args, ctx)
+
+        assert result.ok is False
+        assert result.error_code == "DOMAIN_NOT_ALLOWLISTED"
+        assert route1.called is True
+        assert route2.called is False
+
+
+@pytest.mark.asyncio
+async def test_follow_redirects_blocks_cross_origin_redirects(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
+        route1 = router.get("https://example.com/").mock(
+            return_value=httpx.Response(302, headers={"Location": "https://example.net/next"})
+        )
+        route2 = router.get("https://example.net/next").mock(
+            return_value=httpx.Response(200, text="followed")
+        )
+
+        tool = HttpTool(
+            settings=ReflexorSettings(
+                workspace_root=tmp_path,
+                http_allowed_domains=["example.com", "example.net"],
+            )
+        )
+        args = HttpRequestArgs(
+            method="GET",
+            url="https://example.com/",
+            follow_redirects=True,
+            headers={"Authorization": "Bearer secret"},
+        )
+        ctx = ToolContext(workspace_root=tmp_path, dry_run=False, timeout_s=1.0)
+
+        result = await tool.run(args, ctx)
+
+        assert result.ok is False
+        assert result.error_code == "SSRF_BLOCKED"
+        assert route1.called is True
+        assert route2.called is False

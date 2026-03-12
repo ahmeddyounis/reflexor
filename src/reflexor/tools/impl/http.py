@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -41,6 +42,32 @@ _MAX_REDIRECTS = 5
 
 def _utf8_len(value: str) -> int:
     return len(value.encode("utf-8"))
+
+
+class _HttpToolValidationError(Exception):
+    def __init__(self, *, error_code: str, message: str) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
+def _classify_url_validation_error(message: str) -> str:
+    return "DOMAIN_NOT_ALLOWLISTED" if "allowed_domains" in message else "SSRF_BLOCKED"
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    split = urlsplit(url)
+    if split.hostname is None:
+        raise ValueError("url must include a host")
+
+    scheme = split.scheme.lower()
+    port = split.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return (scheme, split.hostname.lower().rstrip("."), int(port))
+
+
+def _same_origin(left: str, right: str) -> bool:
+    return _origin(left) == _origin(right)
 
 
 class HttpRequestArgs(BaseModel):
@@ -139,7 +166,11 @@ class HttpRequestArgs(BaseModel):
 
             if isinstance(raw_value, bool):
                 normalized[name] = raw_value
-            elif isinstance(raw_value, (str, int, float)):
+            elif isinstance(raw_value, float):
+                if not math.isfinite(raw_value):
+                    raise ValueError(f"params value for {name!r} must be finite")
+                normalized[name] = raw_value
+            elif isinstance(raw_value, (str, int)):
                 normalized[name] = raw_value
             else:
                 raise TypeError(
@@ -147,6 +178,17 @@ class HttpRequestArgs(BaseModel):
                 )
 
         return normalized
+
+    @field_validator("json_body")
+    @classmethod
+    def _validate_json_body_serializable(cls, value: object | None) -> object | None:
+        if value is None:
+            return None
+        try:
+            json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("json body must be JSON-serializable") from exc
+        return value
 
     @model_validator(mode="after")
     def _validate_body_constraints(self) -> HttpRequestArgs:
@@ -234,18 +276,24 @@ class HttpTool:
             )
         except ValueError as exc:
             message = str(exc)
-            error_code = (
-                "DOMAIN_NOT_ALLOWLISTED" if "allowed_domains" in message else "SSRF_BLOCKED"
-            )
+            error_code = _classify_url_validation_error(message)
             return ToolResult(ok=False, error_code=error_code, error_message=message)
 
         max_request_bytes = int(settings.max_event_payload_bytes)
         content: bytes | None = None
         headers = dict(args.headers)
         if args.json_body is not None:
-            payload_json = json.dumps(
-                args.json_body, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-            )
+            try:
+                payload_json = json.dumps(
+                    args.json_body, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+                )
+            except (TypeError, ValueError) as exc:
+                return ToolResult(
+                    ok=False,
+                    error_code="INVALID_ARGS",
+                    error_message="json body must be JSON-serializable",
+                    debug={"exception": repr(exc)},
+                )
             payload_bytes = payload_json.encode("utf-8")
             if len(payload_bytes) > max_request_bytes:
                 return ToolResult(
@@ -315,6 +363,8 @@ class HttpTool:
                     dns_timeout_s=float(settings.net_safety_dns_timeout_s),
                     max_response_bytes=max_response_bytes,
                 )
+        except _HttpToolValidationError as exc:
+            return ToolResult(ok=False, error_code=exc.error_code, error_message=str(exc))
         except httpx.TimeoutException as exc:
             return ToolResult(
                 ok=False,
@@ -352,13 +402,14 @@ class HttpTool:
         current_method: Literal["GET", "POST"] = method
         current_url = url
         current_content = content
+        current_headers = dict(headers)
         redirect_chain: list[dict[str, object]] = []
 
         for _ in range(_MAX_REDIRECTS + 1):
             async with client.stream(
                 current_method,
                 current_url,
-                headers=headers,
+                headers=current_headers,
                 params=params,
                 content=current_content,
             ) as response:
@@ -375,7 +426,17 @@ class HttpTool:
                                 dns_timeout_s=float(dns_timeout_s),
                             )
                         except ValueError as exc:
-                            raise httpx.RequestError(str(exc), request=response.request) from exc
+                            message = str(exc)
+                            raise _HttpToolValidationError(
+                                error_code=_classify_url_validation_error(message),
+                                message=message,
+                            ) from exc
+
+                        if not _same_origin(str(response.url), normalized_next):
+                            raise _HttpToolValidationError(
+                                error_code="SSRF_BLOCKED",
+                                message="cross-origin redirects are blocked",
+                            )
 
                         redirect_chain.append(
                             {
@@ -390,6 +451,7 @@ class HttpTool:
                             current_content = None
 
                         current_url = normalized_next
+                        current_headers = dict(headers)
                         params = {}
                         continue
 

@@ -102,6 +102,35 @@ def test_rate_limit_policy_resolves_checks_with_precedence_and_stable_keys(tmp_p
     assert run_spec.capacity == 3
 
 
+def test_rate_limit_policy_normalizes_idna_destination_keys(tmp_path: Path) -> None:
+    limiter = _StubLimiter()
+    settings = ReflexorSettings(
+        workspace_root=tmp_path,
+        rate_limits_enabled=True,
+        rate_limit_per_destination={
+            "xn--bcher-kva.example": {"capacity": 2, "refill_rate_per_s": 2}
+        },
+    )
+    policy = RateLimitPolicy(settings=settings, limiter=limiter, now_s=lambda: 1.0)
+
+    tool_call = ToolCall(
+        tool_name="net.http",
+        permission_scope="fs.read",
+        idempotency_key="k",
+        args={"url": "https://bücher.example/path"},
+    )
+    parsed = _ArgsWithUrl.model_validate(tool_call.args)
+
+    checks = policy.resolve_checks(tool_call=tool_call, parsed_args=parsed, run_id=None)
+
+    assert checks == [
+        (
+            RateLimitKey(destination="xn--bcher-kva.example"),
+            RateLimitSpec(capacity=2.0, refill_rate_per_s=2.0, burst=0.0),
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_rate_limit_policy_aggregates_retry_after(tmp_path: Path) -> None:
     limiter = _StubLimiter(

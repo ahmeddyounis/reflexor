@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 
 import pytest
 
@@ -123,4 +124,16 @@ async def test_url_dns_resolution_timeout_surfaces_as_value_error(
             allowed_domains=["example.com"],
             resolve_dns=True,
             dns_timeout_s=0.001,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_s", [math.nan, math.inf])
+async def test_url_dns_resolution_rejects_non_finite_timeout(timeout_s: float) -> None:
+    with pytest.raises(ValueError, match="dns_timeout_s must be finite"):
+        await validate_and_normalize_url_async(
+            "https://example.com/",
+            allowed_domains=["example.com"],
+            resolve_dns=True,
+            dns_timeout_s=timeout_s,
         )
