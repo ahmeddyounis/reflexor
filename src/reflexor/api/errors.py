@@ -170,9 +170,13 @@ def install_error_handlers(app: FastAPI) -> None:
 
         with correlation_context(**_extract_correlation_ids(request)):
             if status_code >= 500 and status_code not in {501, 503}:
-                logger.exception(
+                logger.error(
                     "http exception",
-                    extra={"request_id": _get_request_id(request), "status_code": status_code},
+                    extra={
+                        "request_id": _get_request_id(request),
+                        "status_code": status_code,
+                        "exception_type": type(exc).__name__,
+                    },
                 )
             else:
                 logger.info(
@@ -244,7 +248,13 @@ def install_error_handlers(app: FastAPI) -> None:
                     message=message,
                 )
 
-            logger.exception("unhandled key error", extra={"request_id": _get_request_id(request)})
+            logger.error(
+                "unhandled key error",
+                extra={
+                    "request_id": _get_request_id(request),
+                    "exception_type": type(exc).__name__,
+                },
+            )
         return _error_response(
             request,
             status_code=500,
@@ -255,7 +265,13 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def _handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
         with correlation_context(**_extract_correlation_ids(request)):
-            logger.exception("unhandled exception", extra={"request_id": _get_request_id(request)})
+            logger.error(
+                "unhandled exception",
+                extra={
+                    "request_id": _get_request_id(request),
+                    "exception_type": type(exc).__name__,
+                },
+            )
         _ = exc
         return _error_response(
             request,

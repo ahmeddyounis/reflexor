@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import logging
 import uuid
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
+import reflexor.api.errors as api_errors_module
 from reflexor.api.app import create_app
 from reflexor.bootstrap.container import AppContainer
 from reflexor.config import ReflexorSettings
@@ -253,3 +256,85 @@ def test_http_exception_500_redacts_detail(tmp_path: Path) -> None:
         assert payload["error_code"] == "http_error"
         assert payload["message"] == "internal server error"
         assert "secret internal detail" not in response.text
+
+
+def test_http_exception_500_logs_do_not_leak_detail(tmp_path: Path) -> None:
+    db_path = tmp_path / "reflexor_api_error_http_500_log.db"
+    _create_schema(db_path)
+
+    app = create_app(
+        settings=ReflexorSettings(
+            workspace_root=tmp_path,
+            enabled_scopes=[],
+            database_url=f"sqlite+aiosqlite:///{db_path}",
+        )
+    )
+
+    @app.get("/boom-http-log")
+    async def _boom_http_log() -> dict[str, object]:
+        raise HTTPException(status_code=500, detail="Bearer sk-api-secret-should-not-leak")
+
+    stream = io.StringIO()
+    logger = api_errors_module.logger
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.get("/boom-http-log")
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    assert response.status_code == 500
+    logged = stream.getvalue()
+    assert "http exception" in logged
+    assert "sk-api-secret-should-not-leak" not in logged
+
+
+def test_unhandled_exception_logs_do_not_leak_raw_message(tmp_path: Path) -> None:
+    db_path = tmp_path / "reflexor_api_error_runtime_log.db"
+    _create_schema(db_path)
+
+    app = create_app(
+        settings=ReflexorSettings(
+            workspace_root=tmp_path,
+            enabled_scopes=[],
+            database_url=f"sqlite+aiosqlite:///{db_path}",
+        )
+    )
+
+    @app.get("/boom-runtime-log")
+    async def _boom_runtime_log() -> dict[str, object]:
+        raise RuntimeError("Bearer sk-runtime-secret-should-not-leak")
+
+    stream = io.StringIO()
+    logger = api_errors_module.logger
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.get("/boom-runtime-log")
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    assert response.status_code == 500
+    logged = stream.getvalue()
+    assert "unhandled exception" in logged
+    assert "sk-runtime-secret-should-not-leak" not in logged
