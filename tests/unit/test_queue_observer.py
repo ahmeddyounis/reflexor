@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from uuid import uuid4
 
+import reflexor.orchestrator.queue.observer as observer_module
 from reflexor.infra.queue.in_memory_queue import InMemoryQueue
 from reflexor.orchestrator.queue import TaskEnvelope
 from reflexor.orchestrator.queue.observer import (
@@ -218,3 +219,49 @@ async def test_observer_exceptions_do_not_kill_background_redelivery() -> None:
 
     assert queue._lease_reaper_task is not None
     assert not queue._lease_reaper_task.done()
+
+
+def test_observer_exception_logs_do_not_leak_raw_message(monkeypatch) -> None:
+    class _SecretFailingObserver(FailingQueueObserver):
+        def on_enqueue(self, observation: QueueEnqueueObservation) -> None:
+            _ = observation
+            raise RuntimeError("Bearer sk-queue-observer-secret-should-not-leak")
+
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+        def error(self, message: str, *args: object, **kwargs: object) -> None:
+            self.calls.append((message, args, dict(kwargs)))
+
+    logger = _RecordingLogger()
+    monkeypatch.setattr(observer_module, "logger", logger)
+
+    envelope = TaskEnvelope(
+        envelope_id=str(uuid4()),
+        task_id=str(uuid4()),
+        run_id=str(uuid4()),
+        attempt=0,
+        created_at_ms=0,
+        available_at_ms=0,
+    )
+    observation = QueueEnqueueObservation(
+        envelope=envelope,
+        correlation_ids={"envelope_id": envelope.envelope_id},
+        now_ms=0,
+        queue_depth=0,
+    )
+
+    observer_module.notify_queue_observer(
+        _SecretFailingObserver(),
+        callback_name="on_enqueue",
+        observation=observation,
+    )
+
+    assert logger.calls == [
+        (
+            "queue observer callback failed: %s",
+            ("on_enqueue",),
+            {"extra": {"callback_name": "on_enqueue", "exception_type": "RuntimeError"}},
+        )
+    ]

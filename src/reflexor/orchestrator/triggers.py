@@ -176,8 +176,12 @@ class DebouncedTrigger:
 
                 try:
                     await self._callback()
-                except Exception:  # pragma: no cover - exercised via log-only resilience tests
-                    logger.exception("debounced trigger callback failed")
+                except Exception as exc:  # pragma: no cover
+                    # Exercised via log-only resilience tests.
+                    logger.error(
+                        "debounced trigger callback failed",
+                        extra={"exception_type": type(exc).__name__},
+                    )
         except asyncio.CancelledError:
             return
 
@@ -245,8 +249,12 @@ class PeriodicTicker:
                     return
                 try:
                     await self._callback()
-                except Exception:  # pragma: no cover - exercised via log-only resilience tests
-                    logger.exception("periodic ticker callback failed")
+                except Exception as exc:  # pragma: no cover
+                    # Exercised via log-only resilience tests.
+                    logger.error(
+                        "periodic ticker callback failed",
+                        extra={"exception_type": type(exc).__name__},
+                    )
                 self._next_tick_monotonic_ms = self._clock.monotonic_ms() + int(
                     self._planner_interval_s * 1000
                 )

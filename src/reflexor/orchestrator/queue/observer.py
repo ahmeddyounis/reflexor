@@ -114,8 +114,12 @@ def notify_queue_observer(
     try:
         callback = getattr(observer, callback_name)
         callback(observation)
-    except Exception:
-        logger.exception("queue observer callback failed: %s", callback_name)
+    except Exception as exc:
+        logger.error(
+            "queue observer callback failed: %s",
+            callback_name,
+            extra={"callback_name": callback_name, "exception_type": type(exc).__name__},
+        )
 
 
 __all__ = [

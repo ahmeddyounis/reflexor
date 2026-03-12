@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+import reflexor.orchestrator.triggers as triggers_module
 from reflexor.orchestrator.clock import Clock
 from reflexor.orchestrator.triggers import DebouncedTrigger, PeriodicTicker
 
@@ -182,3 +183,68 @@ async def test_periodic_ticker_survives_callback_failures() -> None:
         assert ticks == 2
     finally:
         await ticker.aclose()
+
+
+async def test_debounced_trigger_failure_logs_do_not_leak_raw_message(monkeypatch) -> None:
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def error(self, message: str, **kwargs: object) -> None:
+            self.calls.append((message, dict(kwargs)))
+
+    clock = _ManualClock()
+    logger = _RecordingLogger()
+    monkeypatch.setattr(triggers_module, "logger", logger)
+
+    async def callback() -> None:
+        raise RuntimeError("Bearer sk-trigger-secret-should-not-leak")
+
+    debouncer = DebouncedTrigger(callback=callback, clock=clock, debounce_s=5.0)
+    debouncer.start()
+
+    try:
+        debouncer.trigger()
+        await clock.advance(seconds=5.0)
+        await asyncio.sleep(0)
+    finally:
+        await debouncer.aclose()
+
+    assert logger.calls == [
+        (
+            "debounced trigger callback failed",
+            {"extra": {"exception_type": "RuntimeError"}},
+        )
+    ]
+
+
+async def test_periodic_ticker_failure_logs_do_not_leak_raw_message(monkeypatch) -> None:
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def error(self, message: str, **kwargs: object) -> None:
+            self.calls.append((message, dict(kwargs)))
+
+    clock = _ManualClock()
+    logger = _RecordingLogger()
+    monkeypatch.setattr(triggers_module, "logger", logger)
+
+    async def callback() -> None:
+        raise RuntimeError("Bearer sk-periodic-secret-should-not-leak")
+
+    ticker = PeriodicTicker(callback=callback, clock=clock, planner_interval_s=5.0)
+    ticker.start()
+
+    try:
+        await clock.advance(seconds=5.0)
+        await asyncio.sleep(0)
+    finally:
+        await ticker.aclose()
+
+    assert logger.calls == [
+        (
+            "periodic ticker callback failed",
+            {"extra": {"exception_type": "RuntimeError"}},
+        )
+    ]
