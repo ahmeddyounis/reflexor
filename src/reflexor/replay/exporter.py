@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -28,7 +30,23 @@ EXPORT_SCHEMA_VERSION = 1
 
 def _write_export(path: Path, payload: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(payload, encoding="utf-8")
+    temp_handle = tempfile.NamedTemporaryFile(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temp_path = Path(temp_handle.name)
+    try:
+        with temp_handle:
+            temp_handle.write(payload.encode("utf-8"))
+            temp_handle.flush()
+            os.fsync(temp_handle.fileno())
+        temp_path.chmod(0o600)
+        temp_path.replace(path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def _json_dumps(obj: object) -> str:

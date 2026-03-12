@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -192,6 +193,8 @@ async def test_export_run_packet_writes_sanitized_bounded_json(
         assert "<redacted>" in raw
         assert "<truncated>" in raw
         assert len(raw.encode("utf-8")) <= settings.max_run_packet_bytes
+        if os.name != "nt":
+            assert out_path.stat().st_mode & 0o777 == 0o600
 
     assert not db_path.exists()
 
