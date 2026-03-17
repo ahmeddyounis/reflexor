@@ -78,6 +78,7 @@ Resolved secret values must never be stored in run packets/logs. See [docs/secre
 
 ## Operator docs
 
+- **[Getting Started](docs/getting-started.md)** — beginner-friendly onboarding with tutorials
 - [Configuration & Profiles](docs/configuration.md)
 - [Planning](docs/planning.md)
 - [Memory](docs/memory.md)
